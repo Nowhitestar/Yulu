@@ -1,8 +1,8 @@
 ---
 name: yulu
 description: Control Yulu（语录）, an Agent-native macOS meeting recorder. Use it to start or stop native recording, inspect durable recording tasks, search or read meeting artifacts, and diagnose the local Host, audio-engine, and Agent pipeline.
-version: 2.0.0
-source: ~/.yulu/skills/yulu/SKILL.md
+version: 2.1.0
+source: https://github.com/Nowhitestar/Yulu/tree/main/skills/yulu
 metadata:
   hermes:
     tags: [yulu, meeting, recorder, transcription, summary, macos, agent-native]
@@ -15,10 +15,11 @@ Yulu 是 macOS 原生会议记录器和可信本地控制面：
 - `Yulu.app` 负责 ScreenCaptureKit 系统音频、AVFoundation 麦克风和 macOS 权限；
 - Yulu Host 负责持久化任务、幂等、租约、恢复、产物原子提交和审计；
 - Yulu 明确选择的本地/xAI 音频引擎负责实时字幕、最终转写和听写，绝不自动回退；
-- Yulu 直接管理 xAI OAuth 并把凭据保存在 macOS 钥匙串；Hermes 负责会议纪要；
+- Yulu 使用兼容 Grok CLI 的 OAuth 并把自己的 xAI grant 保存在 macOS 钥匙串；
+- 用户明确选择的 xAI、Codex 或 Claude Code 负责会议纪要，任务固定创建时的服务与模型且绝不自动切换；
 - Agent Console 选中的通用 Agent 负责交互式对话和它自己的连接器。
 
-Yulu 只管理受限的本地音频模型，不运行总结 worker、对话引擎或 connector runtime。不要寻找或恢复旧的 STT daemon、JSON Agent 队列或 Yulu-owned Notion 路径。
+Yulu 只管理自己的本地音频模型和 direct xAI 边界，不读取 Codex、Claude Code、Hermes 或 OpenClaw 的 OAuth，也不运行它们的 connector runtime。不要寻找或恢复旧的 STT daemon、JSON Agent 队列或 Yulu-owned Notion 路径。
 
 ## 什么时候用
 
@@ -26,16 +27,16 @@ Yulu 只管理受限的本地音频模型，不运行总结 worker、对话引�
 
 - 开始、停止或查看会议录音状态；
 - 查找某次历史会议、转录或纪要；
-- 查看录音处理进度，判断失败发生在录音、所选音频引擎、Hermes 纪要或产物提交；
+- 查看录音处理进度，判断失败发生在录音、所选音频引擎、固定的摘要服务或产物提交；
 - 重跑某次录音的 Agent 处理流程；
 - 查看或管理 Yulu 的提示词、术语表和本地搜索；
-- 验证 Yulu Host、MCP、Hermes 或 macOS 录音权限。
+- 验证 Yulu Host、MCP、所选 Agent Connection 或 macOS 录音权限。
 
 Yulu 面向会议和语音输入，不是通用音频编辑器。
 
 ## 优先使用 MCP
 
-Yulu Host 提供 loopback-only、bearer-authenticated MCP。优先调用已注册的 MCP 工具，不要读取或打印 `~/.config/yulu/mcp-token.json`，也不要直接编辑 `host.sqlite`。
+Yulu Host 提供 loopback-only、bearer-authenticated MCP。优先调用已注册的 MCP 工具，不要读取或打印 `~/Library/Application Support/Yulu/mcp-token.json`，也不要直接编辑 `host.sqlite`。
 
 主要工具：
 
@@ -52,13 +53,13 @@ Yulu Host 提供 loopback-only、bearer-authenticated MCP。优先调用已注�
 | `recording_set_tags` | 更新录音标签 |
 | `prompts_list` / `prompt_*` | 读取或管理本地总结、清理和语音提示词 |
 | `glossary_list` / `glossary_*` | 读取或管理本地术语上下文 |
-| `health_check` | 查看原生录音、Host、Hermes 和相关运行态健康 |
+| `health_check` | 查看原生录音、Host、所选能力和相关运行态健康 |
 
-以下工具属于 Host 启动的 Hermes 租约任务，不是普通交互动作：
+以下工具属于 Host 启动的 Agent 摘要租约任务，不是普通交互动作：
 
 | 工具 | 租约内用途 |
 |---|---|
-| `recording_task_progress` | 报告当前 Hermes 任务的语义阶段 |
+| `recording_task_progress` | 报告当前摘要任务的语义阶段 |
 | `recording_task_transcript_read` | 仅通过 Host 读取当前租约任务的转录，不暴露文件路径 |
 | `recording_task_summary_stage` | 通过 Host 提交当前任务的最终 Markdown 纪要 |
 | `recording_artifact_commit` | 原子提交当前任务由 Host 管理的转录和纪要 |
@@ -90,7 +91,7 @@ yulu record start "<meeting title>"
 yulu record stop
 ```
 
-停止只代表原生捕获结束。完成录音会提交给 Host，所选音频引擎先生成并提交最终转录，再由 Hermes 生成纪要。不要告诉用户“纪要已完成”，除非关联任务达到 `completed` 且转录、纪要产物都已由 Host 提交。
+停止只代表原生捕获结束。完成录音会提交给 Host，所选音频引擎先生成并提交最终转录，再由任务固定的 xAI、Codex 或 Claude Code 摘要服务生成纪要。不要告诉用户“纪要已完成”，除非关联任务达到 `completed` 且转录、纪要产物都已由 Host 提交。
 
 ### 查看处理进度
 
@@ -99,12 +100,12 @@ yulu record stop
 | 状态 | 含义 |
 |---|---|
 | `queued` | 已持久化，等待领取 |
-| `awaiting_agent` | 所选音频引擎或 Hermes 纪要 Agent 不可用，录音仍安全保存 |
+| `awaiting_agent` / `awaiting_provider` | 所选音频引擎或固定摘要服务不可用，录音仍安全保存 |
 | `running` | 当前租约正在转写或总结 |
 | `transcript_committed` | 最终转录已持久化，纪要仍可等待或重试 |
 | `artifacts_committed` | 转录和纪要均已提交 |
 | `sending` | 历史投递已开始；升级后会进入结果不明围栏 |
-| `delivery_reported` | 历史 Hermes 投递已报告 Notion 页面 URL 或 ID |
+| `delivery_reported` | 历史自动投递已报告 Notion 页面 URL 或 ID，仅供兼容审计 |
 | `completed` | 所需转录和纪要产物已提交；历史投递收据仍可审计 |
 | `failed` | 确定性处理或校验失败 |
 | `delivery_unverified` | 外部投递结果不确定，必须先人工核对 |
@@ -131,7 +132,7 @@ yulu record stop
 
 不要把普通 Agent Console 对话中的 Notion 请求和录音分享混为一条路径，也不要让 Yulu 保存 Notion 凭据。
 
-## Hermes 租约任务规则
+## 摘要 Agent 租约任务规则
 
 当 Host 启动本 skill 处理已领取的录音任务时：
 
@@ -142,19 +143,21 @@ yulu record stop
 5. 产物提交后立即停止；录音处理任务不得调用任何外部写入或投递工具。
 6. 最后报告简短状态；文字报告不能替代 Host 工具提交。
 
-如果 Hermes 无法完成纪要，保留明确错误供 Host 记录。不要切换到另一个通用 Agent 作为隐式 fallback；音频引擎也不得在本地与 xAI 之间自动切换。历史投递的 Unknown Outcome 只能人工核对，不能重试。
+如果固定的摘要服务无法完成纪要，保留明确错误供 Host 记录。不要改用另一个 Agent、模型或凭据来源作为隐式 fallback；音频引擎也不得在本地与 xAI 之间自动切换。历史投递的 Unknown Outcome 只能人工核对，不能重试。
 
 ## 本地路径
 
 | 路径 | 内容 |
 |---|---|
-| `~/.yulu/` | 已安装 Yulu runtime |
-| `~/.config/yulu/config.json` | 非密钥配置 |
-| `~/.config/yulu/host.sqlite` | 任务、租约、事件、产物和投递审计 |
-| `~/.config/yulu/agent-tasks/` | Host 私有任务工作区；Agent 不要直接读写 |
-| `~/.config/yulu/recording-events/` | Host 不可用时的录音完成事件 |
-| `~/.config/yulu/audio_daemon.sock` | 原生录音控制 socket |
-| `~/.config/yulu/mcp-token.json` | 本地 bearer token；不要输出 |
+| `/Applications/Yulu.app` | 不可变、自包含的 Application Runtime |
+| `~/Library/Application Support/Yulu/config.json` | 非密钥配置 |
+| `~/Library/Application Support/Yulu/host.sqlite` | 任务、租约、事件、产物和投递审计 |
+| `~/Library/Application Support/Yulu/agent-tasks/` | Host 私有任务工作区；Agent 不要直接读写 |
+| `~/Library/Application Support/Yulu/recording-events/` | Host 不可用时的录音完成事件 |
+| `~/Library/Caches/Yulu/audio_daemon.sock` | 原生录音控制 socket |
+| `~/Library/Application Support/Yulu/mcp-token.json` | 本地 bearer token；不要输出 |
+| `~/Library/Logs/Yulu/` | Host 与原生服务日志 |
+| `~/.config/yulu/` | 旧版本迁移时的只读来源；不要作为当前运行路径 |
 | `~/Movies/Yulu/` | 录音及 Host 提交的转录、纪要 |
 
 Host 暂时不可用时，录音完成事件会原子暂存并在恢复后重放；同一个自动完成事件不会重复创建任务。
@@ -167,7 +170,7 @@ Host 暂时不可用时，录音完成事件会原子暂存并在恢复后重放
 2. **本地 Host**：`curl -fsS http://127.0.0.1:7777/healthz` 和 `yulu logs ui`。
 3. **持久化任务**：`recording_task_get` 或 `yulu doctor --json` 的 `host_tasks`。
 4. **音频引擎**：本地模型状态，或 xAI OAuth 来源与 xAI STT 错误。
-5. **Hermes**：纪要 Agent capability，以及 Yulu LaunchAgent 能看到的稳定 Hermes PATH。
+5. **摘要服务**：固定的 xAI、Codex 或 Claude Code capability、准确模型、连接与 runtime-owned authorization 状态。
 6. **产物**：检查独立提交的 transcript artifact 和后续 summary artifact。
 7. **历史 Notion 投递**：只检查 delivery record、页面 URL/ID 和稳定标记；不要触发新投递。
 
@@ -188,8 +191,8 @@ yulu repair-permissions
 
 - 不读取、复制或展示 MCP token、Host SQLite 内部 lease、Agent 凭据或 connector 凭据。
 - 不把录音或转录贴到聊天里，除非用户明确要求且只使用必要片段。
-- 选择本地引擎时音频不离开本机；选择 xAI 时 Yulu 直接把音频发送给 xAI，并从 macOS 钥匙串读取自己的 OAuth 凭据。
-- Notion 是单任务明确授权的副作用；其它 connector 动作遵循当前通用 Agent 自己的授权模型。
+- 选择本地引擎时音频不离开本机；选择 xAI 时 Yulu 直接把音频发送给 xAI，并从 macOS 钥匙串读取兼容 Grok CLI OAuth 的自己的 grant。
+- 任何 connector 写入都必须来自用户明确确认的新 Share Action；Yulu 不保存 connector 凭据。
 - 不把 `host.sqlite`、token、task workspace、socket 或 event spool 放到云同步目录。
 
 ## 开发和安装

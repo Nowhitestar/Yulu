@@ -4,12 +4,13 @@ Yulu has five separate layers. Keep them separate:
 
 1. Source repo: the Git checkout you edit and review.
 2. Runtime install: the copy launchd/Yulu.app uses to run locally.
-3. Config/state: `~/.config/yulu`.
+3. Config/state: `~/Library/Application Support/Yulu`.
 4. Meeting artifacts: `~/Movies/Yulu`.
 5. Agent boundary: authenticated MCP servers, Hermes phase toolsets, and the Yulu skill.
 
-Keep the editable checkout separate from `~/.yulu`, which is the installed
-runtime used by LaunchAgents.
+Keep the editable checkout separate from `~/.yulu`, which is the development
+runtime used by `make dev-install`. Public releases run from
+`/Applications/Yulu.app`.
 
 ## Daily loop
 
@@ -47,7 +48,7 @@ semantics. Use a Conventional Commit/PR title; release-please owns `VERSION`,
 
 ## Runtime rules
 
-- Do not hand-edit `~/.config/yulu` unless debugging a local state problem.
+- Do not hand-edit `~/Library/Application Support/Yulu` unless debugging a local state problem.
 - Do not commit `.wav`, transcript, summary, logs, sockets, pid files, or local config.
 - Fix the source checkout first, then synchronize it with `make dev-install`; never leave a runtime-only patch as the source of truth.
 - Before migrating launchd paths, run `make doctor` and record existing processes.

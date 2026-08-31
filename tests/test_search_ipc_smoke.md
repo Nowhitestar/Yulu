@@ -10,7 +10,7 @@ exercise.
 
 - `~/Movies/Yulu/` has at least one `.summary.md` and one
   `*.transcript.txt` already produced by a recording.
-- `~/.config/yulu/search.sqlite` will be created on first run; or run
+- `~/Library/Application Support/Yulu/search.sqlite` will be created on first run; or run
   `yulu search --reindex` once after install to pre-populate.
 
 ## Build + install the updated agent

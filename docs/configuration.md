@@ -1,8 +1,10 @@
 # Configuration Reference
 
-Yulu reads active configuration from `~/.config/yulu/config.json`. The installer
-creates it with private per-user defaults. The file contains product preferences,
-paths, and Agent selection only; it must not contain Agent or connector secrets.
+Yulu reads active configuration from
+`~/Library/Application Support/Yulu/config.json`. The Application Runtime creates
+it with private per-user defaults. The file contains product preferences, paths,
+and Agent selection only; it must not contain Agent or connector secrets.
+`~/.config/yulu/config.json` is a legacy, read-only migration input.
 
 The current schema separates the audio engine, Summary Provider, Conversation
 Provider, and connectors. The explicitly selected audio engine handles realtime
@@ -41,27 +43,20 @@ capability silently falls back to another provider or model.
   },
   "agent_pipeline": {
     "enabled": true,
-    "auto_process_recordings": true,
-    "notion_destination": "Yulu Meeting"
+    "auto_process_recordings": true
   },
   "llm": {
     "enabled": true,
     "command": null,
     "agent": {
-      "provider": "hermes"
+      "provider": "auto"
     }
   },
   "agent_console": {
     "plugins": {
       "added": ["summary"]
     },
-    "destinations": {
-      "hermes": {
-        "notion": {
-          "target": "Yulu Meeting"
-        }
-      }
-    }
+    "destinations": {}
   },
   "status_agent": {
     "enabled": true,
@@ -205,9 +200,10 @@ and dictation. The default is local and there is no automatic fallback.
 | `dictation.translate_timeout_sec` | `30` | Translation-specific request override. |
 
 The Host accepts on-demand audio only from the configured recordings directory
-or `~/.config/yulu/dictation`, and only as a valid absolute WAV path.
+or `~/Library/Application Support/Yulu/dictation`, and only as a valid absolute
+WAV path.
 
-Settings → Intelligent Services is the authoritative Agent Connection Center.
+Settings → AI Providers is the authoritative Agent Connection Center.
 xAI is connected there using Grok CLI-compatible OAuth or an API key the user
 explicitly chooses. OAuth tokens and API keys stay
 in separate macOS Keychain items; neither is a configuration field or browser
@@ -249,7 +245,7 @@ pinned connection, provider, model, and native session identity.
 |---|---:|---|
 | `enabled` | `true` | Enable the general Agent used by interactive conversations. This does not disable the selected Yulu audio engine. |
 | `command` | `null` | Optional explicit general-Agent argv. No shell interpolation is performed. |
-| `agent.provider` | `"auto"` in schema; installer chooses `"hermes"` | `auto`, `codex`, `claude`, `claude-code`, `hermes`, `openclaw`, `gemini`, `grok`, or `custom`. Gemini, Grok, and custom providers currently require an explicit `command`. |
+| `agent.provider` | `"auto"` | Legacy general-Agent hint. Supported current connections are selected explicitly in AI Providers; Hermes and OpenClaw remain optional Conversation-only providers. |
 
 When `provider=auto`, the general runtime detects supported CLIs in its current
 priority order. This does not change any existing audio/task/session snapshot.
@@ -381,7 +377,7 @@ archived keys back into `config.json`.
 Validate syntax without exposing the file contents:
 
 ```bash
-python3 -m json.tool ~/.config/yulu/config.json >/dev/null
+python3 -m json.tool "$HOME/Library/Application Support/Yulu/config.json" >/dev/null
 yulu doctor --json
 ```
 

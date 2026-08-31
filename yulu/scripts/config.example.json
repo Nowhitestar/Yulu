@@ -77,15 +77,14 @@
   },
   "agent_pipeline": {
     "enabled": true,
-    "auto_process_recordings": true,
-    "notion_destination": "Yulu Meeting"
+    "auto_process_recordings": true
   },
   "llm": {
     "enabled": true,
     "command": null,
     "agent": {
       "provider": "auto",
-      "note": "Local Agent use is optional and runtime-managed; Agent-backed automatic summaries currently use Hermes. Selecting xAI for summary or conversation defaults to exact model grok-4.6."
+      "note": "Local Agent use is optional and runtime-managed. Current Summary providers are direct xAI, Codex, or Claude Code; Hermes and OpenClaw are Conversation-only. Selecting xAI for summary or conversation defaults to exact model grok-4.6."
     }
   },
   "agent_console": {
@@ -93,13 +92,7 @@
       "added": ["summary"],
       "note": "Yulu-side filter for capabilities shown in Agent Console. Summary is always available; add notion/zulip/calendar from the console when you want them visible."
     },
-    "destinations": {
-      "hermes": {
-        "notion": {
-          "target": "Yulu Meeting"
-        }
-      }
-    }
+    "destinations": {}
   },
   "meeting_detection": {
     "enabled": true,

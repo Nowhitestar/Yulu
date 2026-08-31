@@ -87,6 +87,10 @@ def make_project(tmp_path: Path, version: str = "0.5.0-dev", git_marker: str | N
     scripts = project / "packaging" / "scripts"
     scripts.mkdir(parents=True)
     shutil.copy2(ROOT / "packaging" / "scripts" / "package.sh", scripts / "package.sh")
+    shutil.copy2(
+        ROOT / "packaging" / "scripts" / "release_identity.py",
+        scripts / "release_identity.py",
+    )
     shutil.copy2(ROOT / "packaging" / "scripts" / "package_pkg.sh", scripts / "package_pkg.sh")
     shutil.copy2(ROOT / "packaging" / "scripts" / "pkg_postinstall.sh", scripts / "pkg_postinstall.sh")
     shutil.copy2(ROOT / "packaging" / "scripts" / "checksums.sh", scripts / "checksums.sh")
@@ -234,6 +238,31 @@ def test_package_requires_matching_tag(tmp_path):
 
     assert result.returncode != 0
     assert "must match VERSION" in result.stderr
+
+
+def test_package_rejects_numeric_prerelease_leading_zero(tmp_path):
+    project = make_project(tmp_path, version="0.5.0-01")
+
+    result = run(
+        ["bash", "packaging/scripts/package.sh", "v0.5.0-01", "--skip-build"],
+        cwd=project,
+    )
+
+    assert result.returncode != 0
+    assert "Invalid release tag" in result.stderr
+
+
+@pytest.mark.parametrize("tag", ["v0.5.0-rc..1", "v0.5.0+build..1"])
+def test_package_rejects_empty_semver_identifiers(tmp_path, tag):
+    project = make_project(tmp_path, version=tag[1:])
+
+    result = run(
+        ["bash", "packaging/scripts/package.sh", tag, "--skip-build"],
+        cwd=project,
+    )
+
+    assert result.returncode != 0
+    assert "Invalid release tag" in result.stderr
 
 
 def test_makefile_exposes_only_dmg_release_packaging_and_tag_scoped_checksums():

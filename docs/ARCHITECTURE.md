@@ -26,7 +26,7 @@ The selected Yulu audio engine owns realtime captions, final speech recognition,
 and dictation. `local` is the default; `xai` connects directly to xAI with OAuth
 authorized in Yulu and stored in macOS Keychain. The exact Summary Provider pinned
 at task creation owns summary generation through its explicit xAI, Codex,
-or Claude Code connection. Hermes may still own Notion delivery.
+or Claude Code connection. Hermes and OpenClaw remain Conversation-only.
 The explicit ready connection selected for a new Agent Console session owns its
 interactive conversation and connectors. No capability silently falls back to
 another provider, model, connection, or credential source.
@@ -43,8 +43,8 @@ another provider, model, connection, or credential source.
 | xAI audio engine | `xaiAudio.ts`, `xaiCredentials.ts`, `xai_keychain.swift` | Direct xAI Streaming/REST STT plus Yulu-owned device OAuth and macOS Keychain storage |
 | Realtime coordinator | `realtimeTranscription.ts` | Feed mic/system streams and publish partial/stable captions from the selected engine |
 | Durable store | `hostStore.ts` | Persist tasks, pinned summary identity, events, leases, artifact records, and Notion delivery records in `host.sqlite` |
-| Pipeline coordinator | `recordingPipeline.ts` | Commit the selected-engine transcript first, then dispatch summary/delivery Agent work and recover failures |
-| Summary execution | `supportedAgentSummaryAdapter.ts`, `agentGateway.ts` | Run the task's pinned xAI/Codex/Claude Code Summary workflow; retain legacy pinned Hermes artifact work and use a separate audited Hermes session only for authorized connector delivery; they do not execute production audio transcription |
+| Pipeline coordinator | `recordingPipeline.ts` | Commit the selected-engine transcript first, then dispatch pinned Summary work and recover failures; recording completion never starts sharing |
+| Summary execution | `supportedAgentSummaryAdapter.ts`, `agentGateway.ts` | Run the task's pinned xAI/Codex/Claude Code Summary workflow; retain legacy pinned Hermes artifact work only for recovery/audit; they do not execute production audio transcription |
 | Artifact boundary | `artifactStore.ts` | Independently commit transcript, then validate and atomically commit summary artifacts with hashes and provenance |
 | General Agent runtime | `agentRuntime.ts`, Agent Console | Resolve Codex, Claude Code, Hermes, OpenClaw, or a configured command for conversation |
 | Local context | prompt, glossary, search SQLite databases | Supply instructions and discoverable local data; never execute AI work |
@@ -70,10 +70,10 @@ flowchart TD
     Q --> I["Pinned Summary Provider workflow"]
     I --> J["Task-scoped summary staging"]
     J --> K["Host atomic artifact commit and audit"]
-    K -->|"Explicit Notion authorization"| L["Hermes Notion connector"]
-    L --> M["Host delivery result record"]
     K --> N["Completed task"]
-    M --> N
+    R["Recording detail"] -->|"Fresh manual confirmation"| S["Share Action"]
+    S --> T["Supported Agent connector"]
+    T --> U["Verified receipt or Unknown Outcome"]
 ```
 
 ### Capture completion
@@ -90,7 +90,7 @@ flowchart TD
 
 The request goes to `POST /api/recordings/completed` on loopback with the local
 bearer token. If the Host cannot be reached, the same payload is written with an
-atomic rename under `~/.config/yulu/recording-events/`. The Host registers its
+atomic rename under `~/Library/Application Support/Yulu/recording-events/`. The Host registers its
 watcher before the startup scan and periodically rescans as a lost-event and
 transient-failure fallback before replaying valid events.
 
@@ -104,7 +104,7 @@ uses a new key because the user intentionally requested another run.
 
 ## Durable task model
 
-`~/.config/yulu/host.sqlite` is the source of truth. A task records:
+`~/Library/Application Support/Yulu/host.sqlite` is the source of truth. A task records:
 
 - recording stem, title, and validated audio path;
 - idempotency key, automatic/manual trigger, and pinned Summary Provider/model;
@@ -133,13 +133,15 @@ stateDiagram-v2
     transcript_committed --> execution_unverified: Summary request outcome unknown
     execution_unverified --> cancelled: explicit new attempt retires original
     transcript_committed --> artifacts_committed: summary committed
-    artifacts_committed --> completed: no external delivery
-    artifacts_committed --> sending: Notion explicitly authorized
-    sending --> delivery_reported: Hermes reports page URL or ID
-    delivery_reported --> completed: audit passes
+    artifacts_committed --> completed: recording processing ends
     running --> failed: deterministic failure
-    sending --> delivery_unverified: outcome uncertain
-    delivery_reported --> delivery_unverified: Host restarts before completion
+    state "sending (legacy only)" as sending
+    state "delivery_reported (legacy only)" as delivery_reported
+    state "delivery_unverified (legacy only)" as delivery_unverified
+    [*] --> sending: restore already-started pre-upgrade delivery
+    sending --> delivery_reported: historical receipt preserved
+    sending --> delivery_unverified: historical outcome uncertain
+    delivery_reported --> delivery_unverified: recovery cannot prove completion
     delivery_unverified --> completed: user confirms existing page
     delivery_unverified --> cancelled: user abandons delivery
 ```
@@ -165,7 +167,7 @@ snapshot is immutable; Settings changes apply only to newly created work.
 ## Artifact commit boundary
 
 Each task has a private Host-owned directory under
-`~/.config/yulu/agent-tasks/<task-id>/`. The transcription transport stages
+`~/Library/Application Support/Yulu/agent-tasks/<task-id>/`. The transcription transport stages
 `transcript.txt`. Every current Summary path remains behind the same Host-owned
 artifact fence:
 

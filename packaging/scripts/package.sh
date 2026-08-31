@@ -123,12 +123,41 @@ if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$
     echo "Invalid release tag: $TAG" >&2
     exit 1
 fi
+TAG_WITHOUT_BUILD="${TAG%%+*}"
+if [[ "$TAG_WITHOUT_BUILD" == *-* ]]; then
+    PRERELEASE="${TAG_WITHOUT_BUILD#*-}"
+    if [[ "$PRERELEASE" == .* || "$PRERELEASE" == *. || "$PRERELEASE" == *..* ]]; then
+        echo "Invalid release tag: $TAG" >&2
+        exit 1
+    fi
+    IFS='.' read -r -a PRERELEASE_IDENTIFIERS <<< "$PRERELEASE"
+    for IDENTIFIER in "${PRERELEASE_IDENTIFIERS[@]}"; do
+        if [[ -z "$IDENTIFIER" || "$IDENTIFIER" =~ ^0[0-9]+$ ]]; then
+            echo "Invalid release tag: $TAG" >&2
+            exit 1
+        fi
+    done
+fi
+if [[ "$TAG" == *+* ]]; then
+    BUILD_METADATA="${TAG#*+}"
+    if [[ "$BUILD_METADATA" == .* || "$BUILD_METADATA" == *. || "$BUILD_METADATA" == *..* ]]; then
+        echo "Invalid release tag: $TAG" >&2
+        exit 1
+    fi
+fi
 if [[ -f "$ROOT/VERSION" ]]; then
     VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
     EXPECTED_TAG="v$VERSION"
     if [[ "$TAG" != "$EXPECTED_TAG" ]]; then
-        echo "TAG ($TAG) must match VERSION ($EXPECTED_TAG)." >&2
-        exit 1
+        command -v python3 >/dev/null 2>&1 || {
+            echo "TAG ($TAG) must match VERSION ($EXPECTED_TAG)." >&2
+            exit 1
+        }
+        python3 "$ROOT/packaging/scripts/release_identity.py" \
+            --tag "$TAG" \
+            --version-file "$ROOT/VERSION" \
+            --repository "$ROOT" \
+            --validate-only
     fi
 fi
 

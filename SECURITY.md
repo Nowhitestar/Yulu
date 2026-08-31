@@ -12,7 +12,7 @@ git log -1 --format='%ae'
 
 Please include:
 
-1. The component (native capture, local Host/MCP, Hermes task boundary, calendar adapter, or installer).
+1. The component (native capture, local Host/MCP, Agent task boundary, calendar adapter, or Application Runtime).
 2. A minimal reproduction or proof of concept.
 3. Whether the issue requires local user access, network access, or remote unauthenticated access.
 4. Any disclosure timeline you would like.
@@ -39,8 +39,8 @@ Out of scope (please do not report):
 These are not vulnerabilities in Yulu, but they are the failure modes I see most often:
 
 - **Never paste `client_secret*.json` or refresh tokens into chat or commits.** If you have, revoke the OAuth client in Google Cloud Console and generate a new one. Removing the file from git history is not enough — assume it was scraped.
-- **Keep `~/.config/yulu/` out of cloud-synced folders** (iCloud Drive, Dropbox, Google Drive, OneDrive). It contains the Host database, task workspaces, completion-event spool, and local MCP token.
-- **Protect `~/.config/yulu/mcp-token.json`.** It must remain mode `0600`. Run `yulu mcp rotate-token` if it is exposed.
+- **Keep `~/Library/Application Support/Yulu/` out of cloud-synced folders** (iCloud Drive, Dropbox, Google Drive, OneDrive). It contains the Host database, task workspaces, completion-event spool, and local MCP token. `~/.config/yulu/` is only a legacy read-only migration source.
+- **Protect `~/Library/Application Support/Yulu/mcp-token.json`.** It must remain mode `0600`. Run `yulu mcp rotate-token` if it is exposed.
 - **Review uncertain external deliveries explicitly.** A task in `delivery_unverified` must be reconciled in Yulu; do not blindly retry a Notion write whose outcome is unknown.
 
 ## Verifying releases

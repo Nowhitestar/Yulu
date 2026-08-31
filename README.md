@@ -16,8 +16,8 @@ searchable transcripts and summaries, and lets Agents work across that history.
 
 There is no Yulu account. Recordings and task state stay on your Mac. Yulu uses
 the audio engine you explicitly select for realtime captions, final transcription,
-and dictation: local by default, or xAI cloud through one Grok-compatible OAuth
-or explicitly chosen API-key connection managed by Yulu. Yulu never silently
+and dictation: local by default, or xAI cloud through one Grok CLI-compatible OAuth
+sign-in or explicitly chosen API-key connection managed by Yulu. Yulu never silently
 switches between them or between credential sources.
 
 Transcription, Summary Provider, and Conversation Provider selections are
@@ -80,7 +80,7 @@ The session also pins the xAI credential source and verifies the response model.
 Failures preserve the provider/model/credential identity, evidence snapshot, and
 history until one explicit same-snapshot retry or a new conversation.
 
-Open **Settings → Intelligent Services** for the authoritative Agent Connection
+Open **Settings → AI Providers** for the authoritative Agent Connection
 Center. It connects, discloses, tests, selects, repairs, and deletes each
 capability without sending a model request merely because the page opened.
 Discovery only lists candidates. Install or place the runtime on the Yulu Host
@@ -138,9 +138,9 @@ center of the currently active display.
   when you want automatic summaries. Sharing currently requires a supported
   Codex or Claude Code connection with a proven pre-tool authorization boundary;
   Hermes and OpenClaw remain Conversation-only.
-- The local transcription model (default), or xAI OAuth authorized directly in
-  Settings plus the current Cloud Transcription Consent when you explicitly
-  select xAI.
+- The local transcription model (default), or xAI authorized directly in
+  Settings with Grok CLI-compatible OAuth plus the current Cloud Transcription
+  Consent when you explicitly select xAI.
 - Optionally, Codex CLI, Claude Code, OpenClaw, Hermes, or a custom command for
   Agent Console conversation.
 
@@ -281,7 +281,7 @@ pipeline. Install Yulu first, then add the skill to each Agent you want to use.
 | OpenClaw 2026.5.12+ | Supported after disclosure and a bounded, tool-free `infer model run --gateway` probe | Not supported | The probe and conversation must prove the same Gateway/provider/model with no fallback |
 | Hermes 0.20.0 | Unavailable until Hermes exposes a stable, tool-free capability-probe surface | Not supported | PATH, config, and OAuth status alone never count as ready |
 
-Settings → Intelligent Services is the authoritative Agent Connection Center.
+Settings → AI Providers is the authoritative Agent Connection Center.
 Opening it performs status inspection only and never probes a model or spends
 model quota. A capability test requires its current Data Path Disclosure first.
 Deleting a runtime-owned connection removes only Yulu's connection/readiness
@@ -291,15 +291,17 @@ history and future selection; it does not log out of or reconfigure the runtime.
 
 - WAV recordings are stored under `~/Movies/Yulu` by default.
 - Transcript and summary sidecars live beside their recording.
-- Runtime databases, task state, tokens, sockets, and logs stay under
-  `~/.config/yulu`.
+- Runtime databases, task state, and the local bearer token stay under
+  `~/Library/Application Support/Yulu`; sockets stay under
+  `~/Library/Caches/Yulu`, and logs stay under `~/Library/Logs/Yulu`.
+  `~/.config/yulu` is read only as a legacy migration source.
 - The Host binds to loopback and protects completion, transcription, and MCP
   requests with a per-install bearer token.
 - Yulu does not store Agent connector credentials.
 - Selecting xAI does not by itself authorize cloud processing. Before sending
   recording audio directly to xAI for speech-to-text, Yulu requires the current
   Cloud Transcription Consent after disclosing that audio leaves the computer and
-  provider charges may apply. Settings → Intelligent Services keeps OAuth tokens and
+  provider charges may apply. Settings → AI Providers keeps OAuth tokens and
   explicitly submitted API keys in macOS Keychain. Saving an API key does not select
   it; Credential Source remains a separate explicit choice. Yulu tests realtime
   transcription through a no-user-audio production WebSocket handshake, then tests

@@ -14,7 +14,7 @@ Yulu（语录，*yǔ lù*）是一套围绕本地文件和现有 Agent 设计的
 实时字幕，把会议整理成可搜索的转录与纪要，并让 Agent 继续使用这些历史内容工作。
 
 Yulu 不需要账号。录音文件和任务状态保存在你的 Mac 上。实时字幕、最终转写和听写
-使用你明确选择的音频引擎：默认本地，也可通过 Yulu 管理的一次 Grok 兼容 OAuth
+使用你明确选择的音频引擎：默认本地，也可通过 Yulu 管理的一次兼容 Grok CLI 的 OAuth
 或显式提交的 API Key 连接 xAI 云端方案。引擎与凭据来源之间都不会自动切换。
 
 转写、摘要服务与对话服务可以独立选择。摘要任务与本地保存的对话都会固定创建时的
@@ -107,7 +107,7 @@ Codex 会在临时项目中加载仅属于 Yulu 的调用前守卫，同时继�
   纪要连接。分享需要具备已证明调用前授权边界的 Codex 或 Claude Code 连接；Hermes 与
   OpenClaw 仅支持对话，不能选作纪要或分享提供方。
 - 转写、听写和实时字幕默认使用本地引擎；也可显式选择 xAI，并直接在 Yulu
-  设置中完成 OAuth。两种引擎不会自动切换。
+  设置中完成兼容 Grok CLI 的 OAuth。两种引擎不会自动切换。
 - Agent Console 可选使用 Codex CLI、Claude Code、OpenClaw、Hermes 或自定义命令。
 
 官方 App 已内含兼容的 Application Runtime 与必要音频工具。
@@ -252,7 +252,10 @@ yulu mcp test
 
 - WAV 录音默认保存在 `~/Movies/Yulu`。
 - 转录和纪要 sidecar 与对应录音放在一起。
-- 运行数据库、任务状态、token、socket 和日志保存在 `~/.config/yulu`。
+- 运行数据库、任务状态和本地 bearer token 保存在
+  `~/Library/Application Support/Yulu`；socket 保存在
+  `~/Library/Caches/Yulu`，日志保存在 `~/Library/Logs/Yulu`。
+  `~/.config/yulu` 只作为旧版本迁移时的只读来源。
 - Host 只监听回环地址，并使用每次安装生成的 bearer token 保护完成事件、转写和 MCP 请求。
 - Yulu 不保存 Agent 的连接器凭据。
 - 选择 xAI 本身不等于授权云处理；在把录音音频直接发送给 xAI 前，Yulu 还会要求

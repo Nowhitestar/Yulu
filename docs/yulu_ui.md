@@ -66,11 +66,11 @@ npm run e2e        # Playwright critical-flow sweep (chromium)
 
 ## Logs
 
-The LaunchAgent writes stdout + stderr to `~/.config/yulu/ui.log`. Tail it via:
+The LaunchAgent writes stdout + stderr to `~/Library/Logs/Yulu/ui.log`. Tail it via:
 
 ```bash
 yulu logs ui                              # tail -f
-tail -f ~/.config/yulu/ui.log
+tail -f "$HOME/Library/Logs/Yulu/ui.log"
 ```
 
 You can also inspect current service logs from the Logs section on `/health`.

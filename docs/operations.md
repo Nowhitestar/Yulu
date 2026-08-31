@@ -40,7 +40,7 @@ Host. It does not synchronously run speech or summary code in Python.
 ### 1. Native capture
 
 ```bash
-echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
+echo '{"action":"status"}' | nc -w 2 -U "$HOME/Library/Caches/Yulu/audio_daemon.sock"
 ```
 
 The response should be JSON and should report usable microphone and system-audio
@@ -68,13 +68,13 @@ yulu mcp test
 ```
 
 The MCP endpoint and mutating Host endpoints require the per-install token in
-`~/.config/yulu/mcp-token.json`. Do not paste or log that token. Rotate it with
+`~/Library/Application Support/Yulu/mcp-token.json`. Do not paste or log that token. Rotate it with
 `yulu mcp rotate-token` if it is exposed.
 
-Hermes must list three enabled registrations: interactive `yulu`, artifact-only
-`yulu_artifact`, and delivery-only `yulu_delivery`. Re-run `yulu mcp install
---agent hermes` if doctor reports `hermes_phase_mcp` missing. The two recording
-phase registrations intentionally point at different endpoints and tool schemas.
+Install the `yulu` MCP registration only into each supported Agent you explicitly
+choose to use. Hermes is optional and Conversation-only in the current product;
+its historical `yulu_artifact` and `yulu_delivery` registrations are compatibility
+signals, not installation or overall health requirements.
 
 ### 4. Host and Agent health
 
@@ -89,9 +89,9 @@ Inspect these report sections:
 | `socket` | `ok=true`; permission readiness fields are not false |
 | `yulu_ui` | built server present and `healthz_ok=true` |
 | `host_tasks` | database readable; state counts match expected work |
-| `host_capabilities` | Hermes is usable and the recording directory is usable |
+| `host_capabilities` | native capabilities and the recording directory are usable |
 | `agent_connections` | each configured adapter reports version/feature compatibility, capability matrix, current readiness, history, and repair path independently |
-| `agent_pipeline.components.hermes_phase_mcp` | both `yulu_artifact` and `yulu_delivery` are enabled |
+| `agent_pipeline.components.hermes_phase_mcp` | compatibility-only; inspect only for a preserved legacy Hermes workflow |
 | `legacy_processes` | empty |
 
 `agent_connections.compatibility.runtime_version` is the observed `actual`, not
@@ -122,7 +122,7 @@ python3 - <<'PY'
 import sqlite3
 from pathlib import Path
 
-path = Path.home() / ".config/yulu/host.sqlite"
+path = Path.home() / "Library/Application Support/Yulu/host.sqlite"
 con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 for row in con.execute(
     "SELECT id, recording_stem, state, phase, attempt, error "
@@ -167,7 +167,7 @@ Transcription Consent acknowledging xAI processing and possible provider charges
 Selecting xAI or saving its credential is not consent. Yulu never switches engines
 automatically when the selected engine is unavailable.
 
-Settings → Intelligent Services owns the authoritative Agent Connection Center,
+Settings → AI Providers owns the authoritative Agent Connection Center,
 including direct xAI and supported local Agent connections. Opening it does
 not probe a model. Its three capability readiness results are independent: a
 green Summary or Conversation result does not establish Transcription readiness
@@ -224,7 +224,7 @@ yulu dictate toggle
 ```
 
 On-demand audio paths are restricted to `~/Movies/Yulu` and
-`~/.config/yulu/dictation`. The Host rejects relative paths, non-WAV input,
+`~/Library/Application Support/Yulu/dictation`. The Host rejects relative paths, non-WAV input,
 missing/incomplete files, and paths outside those roots.
 
 ## Durable task states
@@ -237,9 +237,9 @@ missing/incomplete files, and paths outside those roots.
 | `awaiting_policy` | Recording processing is paused by configuration | Re-enable the applicable policy, or explicitly take over an automatic task as manual work when only `auto_process_recordings` is false |
 | `running` | A leased attempt is transcribing or summarizing | Watch `phase` and UI log |
 | `artifacts_committed` | Transcript and summary are safely committed | Normally transitions immediately; inspect if stuck |
-| `sending` | Hermes has authorization to contact Notion | Do not manually replay while outcome is unknown |
-| `delivery_reported` | Hermes reported a page URL or ID | Normally transitions immediately; inspect audit if stuck |
-| `completed` | Required artifacts and optional delivery audit passed | No action |
+| `sending` | Legacy external delivery had already started before migration; no new task may enter this state | Do not replay; reconcile the historical outcome |
+| `delivery_reported` | Legacy delivery reported a page URL or ID; retained for audit only | Inspect the historical receipt if needed |
+| `completed` | Required transcript and summary artifacts are committed | No action |
 | `failed` | Deterministic processing or validation failure | Read `error`, fix the cause, then use the UI/task retry surface where offered |
 | `execution_unverified` | Host cannot prove whether the pinned Summary request executed or produced a result | Do not use ordinary retry. Wait, repair the exact connection, or explicitly create a new Summary attempt; the original remains closed and is never replayed automatically |
 | `delivery_unverified` | Host cannot prove whether Notion already changed | Reconcile the destination manually before any new delivery attempt |
@@ -255,7 +255,7 @@ Do not edit task state directly in SQLite.
 The Python capture edge writes an atomic completion event under:
 
 ```text
-~/.config/yulu/recording-events/
+~/Library/Application Support/Yulu/recording-events/
 ```
 
 Restart the Host:
@@ -284,7 +284,7 @@ yulu doctor --json
 yulu logs ui
 ```
 
-Use Settings → Intelligent Services to inspect the exact pinned dependency.
+Use Settings → AI Providers to inspect the exact pinned dependency.
 Current Summary connections are xAI, Codex, or Claude Code; a
 legacy already-pinned Hermes task may still require a stable Hermes executable
 path. Reinstall or reload Yulu when a required runtime is visible only through a
@@ -368,7 +368,7 @@ stable delivery key.
 Check native readiness:
 
 ```bash
-echo '{"action":"status"}' | nc -w 2 -U ~/.config/yulu/audio_daemon.sock
+echo '{"action":"status"}' | nc -w 2 -U "$HOME/Library/Caches/Yulu/audio_daemon.sock"
 yulu repair-permissions
 ```
 
@@ -384,14 +384,16 @@ inputs are not ready instead of producing a fake-success silent file.
 
 | Path | Purpose |
 |---|---|
-| `~/.config/yulu/ui.log` | Host, Agent gateway, migration, and web-service log |
-| `~/.config/yulu/audio_daemon.log` | Native capture log |
-| `~/.config/yulu/{scheduler,detector,status_agent,calendar_services}.log` | Per-service scheduling, detection, status, and calendar logs |
-| `~/.config/yulu/host.sqlite` | Durable task, event, artifact, and delivery audit store |
-| `~/.config/yulu/agent-tasks/` | Private task staging directories |
-| `~/.config/yulu/recording-events/` | Capture-completion recovery inbox |
-| `~/.config/yulu/config.json` | Active non-secret preferences |
-| `~/.config/yulu/mcp-token.json` | Local bearer token; do not print or copy |
+| `~/Library/Logs/Yulu/ui.log` | Host, Agent gateway, migration, and web-service log |
+| `~/Library/Logs/Yulu/audio_daemon.log` | Native capture log |
+| `~/Library/Logs/Yulu/{scheduler,detector,status_agent,calendar_services}.log` | Per-service scheduling, detection, status, and calendar logs |
+| `~/Library/Application Support/Yulu/host.sqlite` | Durable task, event, artifact, and delivery audit store |
+| `~/Library/Application Support/Yulu/agent-tasks/` | Private task staging directories |
+| `~/Library/Application Support/Yulu/recording-events/` | Capture-completion recovery inbox |
+| `~/Library/Application Support/Yulu/config.json` | Active non-secret preferences |
+| `~/Library/Application Support/Yulu/mcp-token.json` | Local bearer token; do not print or copy |
+| `~/Library/Caches/Yulu/` | Runtime sockets and process state |
+| `~/.config/yulu/` | Legacy read-only migration input, not active state |
 | macOS Keychain service `com.yulu.xai-oauth` | Yulu-owned Grok-compatible xAI OAuth grant; never print or export |
 | macOS Keychain service `com.yulu.provider-secret`, account `direct.xai` | Explicitly saved xAI API key; never print, export, or place in config/SQLite/logs/argv |
 | `~/Movies/Yulu/` | Recording content and committed sidecars |
@@ -545,5 +547,5 @@ python3 yulu/scripts/doctor.py --json
 - Never claim a recording task succeeded from Agent prose alone; use Host state.
 - Never retry an uncertain external side effect without reconciliation.
 - Never add Agent credentials or Yulu's xAI OAuth grant to config or logs.
-- Separate capture health, Host durability, Hermes availability, artifact commit,
-  and Notion delivery when diagnosing a user-visible failure.
+- Separate capture health, Host durability, selected provider readiness, artifact
+  commit, and manual Share Action outcome when diagnosing a user-visible failure.

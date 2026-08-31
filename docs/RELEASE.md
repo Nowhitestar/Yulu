@@ -20,7 +20,7 @@ Expected:
 
 ## Versioning
 
-Feature and fix PRs use Conventional Commit titles. Do not edit `VERSION`,
+Feature and fix PRs normally use Conventional Commit titles. Do not edit `VERSION`,
 `.release-please-manifest.json`, or the generated release section of
 `CHANGELOG.md` in a feature PR. After changes land on `main`, release-please owns
 those files and maintains the release PR:
@@ -36,7 +36,10 @@ to `/Applications`. The App is the immutable, self-contained Application
 Runtime. The DMG must not contain an installer script, repository checkout, or
 writable runtime payload. Exclude from every release asset:
 
-- `~/.config/yulu`
+- `~/Library/Application Support/Yulu`
+- `~/Library/Caches/Yulu`
+- `~/Library/Logs/Yulu`
+- legacy migration input under `~/.config/yulu`
 - `~/Movies/Yulu`
 - logs, sockets, pid/state files
 - transcripts, summaries, recordings
@@ -60,6 +63,16 @@ make test
    assets, and verifies their remote bytes.
 6. Only after all assets are present does the workflow make the Release public.
 
+Before closing a release-line alignment ticket, read back every changed public
+surface rather than relying on the local diff:
+
+- GitHub About description and homepage;
+- repository social preview image and its visible metadata;
+- rendered README and issue template on GitHub;
+- deployed landing page text, metadata, download target, console, and network;
+- rendered GitHub Release body against the matching RC or stable release notes;
+- Release Please PR title plus VERSION and CHANGELOG diff.
+
 If publish fails, the Release stays draft and is not returned as latest stable.
 
 Required assets, exactly:
@@ -70,13 +83,25 @@ Required assets, exactly:
 - `appcast.xml` (signed Sparkle feed pointing to the same DMG)
 - `checksums.txt`
 
-Tags with a prerelease suffix, such as `v0.5.0-beta.1` or `v0.5.0-dogfood`, are published as prereleases.
+The current release line uses release-please's prerelease strategy. The Phase 13
+alignment commit includes `Release-As: 0.23.0-rc.4`, so the rolling Release PR
+advances the accepted line to RC4 instead of opening `0.24.0-rc.3`. Tags with a
+prerelease suffix are published as prereleases.
 
 ## Manual escape hatch
 
 `.github/workflows/release.yml` still accepts a manually pushed `v*.*.*` tag for
-an emergency. The tag must match `VERSION`; use this only when the normal
-release-please path cannot operate, and never to bypass a failed release PR/CI.
+an emergency. The tag must match `VERSION`, with one fail-closed exception:
+`v0.23.0` may be pushed only while `VERSION` is `0.23.0-rc.4` and the local
+`v0.23.0-rc.4` tag resolves to the same source commit. That stable promotion uses
+the odd build number immediately after the RC's even build number; the next
+source commit receives the next even build number, so Sparkle ordering remains
+strict. All other mismatches fail before packaging. Use the
+manual path only for this accepted same-source promotion or when release-please
+cannot operate, never to bypass a failed Release PR or CI.
+
+Both release paths also require the requested tag itself to exist and resolve to
+the checked-out release commit before any build identity is derived.
 
 ## Local dry run
 

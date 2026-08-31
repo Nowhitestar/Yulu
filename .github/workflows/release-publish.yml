@@ -39,14 +39,15 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
-      - name: Verify tag matches VERSION
+      - name: Resolve release identity
+        id: release-identity
         run: |
           set -euo pipefail
-          EXPECTED="v$(tr -d '[:space:]' < VERSION)"
-          if [[ "$TAG" != "$EXPECTED" ]]; then
-            echo "Tag $TAG does not match VERSION $EXPECTED" >&2
-            exit 1
-          fi
+          python3 packaging/scripts/release_identity.py \
+            --tag "$TAG" \
+            --version-file VERSION \
+            --repository . \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Bash syntax check
         run: |
@@ -83,6 +84,7 @@ jobs:
             python3 -m py_compile "$f"
           done
           python3 -m py_compile packaging/scripts/build_local_caption_runtime_pack.py
+          python3 -m py_compile packaging/scripts/release_identity.py
           python3 -m py_compile packaging/scripts/validate_runtime_archive.py
           python3 -m py_compile packaging/scripts/runtime_node_version.py
 
@@ -185,12 +187,11 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           YULU_SPARKLE_FEED_URL: ${{ secrets.YULU_SPARKLE_FEED_URL }}
           YULU_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.YULU_SPARKLE_PUBLIC_ED_KEY }}
+          YULU_RELEASE_VERSION: ${{ steps.release-identity.outputs.release_version }}
+          YULU_BUNDLE_SHORT_VERSION: ${{ steps.release-identity.outputs.bundle_short_version }}
+          YULU_BUILD_NUMBER: ${{ steps.release-identity.outputs.build_number }}
         run: |
           set -euo pipefail
-          YULU_RELEASE_VERSION="${TAG#v}"
-          YULU_BUNDLE_SHORT_VERSION="${YULU_RELEASE_VERSION%%-*}"
-          YULU_BUILD_NUMBER="$(git rev-list --count HEAD)"
-          export YULU_RELEASE_VERSION YULU_BUNDLE_SHORT_VERSION YULU_BUILD_NUMBER
           YULU_SPARKLE_PRIVATE_ED_KEY="${{ secrets.YULU_SPARKLE_PRIVATE_ED_KEY }}" \
             bash packaging/scripts/sign_and_notarize.sh --update-release
 
@@ -371,6 +372,22 @@ jobs:
               exit 1
             }
           done
+
+          # The public release body is part of the shipped guidance. Read it
+          # back from GitHub and require the rendered source text to match the
+          # versioned release notes before publication.
+          REMOTE_RELEASE_JSON="$RUNNER_TEMP/remote-release.json"
+          gh release view "$TAG" --json body > "$REMOTE_RELEASE_JSON"
+          python3 - "$REMOTE_RELEASE_JSON" "dist/release-notes.md" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          remote = json.loads(pathlib.Path(sys.argv[1]).read_text())["body"]
+          local = pathlib.Path(sys.argv[2]).read_text()
+          if remote != local:
+              raise SystemExit("Draft GitHub Release body differs from versioned release notes.")
+          PY
 
           # Re-download the draft assets and compare the actual remote bytes,
           # not just their names/sizes, before making the release public.

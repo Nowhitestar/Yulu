@@ -15,8 +15,8 @@ separate from the selected summary and conversation Agents.
   transcripts, and dictation. `local` is the default; `xai` connects directly
   to xAI using Yulu-owned OAuth stored in macOS Keychain.
 - The exact Summary Provider pinned when work is created owns summary generation.
-  Agent-backed summaries currently use Hermes; Hermes also owns explicitly
-  authorized Notion delivery. It is not an audio execution dependency.
+  Current Summary Providers are direct xAI, Codex, or Claude Code. Hermes and
+  OpenClaw are optional Conversation-only providers.
 - The pinned Conversation Provider owns interactive conversation. xAI receives
   only bounded local meeting excerpts/history through Yulu's strict stateless
   client; Agent-backed conversations retain their runtime-owned connectors.
@@ -32,12 +32,13 @@ accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-record
 
 - **Platform:** macOS 13+ is the shipped capture platform.
 - **Privacy:** raw capture is local; `local` transcription stays on-device and
-  the explicitly selected `xai` engine uploads audio directly to xAI. Agent
-  summary processing follows Hermes' provider configuration.
+  the explicitly selected `xai` engine uploads audio directly to xAI. Summary
+  processing follows the exact pinned xAI, Codex, or Claude Code connection.
 - **Durability:** task completion requires Host state and committed artifacts,
   not Agent prose or the presence of one sidecar file.
-- **Side effects:** Notion requires per-task opt-in and Host authorization;
-  uncertain delivery is never blindly replayed.
+- **Side effects:** sharing is a separate, fresh, manually confirmed Share
+  Action; recording completion and retired config cannot authorize it. An
+  uncertain result is never blindly replayed.
 - **Compatibility:** upgrade code archives retired settings, imports resolvable
   historical work, and unloads retired services.
 <!-- GSD:project-end -->
@@ -59,7 +60,8 @@ accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-record
 - macOS ScreenCaptureKit and AVFoundation for native capture.
 - Hono, tRPC, Zod, WebSocket, and `better-sqlite3` for the Host.
 - React, React Router, TanStack Query, Vite, and wavesurfer.js for the UI.
-- Hermes CLI for automatic recording summaries and authorized Notion delivery.
+- Optional local Agent CLIs for the capabilities the user explicitly selects;
+  Hermes and OpenClaw are Conversation-only.
 - `sherpa-onnx` Paraformer for the Yulu-managed local audio engine.
 - `ffmpeg`/`sox` for audio inspection and transport preparation, including xAI
   batch-upload compression.
@@ -71,14 +73,16 @@ Yulu's separate xAI audio OAuth grant is stored in macOS Keychain.
 
 ### Configuration and state
 
-- Active config: `~/.config/yulu/config.json`.
+- Active config: `~/Library/Application Support/Yulu/config.json`.
 - Current schema reference: `yulu/scripts/config.example.json` and
   `docs/configuration.md`.
-- Durable task source of truth: `~/.config/yulu/host.sqlite`.
+- Durable task source of truth: `~/Library/Application Support/Yulu/host.sqlite`.
 - Recording content: `~/Movies/Yulu/` by default.
-- Private task staging: `~/.config/yulu/agent-tasks/`.
-- Completion-event recovery inbox: `~/.config/yulu/recording-events/`.
-- Local bearer token: `~/.config/yulu/mcp-token.json`; never print it.
+- Private task staging: `~/Library/Application Support/Yulu/agent-tasks/`.
+- Completion-event recovery inbox: `~/Library/Application Support/Yulu/recording-events/`.
+- Local bearer token: `~/Library/Application Support/Yulu/mcp-token.json`; never print it.
+- Runtime sockets: `~/Library/Caches/Yulu/`; logs: `~/Library/Logs/Yulu/`.
+- `~/.config/yulu/` is a legacy read-only migration source.
 
 Relevant config sections are `audio`, `transcription` (engine, language, and
 dictation context), `agent_pipeline`, `llm`,
@@ -126,8 +130,8 @@ Do not infer live behavior from checkout tests alone.
   state transitions, summary dispatch, and recovery.
 - `artifactStore.ts` commits the transcript independently, then validates and
   replaces the final summary sidecar.
-- `agentGateway.ts` is the Hermes summary/delivery boundary and audits required
-  Host tool calls.
+- `agentGateway.ts` is the supported Agent invocation and required-tool audit
+  boundary; its Hermes delivery endpoints remain legacy audit compatibility.
 - Only the current lease may report progress, commit, authorize delivery, report
   delivery, or complete a task.
 - Keep MCP and tRPC schemas validated with Zod. Do not expose lease tokens in
@@ -145,7 +149,8 @@ Do not infer live behavior from checkout tests alone.
 ### Configuration
 
 - Credentials are never stored in `config.json`.
-- `agent_pipeline.auto_send_notion=true` is real side-effect authorization.
+- Retired `agent_pipeline.auto_send_notion` is migration input only and can
+  never authorize a new Share Action.
 - `llm.agent.provider` selects the general Agent only. Audio uses
   `transcription.engine`; summary and conversation use their separate
   `intelligence` selections, snapshotted when work is created.
@@ -156,8 +161,8 @@ Do not infer live behavior from checkout tests alone.
 
 ### Errors and observability
 
-- Separate native capture, Host reachability, Hermes availability, artifact
-  commit, and Notion delivery in diagnostics.
+- Separate native capture, Host reachability, selected provider readiness,
+  artifact commit, and manual Share Action outcome in diagnostics.
 - A Host restart during a possible external write yields
   `delivery_unverified`, not an automatic retry.
 - `/healthz` proves only that the loopback Host is listening.
@@ -193,7 +198,8 @@ Python completion adapter -> authenticated loopback Host
                               pinned Summary Provider workflow
                                            |
                                            +-> Host commits summary
-                                           +-> optional authorized Hermes Notion
+
+Recording detail -> fresh confirmed Share Action -> selected Agent connector
 
 Agent Console -> pinned Conversation Provider -> xAI bounded local excerpts
                                            or -> selected Agent + its connectors
@@ -210,10 +216,10 @@ Agent Console -> pinned Conversation Provider -> xAI bounded local excerpts
 | `audioTranscription.ts` | Explicit local/xAI realtime, final, and dictation selection without fallback |
 | `xaiAudio.ts` / `xaiCredentials.ts` / `xai_keychain.swift` | Direct xAI STT plus Yulu-owned device OAuth and Keychain storage |
 | `recordingPipeline.ts` | Validation, idempotency, claims, transcript commit, summary dispatch, recovery |
-| `agentGateway.ts` | Hermes summary/delivery workflow and required-tool audit |
+| `agentGateway.ts` | Supported Agent invocation, connector boundary, and required-tool audit; legacy Hermes delivery audit compatibility |
 | `artifactStore.ts` | Task staging and independent transcript/summary commits |
 | `recordingEventInbox.ts` | Replay completion events after Host downtime |
-| `agentRuntime.ts` | Separate Hermes recording resolution and general-Agent resolution |
+| `agentRuntime.ts` | Supported local Agent runtime resolution for explicitly selected capabilities |
 | prompt/glossary/search stores | Local context and discovery; bounded xAI conversation retrieval |
 | `agentSessionStore.ts` / `xaiText.ts` | Pinned local conversation history/sources and strict stateless xAI text requests |
 
@@ -238,10 +244,11 @@ There is no active STT or Agent-queue LaunchAgent.
 3. The selected Yulu audio engine produces the transcript, which the Host commits
    before pinned Summary Provider work. Summary Providers never perform production
    transcription and never fall back to another provider or model.
-4. The Summary Provider commits through the Host artifact boundary; Hermes Notion
-   delivery can begin only after the summary is committed and the task opted in.
-5. A Notion result must include a page URL or ID and the stable
-   `yulu-<task-id>` marker through the Hermes connector workflow.
+4. The Summary Provider commits through the Host artifact boundary; recording
+   processing ends after transcript and summary commit.
+5. External sharing begins only from a new, manually confirmed Share Action.
+   Retired Notion fields and compatibility endpoints cannot start one; an
+   uncertain outcome must be reconciled before another attempt.
 6. The Host binds to loopback, validates Host headers and recording roots, and
    requires a constant-time-checked bearer token for mutating/Agent/MCP paths.
 7. Runtime databases, task workspaces, sockets, tokens, and event spools remain
@@ -252,11 +259,13 @@ There is no active STT or Agent-queue LaunchAgent.
 ```text
 queued -> running -> transcript_committed -> artifacts_committed -> completed
    |          |                |                       |
-   |          |                +-> awaiting_provider   +-> sending -> delivery_reported -> completed
+   |          |                +-> awaiting_provider
    |          +-> failed
    +-> awaiting_agent
 
-possible external-write uncertainty -> delivery_unverified
+legacy pre-upgrade delivery only:
+sending -> delivery_reported -> completed
+   +-----> delivery_unverified -> explicit confirm or abandon
 ```
 
 ### ADR status

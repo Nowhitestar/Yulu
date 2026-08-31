@@ -27,7 +27,7 @@ Create `.agent/tasks/YYYY-MM-DD-<slug>.md`:
 
 ## Constraints
 
-- Do not modify `~/.config/yulu`.
+- Do not modify `~/Library/Application Support/Yulu`.
 - Do not modify `~/Movies/Yulu`.
 - Do not commit secrets, logs, recordings, transcripts, or local config.
 - Do not change unrelated files.
