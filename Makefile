@@ -1,4 +1,4 @@
-.PHONY: doctor doctor-json test py-compile pytest swift-build dev-install-dry-run sync-skill sync-skill-dry-run package checksums
+.PHONY: doctor doctor-json test py-compile pytest swift-build dev-install-dry-run sync-skill sync-skill-dry-run public-dmg-acceptance-policy package checksums
 
 PYTHON ?= python3
 SWIFT_BUILD_DIR ?= .ci-build
@@ -59,6 +59,12 @@ swift-build:
 
 
 test: py-compile pytest swift-build
+
+
+# Policy-only: deterministic harness construction plus controller fail-closed
+# validation. This never performs clean-target interaction or formal acceptance.
+public-dmg-acceptance-policy:
+	$(PYTHON) -m pytest -q tests/test_public_dmg_harness.py tests/test_public_dmg_controller.py
 
 
 dev-install-dry-run:

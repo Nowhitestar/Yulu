@@ -3330,6 +3330,513 @@ def test_fresh_migration_step_runs_the_single_authority_to_registration_request(
     assert protected_snapshot() == protected_before
 
 
+def _prepare_user_cancelled_migration(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import MigrationPaths, run_migration_step
+
+    legacy = tmp_path / "legacy"
+    durable = tmp_path / "durable"
+    cache = tmp_path / "cache"
+    agents = tmp_path / "LaunchAgents"
+    archive = tmp_path / "archive"
+    app = tmp_path / "Yulu.app"
+    for directory in (legacy, durable, agents):
+        directory.mkdir(mode=0o700)
+    (legacy / "config.json").write_text('{"legacy":true}\n')
+    for file in (
+        app / "Contents/Info.plist",
+        app / "Contents/MacOS/yulu_app",
+        app / "Contents/Resources/runtime/bin/node",
+        app / "Contents/Resources/Host/server.js",
+        app / "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
+    ):
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(b"bundled file")
+
+    def launchctl(arguments):
+        if arguments[0] == "print-disabled":
+            return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        return SimpleNamespace(
+            returncode=113 if arguments[0] == "print" else 0,
+            stdout="",
+            stderr="",
+        )
+
+    def run_node(_arguments, **_options):
+        (durable / "config.json").write_bytes((legacy / "config.json").read_bytes())
+        return SimpleNamespace(returncode=0, stdout="prepared\n", stderr="")
+
+    paths = MigrationPaths(durable_root=durable, cache_root=cache)
+    common = {
+        "paths": paths,
+        "home_dir": tmp_path,
+        "legacy_root": legacy,
+        "launch_agents_dir": agents,
+        "archive_dir": archive,
+        "legacy_capture_socket": legacy / "audio_daemon.sock",
+        "node_executable": app / "Contents/Resources/runtime/bin/node",
+        "server_js": app / "Contents/Resources/Host/server.js",
+        "launchctl": launchctl,
+        "run_node": run_node,
+    }
+    registration = run_migration_step(**common)
+    unregister = run_migration_step(**common, event="cancel")
+    rolled_back = run_migration_step(
+        **common,
+        observation={
+            "kind": "services",
+            "transactionId": unregister["transactionId"],
+            "nonce": unregister["nonce"],
+            "statuses": {
+                "com.yulu.ui.plist": "notRegistered",
+                "com.yulu.audiodaemon.plist": "notFound",
+            },
+        },
+    )
+    assert rolled_back["action"] == "rolled_back"
+    assert not (durable / "config.json").exists()
+    return paths, common, app, registration
+
+
+def test_explicit_retry_restarts_a_user_cancelled_transaction_and_can_commit(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import MigrationBlocked, run_migration_step
+
+    paths, common, app, previous = _prepare_user_cancelled_migration(
+        tmp_path, monkeypatch
+    )
+    previous_journal = json.loads(paths.journal_path.read_text())
+    previous_transaction = previous_journal["transactionId"]
+    previous_nonce = previous["nonce"]
+    assert run_migration_step(**common) == {"action": "rolled_back"}
+    assert json.loads(paths.journal_path.read_text()) == previous_journal
+
+    registration = run_migration_step(
+        **common,
+        app_bundle=app,
+        required_app_bundle=app,
+        allow_development_adhoc=True,
+        request_retry=True,
+    )
+    retried_journal = json.loads(paths.journal_path.read_text())
+    assert registration["action"] == "register_services"
+    assert registration["transactionId"] != previous_transaction
+    assert registration["nonce"] != previous_nonce
+    assert retried_journal["retryOf"] == previous_transaction
+    assert retried_journal["attemptNumber"] == 2
+    assert all(
+        entry["plistSnapshot"] is None
+        or f"/{registration['transactionId']}/" in entry["plistSnapshot"]
+        for entry in retried_journal["jobSnapshot"].values()
+    )
+    snapshots = paths.journal_dir / "rollback-snapshots"
+    assert (snapshots / previous_transaction).is_dir()
+    assert (snapshots / registration["transactionId"]).is_dir()
+
+    stale_observation = {
+        "kind": "services",
+        "transactionId": previous_transaction,
+        "nonce": previous_nonce,
+        "statuses": {
+            "com.yulu.ui.plist": "enabled",
+            "com.yulu.audiodaemon.plist": "enabled",
+        },
+    }
+    with pytest.raises(MigrationBlocked, match="stale service observation"):
+        run_migration_step(**common, observation=stale_observation)
+    assert json.loads(paths.journal_path.read_text())["phase"] == "registration_requested"
+
+    verify = run_migration_step(
+        **common,
+        observation={
+            **stale_observation,
+            "transactionId": registration["transactionId"],
+            "nonce": registration["nonce"],
+        },
+    )
+    assert verify["action"] == "verify_health"
+    committed = run_migration_step(
+        **common,
+        app_bundle=app,
+        required_app_bundle=app,
+        allow_development_adhoc=True,
+        observation={
+            "kind": "health",
+            "transactionId": registration["transactionId"],
+            "nonce": registration["nonce"],
+            "app": {
+                "installed": True,
+                "bundlePath": str(app.resolve()),
+                "executablePath": str((app / "Contents/MacOS/yulu_app").resolve()),
+                "codeIdentity": development_code_identity("com.yulu.app"),
+            },
+            "host": {
+                "running": True,
+                "ownerPID": 101,
+                "port": 7777,
+                "codeIdentity": development_code_identity("node"),
+            },
+            "capture": {
+                "running": True,
+                "ownerPID": 202,
+                "socketOwned": True,
+                "codeIdentity": development_code_identity("com.yulu.audiodaemon"),
+            },
+        },
+    )
+    assert committed["action"] == "committed"
+    assert json.loads(paths.journal_path.read_text())["phase"] == "committed"
+
+
+def test_retry_resnapshots_legal_legacy_changes_after_rollback(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import run_migration_step
+
+    paths, common, _app, _previous = _prepare_user_cancelled_migration(
+        tmp_path, monkeypatch
+    )
+    changed = b'{"changed-after-rollback":true}\n'
+    (common["legacy_root"] / "config.json").write_bytes(changed)
+    changed_plist = b"changed legacy job\n"
+    (common["launch_agents_dir"] / "com.yulu.ui.plist").write_bytes(changed_plist)
+
+    registration = run_migration_step(**common, request_retry=True)
+
+    journal = json.loads(paths.journal_path.read_text())
+    assert registration["action"] == "register_services"
+    assert journal["preflightDataManifest"]["config.json"]["sourceSHA256"] == (
+        hashlib.sha256(changed).hexdigest()
+    )
+    assert journal["jobSnapshot"]["com.yulu.ui"]["plistSHA256"] == (
+        hashlib.sha256(changed_plist).hexdigest()
+    )
+    assert journal["jobSnapshot"]["com.yulu.ui"]["plistSnapshot"].startswith(
+        f"rollback-snapshots/{registration['transactionId']}/"
+    )
+    assert (paths.durable_root / "config.json").read_bytes() == changed
+
+
+@pytest.mark.parametrize(
+    "unsafe_state",
+    [
+        "missing-legacy",
+        "capture-active",
+        "rollback-residue",
+        "transaction-output-residue",
+    ],
+)
+def test_retry_fails_closed_if_rollback_is_not_clean(
+    unsafe_state, tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import MigrationBlocked, run_migration_step
+
+    paths, common, _app, _previous = _prepare_user_cancelled_migration(
+        tmp_path, monkeypatch
+    )
+    journal_before = paths.journal_path.read_bytes()
+    if unsafe_state == "missing-legacy":
+        (common["legacy_root"] / "config.json").unlink()
+        common["legacy_root"].rmdir()
+    elif unsafe_state == "capture-active":
+        capture = common["launch_agents_dir"] / "com.yulu.audiodaemon.plist"
+        capture.write_bytes(
+            plistlib.dumps({"Program": str(tmp_path / "legacy-capture")})
+        )
+
+        def launchctl(arguments):
+            if arguments[0] == "print-disabled":
+                return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+            label = arguments[-1].rsplit("/", 1)[-1]
+            return SimpleNamespace(
+                returncode=(
+                    0
+                    if arguments[0] == "print"
+                    and label == "com.yulu.audiodaemon"
+                    else 113
+                    if arguments[0] == "print"
+                    else 0
+                ),
+                stdout="",
+                stderr="",
+            )
+
+        common["launchctl"] = launchctl
+    elif unsafe_state == "rollback-residue":
+        (common["archive_dir"] / "unexpected.plist").write_text("residue\n")
+    else:
+        (paths.durable_root / "config.json").write_bytes(
+            (common["legacy_root"] / "config.json").read_bytes()
+        )
+
+    with pytest.raises(
+        MigrationBlocked,
+        match="retry preflight|legacy install|cannot prove legacy Capture is idle",
+    ):
+        run_migration_step(**common, request_retry=True)
+
+    assert paths.journal_path.read_bytes() == journal_before
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [None, "preflight", "blocked", "committed"],
+)
+def test_retry_flag_is_rejected_outside_exact_rolled_back_phase(
+    phase, tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationBlocked, MigrationPaths
+
+    paths = MigrationPaths(
+        durable_root=tmp_path / "durable",
+        cache_root=tmp_path / "cache",
+    )
+    with ApplicationMigration(paths) as authority:
+        if phase is not None:
+            authority.begin()
+            if phase != "preflight":
+                authority.transition(phase, intent={"action": "test"})
+        with pytest.raises(MigrationBlocked, match="rolled-back"):
+            authority.begin_retry(archive_dir=tmp_path / "archive")
+
+
+def test_session_retry_flag_is_explicit_and_only_reaches_the_initial_step(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import MigrationPaths, run_migration_session
+
+    calls = []
+
+    def step(**arguments):
+        calls.append(arguments)
+        if len(calls) == 1:
+            return {
+                "action": "observe_services",
+                "transactionId": "transaction-123",
+                "nonce": "nonce-123",
+            }
+        return {"action": "committed"}
+
+    message = {
+        "transactionId": "transaction-123",
+        "nonce": "nonce-123",
+        "observation": {
+            "kind": "services",
+            "transactionId": "transaction-123",
+            "nonce": "nonce-123",
+            "statuses": {},
+        },
+    }
+    output = io.BytesIO()
+    with tempfile.TemporaryFile() as input_stream:
+        input_stream.write((json.dumps(message) + "\n").encode())
+        input_stream.seek(0)
+        result = run_migration_session(
+            paths=MigrationPaths(
+                durable_root=tmp_path / "durable",
+                cache_root=tmp_path / "cache",
+            ),
+            step=step,
+            request_retry=True,
+            input_stream=input_stream,
+            output_stream=output,
+        )
+
+    assert result == 0
+    assert calls[0]["request_retry"] is True
+    assert "request_retry" not in calls[1]
+
+
+def test_session_retry_rejection_does_not_recover_or_mutate_an_active_transaction(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import (
+        ApplicationMigration,
+        MigrationPaths,
+        run_migration_session,
+    )
+
+    legacy = tmp_path / "legacy"
+    legacy.mkdir(mode=0o700)
+    paths = MigrationPaths(
+        durable_root=tmp_path / "durable",
+        cache_root=tmp_path / "cache",
+    )
+    with ApplicationMigration(paths) as authority:
+        authority.begin()
+    journal_before = paths.journal_path.read_bytes()
+    output = io.BytesIO()
+
+    result = run_migration_session(
+        paths=paths,
+        home_dir=tmp_path,
+        legacy_root=legacy,
+        launch_agents_dir=tmp_path / "LaunchAgents",
+        archive_dir=tmp_path / "archive",
+        legacy_capture_socket=legacy / "audio_daemon.sock",
+        node_executable=tmp_path / "node",
+        server_js=tmp_path / "server.js",
+        request_retry=True,
+        input_stream=io.BytesIO(),
+        output_stream=output,
+    )
+
+    assert result == 75
+    assert json.loads(output.getvalue())["action"] == "blocked"
+    assert paths.journal_path.read_bytes() == journal_before
+
+
+def test_retry_journal_stages_only_fresh_pre_mutation_recovery_metadata(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration
+
+    paths, common, _app, _previous = _prepare_user_cancelled_migration(
+        tmp_path, monkeypatch
+    )
+    previous = json.loads(paths.journal_path.read_text())
+
+    with ApplicationMigration(paths) as authority:
+        retried = authority.begin_retry(archive_dir=common["archive_dir"])
+
+    assert retried["retryPreflightOnly"] is True
+    assert retried["archiveDirectory"] == previous["archiveDirectory"]
+    assert retried["transactionOutputIdentities"] == {}
+    assert "jobSnapshot" not in retried
+    assert retried["retryOf"] == previous["transactionId"]
+    assert retried["attemptNumber"] == 2
+
+
+def test_session_pre_mutation_retry_failure_rolls_back_and_allows_attempt_three(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import application_migration
+    from application_migration import (
+        MigrationBlocked,
+        run_migration_session,
+        run_migration_step,
+    )
+
+    paths, common, app, _previous = _prepare_user_cancelled_migration(
+        tmp_path, monkeypatch
+    )
+    first = json.loads(paths.journal_path.read_text())
+    original_preflight = application_migration.preflight_standard_outputs
+    preflight_calls = 0
+
+    def fail_after_retry_begins(*arguments, **options):
+        nonlocal preflight_calls
+        preflight_calls += 1
+        if preflight_calls == 2:
+            raise MigrationBlocked("injected post-begin retry preflight failure")
+        return original_preflight(*arguments, **options)
+
+    monkeypatch.setattr(
+        application_migration,
+        "preflight_standard_outputs",
+        fail_after_retry_begins,
+    )
+    output = io.BytesIO()
+    session_arguments = {key: value for key, value in common.items() if key != "paths"}
+    result = run_migration_session(
+        paths=paths,
+        request_retry=True,
+        input_stream=io.BytesIO(),
+        output_stream=output,
+        **session_arguments,
+    )
+
+    assert result == 0
+    assert json.loads(output.getvalue()) == {"action": "rolled_back"}
+    failed = json.loads(paths.journal_path.read_text())
+    assert failed["transactionId"] != first["transactionId"]
+    assert failed["retryOf"] == first["transactionId"]
+    assert failed["attemptNumber"] == 2
+    assert failed["phase"] == "rolled_back"
+    assert failed["retryPreflightOnly"] is True
+    assert not (paths.durable_root / "config.json").exists()
+    assert not os.listdir(common["archive_dir"])
+    assert run_migration_step(**common) == {"action": "rolled_back"}
+
+    monkeypatch.setattr(
+        application_migration,
+        "preflight_standard_outputs",
+        original_preflight,
+    )
+    registration = run_migration_step(
+        **common,
+        app_bundle=app,
+        request_retry=True,
+    )
+    third = json.loads(paths.journal_path.read_text())
+    assert registration["action"] == "register_services"
+    assert third["transactionId"] != failed["transactionId"]
+    assert third["retryOf"] == failed["transactionId"]
+    assert third["retryRoot"] == first["transactionId"]
+    assert third["attemptNumber"] == 3
+    assert "retryPreflightOnly" not in third
+    snapshots = paths.journal_dir / "rollback-snapshots"
+    assert (snapshots / first["transactionId"]).is_dir()
+    assert not (snapshots / failed["transactionId"]).exists()
+    assert (snapshots / third["transactionId"]).is_dir()
+
+    verify = run_migration_step(
+        **common,
+        observation={
+            "kind": "services",
+            "transactionId": registration["transactionId"],
+            "nonce": registration["nonce"],
+            "statuses": {
+                "com.yulu.ui.plist": "enabled",
+                "com.yulu.audiodaemon.plist": "enabled",
+            },
+        },
+    )
+    assert verify["action"] == "verify_health"
+    committed = run_migration_step(
+        **common,
+        app_bundle=app,
+        required_app_bundle=app,
+        allow_development_adhoc=True,
+        observation={
+            "kind": "health",
+            "transactionId": registration["transactionId"],
+            "nonce": registration["nonce"],
+            "app": {
+                "installed": True,
+                "bundlePath": str(app.resolve()),
+                "executablePath": str(
+                    (app / "Contents/MacOS/yulu_app").resolve()
+                ),
+                "codeIdentity": development_code_identity("com.yulu.app"),
+            },
+            "host": {
+                "running": True,
+                "ownerPID": 303,
+                "port": 7777,
+                "codeIdentity": development_code_identity("node"),
+            },
+            "capture": {
+                "running": True,
+                "ownerPID": 404,
+                "socketOwned": True,
+                "codeIdentity": development_code_identity(
+                    "com.yulu.audiodaemon"
+                ),
+            },
+        },
+    )
+    assert committed["action"] == "committed"
+    assert json.loads(paths.journal_path.read_text())["phase"] == "committed"
+
+
 @pytest.mark.parametrize(
     "phase",
     [

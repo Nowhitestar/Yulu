@@ -477,11 +477,13 @@ describe("SharingConfiguration", () => {
     const preview = (sharing as unknown as {
       recordingShareView(input: { recordingStem: string; summary: string }): {
         status: string;
+        actionCounts: { total: number; verified: number };
         snapshot: { hash: string; summary: string; connection: { id: string; label: string; adapter: string }; destination: string };
       };
     }).recordingShareView({ recordingStem: "TeamSync_20260828_090000", summary });
     expect(preview).toMatchObject({
       status: "ready",
+      actionCounts: { total: 0, verified: 0 },
       snapshot: {
         summary,
         connection: { id: "codex", label: "Codex", adapter: "codex" },
@@ -509,7 +511,10 @@ describe("SharingConfiguration", () => {
       }): Promise<unknown>;
     }).shareRecording(input);
 
-    expect(first).toMatchObject({ latestAction: { id: input.actionId, status: "verified" } });
+    expect(first).toMatchObject({
+      actionCounts: { total: 1, verified: 1 },
+      latestAction: { id: input.actionId, status: "verified" },
+    });
     expect(replay).toEqual(first);
     expect(productionWrite).toHaveBeenCalledTimes(1);
     expect(adapter.verifyReceipt).toHaveBeenCalledTimes(2);

@@ -436,6 +436,22 @@ Expected behavior:
 Do not delete migration archives until the upgraded runtime and all expected
 artifacts have been verified.
 
+If the migration recovery sheet is visible, **Cancel Service Migration** rolls
+back the current transaction without pretending it completed. Inspect the
+preserved source/audit evidence, correct the blocking condition, then use
+**Retry Service Migration**; Retry creates a new attempt linked to the rolled
+back transaction. Do not manually edit the journal or databases, and do not
+remove the old runtime until the committed state is stable after relaunch.
+
+For the `v0.23.0-rc.4` public-DMG acceptance harness, keep the target ledger
+private (`0700` directory, exact `0600` files) and outside any snapshot rollback
+boundary. The harness is resumable after logout/login and records only bounded,
+secret-safe machine evidence; the operator performs the actual App/UI actions.
+Return the unchanged ledger privately to the controller, which binds it to the
+public tag/DMG/checksums, runs `gh attestation verify` and `verify_dmg.sh`, and
+still reports `formalAcceptance: false` pending #170 human review. CI policy
+tests do not perform or stand in for formal public-DMG acceptance.
+
 `yulu update` allows at least 30 minutes for setup because Homebrew and Node can
 be slow on a fresh machine. A timeout terminates the entire setup process group,
 restores the prior runtime, and reruns that runtime's upgrade setup to repair its

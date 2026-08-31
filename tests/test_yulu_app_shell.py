@@ -1632,6 +1632,44 @@ def test_production_application_routes_smappservice_through_the_migration_coordi
     assert 'migrationCoordinator?.advance(event: "resume")' in did_become_active
     assert "refreshServiceWindow()" in did_become_active
     assert "beginServicePolling()" in did_become_active
+    assert "retry" not in did_become_active.lower()
+
+    assert 'withTitle: "Retry Service Migration…"' in application
+    assert "#selector(onRetryMigration)" in application
+    assert "@objc private func onRetryMigration()" in application
+    retry_handler = application.split(
+        "@objc private func onRetryMigration()", 1
+    )[1].split("@objc private func onCheckForUpdates", 1)[0]
+    assert "migrationRetryAvailable" in retry_handler
+    assert "migrationCoordinator?.retry()" in retry_handler
+    rolled_back = application.split('case "rolled_back":', 1)[1].split(
+        'case "blocked":', 1
+    )[0]
+    assert 'title: "Retry Service Migration…"' in rolled_back
+    assert "migrationRetryAvailable = true" in rolled_back
+
+    coordinator = source.split("final class ApplicationMigrationCoordinator", 1)[1].split(
+        "struct ApplicationUpdateAction", 1
+    )[0]
+    assert "func retry()" in coordinator
+    assert "retryAfterProcessExit" in coordinator
+    assert "startSession(requestRetry: true)" in coordinator
+    retry = coordinator.split("func retry()", 1)[1].split(
+        "private func startSession", 1
+    )[0]
+    assert "guard retryAvailable else { return }" in retry
+    assert "if migrationProcess != nil" in retry
+    assert "retryAfterProcessExit = true" in retry
+    start_session = coordinator.split("private func startSession", 1)[1].split(
+        "private func consumeSessionOutput", 1
+    )[0]
+    assert "guard migrationProcess == nil else { return }" in start_session
+    assert "requestRetry: requestRetry" in start_session
+    termination = coordinator.split("process.terminationHandler", 1)[1].split(
+        "do {", 1
+    )[0]
+    assert "retryAfterProcessExit" in termination
+    assert "startSession(requestRetry: true)" in termination
 
     polling = application.split("private func beginServicePolling()", 1)[1].split(
         "private func open(route:", 1

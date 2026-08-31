@@ -1248,7 +1248,8 @@ struct ApplicationMigrationCommand: Encodable {
         policy: LaunchPolicy,
         layout: BundleLayout,
         applicationPaths: ApplicationDataPaths,
-        homeDirectory: URL
+        homeDirectory: URL,
+        requestRetry: Bool = false
     ) -> ApplicationMigrationCommand? {
         guard policy.persistentRegistrationAllowed else { return nil }
         let migrationScript = layout.bundledScriptDir
@@ -1276,6 +1277,7 @@ struct ApplicationMigrationCommand: Encodable {
         #if YULU_DEVELOPMENT_SMOKE
         arguments.append("--allow-development-adhoc")
         #endif
+        if requestRetry { arguments.append("--request-retry") }
         return ApplicationMigrationCommand(
             executableURL: layout.bundledPython,
             arguments: arguments
@@ -1432,6 +1434,8 @@ final class ApplicationMigrationCoordinator {
     private var migrationTerminalSeen = false
     private var currentBinding: (transactionId: String, nonce: String)?
     private var pendingHealth: (transactionId: String, nonce: String)?
+    private var retryAvailable = false
+    private var retryAfterProcessExit = false
 
     var onStateChange: ((String, String?) -> Void)?
     var onNeedsHealth: (() -> Void)?
@@ -1484,13 +1488,29 @@ final class ApplicationMigrationCoordinator {
         }
     }
 
-    private func startSession() {
+    func retry() {
+        guard retryAvailable else { return }
+        retryAvailable = false
+        pendingHealth = nil
+        if migrationProcess != nil {
+            retryAfterProcessExit = true
+            migrationInput?.closeFile()
+            migrationInput = nil
+            return
+        }
+        startSession(requestRetry: true)
+    }
+
+    private func startSession(requestRetry: Bool = false) {
+        guard migrationProcess == nil else { return }
         guard let command = ApplicationMigrationCommand.make(
                 policy: policy,
                 layout: layout,
                 applicationPaths: applicationPaths,
-                homeDirectory: homeDirectory
+                homeDirectory: homeDirectory,
+                requestRetry: requestRetry
               ) else { return }
+        retryAfterProcessExit = false
         migrationTerminalSeen = false
         migrationOutputBuffer.removeAll(keepingCapacity: true)
         currentBinding = nil
@@ -1530,7 +1550,11 @@ final class ApplicationMigrationCoordinator {
                 self.migrationProcess = nil
                 self.migrationInput = nil
                 self.currentBinding = nil
-                if !self.migrationTerminalSeen {
+                let shouldRetry = self.retryAfterProcessExit
+                self.retryAfterProcessExit = false
+                if shouldRetry {
+                    self.startSession(requestRetry: true)
+                } else if !self.migrationTerminalSeen {
                     self.onStateChange?(
                         "blocked",
                         errorDetail != nil
@@ -1684,21 +1708,26 @@ final class ApplicationMigrationCoordinator {
             onNeedsHealth?()
         case "fresh_install":
             migrationTerminalSeen = true
+            retryAvailable = false
             services.registerBundledOwners(policy: policy)
             onStateChange?("committed", nil)
         case "committed":
             migrationTerminalSeen = true
+            retryAvailable = false
             pendingHealth = nil
             onStateChange?("committed", nil)
         case "rolled_back":
             migrationTerminalSeen = true
+            retryAvailable = true
             pendingHealth = nil
             onStateChange?("rolled_back", nil)
         case "blocked":
             migrationTerminalSeen = true
+            retryAvailable = false
             onStateChange?("blocked", action.detail)
         case "busy":
             migrationTerminalSeen = true
+            retryAvailable = false
             onStateChange?("busy", "Another Yulu migration attempt is active.")
         default:
             onStateChange?("blocked", "Unknown migration action: \(action.action)")
@@ -3615,12 +3644,14 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     private var serviceWindow: NSWindow?
     private let backgroundServices = BackgroundServiceRegistry()
     private var migrationCoordinator: ApplicationMigrationCoordinator?
+    private weak var retryMigrationMenuItem: NSMenuItem?
     private var updateCoordinator: ApplicationUpdateCoordinator?
     #if canImport(Sparkle)
     private var sparkleAdapter: SparkleUpdateAdapter?
     #endif
     private var migrationCommitted = false
     private var migrationStarted = false
+    private var migrationRetryAvailable = false
     private var hostPollAttempts = 0
     private var pollGeneration = 0
     private var hostEvidence = RuntimeOwnerEvidence(
@@ -3768,6 +3799,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         let componentsItem = NSMenuItem()
         root.addItem(componentsItem)
         let components = NSMenu(title: "Components")
+        components.autoenablesItems = false
         let serviceStatus = components.addItem(
             withTitle: "Background Services…",
             action: #selector(onShowBackgroundServices),
@@ -3786,6 +3818,14 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         cancelMigration.target = self
+        let retryMigration = components.addItem(
+            withTitle: "Retry Service Migration…",
+            action: #selector(onRetryMigration),
+            keyEquivalent: ""
+        )
+        retryMigration.target = self
+        retryMigration.isEnabled = false
+        retryMigrationMenuItem = retryMigration
         componentsItem.submenu = components
         NSApp.mainMenu = root
     }
@@ -3814,6 +3854,15 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     @objc private func onCancelMigration() {
         guard launchPolicy.installed, !migrationCommitted else { return }
         migrationCoordinator?.cancel()
+    }
+
+    @objc private func onRetryMigration() {
+        guard launchPolicy.installed,
+              !migrationCommitted,
+              migrationRetryAvailable else { return }
+        migrationRetryAvailable = false
+        retryMigrationMenuItem?.isEnabled = false
+        migrationCoordinator?.retry()
     }
 
     @objc private func onCheckForUpdates() {
@@ -3899,27 +3948,49 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     private func migrationStateChanged(_ state: String, detail: String?) {
         switch state {
         case "awaiting_approval":
+            migrationRetryAvailable = false
+            retryMigrationMenuItem?.isEnabled = false
             window?.contentView = centeredMessage(
                 "Background approval is required",
                 detail: "Open Login Items settings to allow Yulu in the background, then return here. You can cancel from Components."
             )
             refreshServiceWindow(show: true)
         case "verifying":
+            migrationRetryAvailable = false
+            retryMigrationMenuItem?.isEnabled = false
             window?.contentView = centeredMessage(
                 "Finishing migration…",
                 detail: "Verifying the bundled Host and Capture owners."
             )
         case "committed":
             migrationCommitted = true
+            migrationRetryAvailable = false
+            retryMigrationMenuItem?.isEnabled = false
             window?.contentView = centeredMessage("Starting Yulu…", detail: "Waiting for the bundled Host.")
             configureUpdater()
             beginServicePolling()
         case "rolled_back":
-            window?.contentView = centeredMessage(
+            migrationRetryAvailable = true
+            retryMigrationMenuItem?.isEnabled = true
+            let message = centeredMessage(
                 "Migration was cancelled",
                 detail: "The previous Yulu background services were restored."
             )
+            let button = NSButton(
+                title: "Retry Service Migration…",
+                target: self,
+                action: #selector(onRetryMigration)
+            )
+            button.translatesAutoresizingMaskIntoConstraints = false
+            message.addSubview(button)
+            NSLayoutConstraint.activate([
+                button.centerXAnchor.constraint(equalTo: message.centerXAnchor),
+                button.bottomAnchor.constraint(equalTo: message.bottomAnchor, constant: -80),
+            ])
+            window?.contentView = message
         case "blocked":
+            migrationRetryAvailable = false
+            retryMigrationMenuItem?.isEnabled = false
             window?.contentView = centeredMessage(
                 "Yulu migration needs attention",
                 detail: detail ?? "No persistent service state was changed further."

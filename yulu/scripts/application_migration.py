@@ -1459,6 +1459,7 @@ def run_migration_step(
     run_node: Callable[..., object] | None = None,
     attempt_fd: int | None = None,
     authority: ApplicationMigration | None = None,
+    request_retry: bool = False,
     event: str | None = None,
     observation: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -1469,8 +1470,34 @@ def run_migration_step(
         else nullcontext(authority)
     )
     with authority_scope as authority:
-        if authority._journal is None:
-            authority.begin()
+        starting_transaction = authority._journal is None or request_retry
+        if starting_transaction:
+            if request_retry:
+                if not legacy_install_present(
+                    legacy_root=legacy_root,
+                    launch_agents_dir=launch_agents_dir,
+                    launchctl=launchctl,
+                ):
+                    raise MigrationBlocked(
+                        "retry preflight cannot find the legacy install"
+                    )
+                preflight_standard_outputs(legacy_root, paths.durable_root)
+                launch_agents_fd = authority.launch_agents_fd(launch_agents_dir)
+                try:
+                    retry_snapshot = snapshot_legacy_jobs(
+                        launch_agents_dir,
+                        launchctl=launchctl,
+                        directory_fd=launch_agents_fd,
+                    )
+                finally:
+                    os.close(launch_agents_fd)
+                assert_legacy_capture_idle(
+                    _capture_snapshot_from_jobs(retry_snapshot, home_dir),
+                    legacy_capture_socket,
+                )
+                authority.begin_retry(archive_dir=archive_dir)
+            else:
+                authority.begin()
             if app_bundle is not None:
                 authority.record_bundle_manifest(
                     _application_bundle_manifest(app_bundle)
@@ -1822,6 +1849,10 @@ def run_migration_session(
     """Hold one OS lock while Swift and the Python authority exchange actions."""
     input_stream = input_stream or sys.stdin.buffer
     output_stream = output_stream or sys.stdout.buffer
+    raw_request_retry = step_arguments.pop("request_retry", False)
+    if type(raw_request_retry) is not bool:
+        raise MigrationBlocked("migration retry request is invalid")
+    request_retry = raw_request_retry
     attempt_fd = -1
     attempt_locked = False
     session_authority: ApplicationMigration | None = None
@@ -1901,16 +1932,35 @@ def run_migration_session(
                 "authority": session_authority,
             }
 
+        retry_origin = (
+            dict(session_authority._journal)
+            if request_retry
+            and session_authority is not None
+            and session_authority._journal is not None
+            else None
+        )
+        initial_step_arguments = (
+            {**step_arguments, "request_retry": True}
+            if request_retry
+            else step_arguments
+        )
         try:
-            action = step(paths=paths, **step_arguments)
+            action = step(paths=paths, **initial_step_arguments)
         except Exception as failure:
-            action = _recover_live_session_failure(
-                failure,
-                paths=paths,
-                step=step,
-                service_adapter=service_adapter,
-                step_arguments=step_arguments,
-            )
+            if (
+                retry_origin is not None
+                and session_authority is not None
+                and session_authority._journal == retry_origin
+            ):
+                action = {"action": "blocked", "detail": str(failure)[:512]}
+            else:
+                action = _recover_live_session_failure(
+                    failure,
+                    paths=paths,
+                    step=step,
+                    service_adapter=service_adapter,
+                    step_arguments=step_arguments,
+                )
         while True:
             try:
                 output_stream.write(
@@ -2061,6 +2111,7 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("--server", required=True, type=Path)
     parser.add_argument("--app", type=Path)
     parser.add_argument("--allow-development-adhoc", action="store_true")
+    parser.add_argument("--request-retry", action="store_true")
     options = parser.parse_args(arguments)
     try:
         paths = MigrationPaths(
@@ -2080,6 +2131,8 @@ def main(arguments: list[str] | None = None) -> int:
             step_arguments["app_bundle"] = options.app
         if options.allow_development_adhoc:
             step_arguments["allow_development_adhoc"] = True
+        if options.request_retry:
+            step_arguments["request_retry"] = True
         service_adapter = None
         if options.app is not None:
             service_adapter = lambda action: run_bundled_service_adapter(
@@ -2881,6 +2934,118 @@ class ApplicationMigration:
             "phase": "preflight",
             "createdAt": self._now().isoformat(),
             "intent": None,
+            "attemptNumber": 1,
+        }
+        self._write_journal()
+        return dict(self._journal)
+
+    def begin_retry(self, *, archive_dir: Path) -> dict[str, object]:
+        if self._attempt_fd < 0:
+            raise RuntimeError("migration authority must hold its lock")
+        previous = self._journal
+        if previous is None or previous.get("phase") != "rolled_back":
+            raise MigrationBlocked("retry requires an exact rolled-back transaction")
+        previous_transaction = previous.get("transactionId")
+        if (
+            previous.get("schemaVersion") != 1
+            or not isinstance(previous_transaction, str)
+            or re.fullmatch(r"[0-9a-f]{32}", previous_transaction) is None
+        ):
+            raise MigrationBlocked("retry preflight journal metadata is invalid")
+        previous_attempt = previous.get("attemptNumber", 1)
+        if type(previous_attempt) is not int or previous_attempt < 1:
+            raise MigrationBlocked("retry preflight attempt metadata is invalid")
+        retry_root = previous.get("retryRoot", previous_transaction)
+        if (
+            not isinstance(retry_root, str)
+            or re.fullmatch(r"[0-9a-f]{32}", retry_root) is None
+        ):
+            raise MigrationBlocked("retry preflight transaction lineage is invalid")
+        preflight_only = previous.get("retryPreflightOnly")
+        if preflight_only is True:
+            if (
+                previous.get("intent")
+                != {"action": "crash-recovery-no-mutation"}
+                or "jobSnapshot" in previous
+                or previous.get("transactionOutputIdentities") != {}
+            ):
+                raise MigrationBlocked(
+                    "retry preflight no-mutation recovery metadata is invalid"
+                )
+        elif preflight_only is not None:
+            raise MigrationBlocked("retry preflight marker is invalid")
+        else:
+            job_snapshot = previous.get("jobSnapshot")
+            if not isinstance(job_snapshot, dict) or set(job_snapshot) != set(
+                LEGACY_JOB_LABELS
+            ):
+                raise MigrationBlocked("retry preflight job snapshot is invalid")
+
+        expected_archive = previous.get("archiveDirectory")
+        if (
+            not isinstance(expected_archive, dict)
+            or type(expected_archive.get("device")) is not int
+            or type(expected_archive.get("inode")) is not int
+        ):
+            raise MigrationBlocked("retry preflight rollback archive is invalid")
+        archive_fd = self.archive_dir_fd(archive_dir, create=False)
+        if archive_fd < 0:
+            raise MigrationBlocked("retry preflight rollback archive is missing")
+        try:
+            archive_info = os.fstat(archive_fd)
+            if (archive_info.st_dev, archive_info.st_ino) != (
+                expected_archive["device"],
+                expected_archive["inode"],
+            ):
+                raise MigrationBlocked("retry preflight rollback archive changed")
+            if os.listdir(archive_fd):
+                raise MigrationBlocked("retry preflight rollback archive is not empty")
+            retry_archive_identity = {
+                "device": archive_info.st_dev,
+                "inode": archive_info.st_ino,
+            }
+        finally:
+            os.close(archive_fd)
+
+        transaction_outputs = previous.get("transactionOutputIdentities")
+        if not isinstance(transaction_outputs, dict):
+            raise MigrationBlocked("retry preflight output identities are invalid")
+        directory_names = {destination for _, destination in _DIRECTORY_OUTPUTS}
+        allowed_names = {
+            destination for _, destination in _ORDINARY_FILE_OUTPUTS
+        } | directory_names | {name for name, _kind in _SQLITE_OUTPUTS} | {
+            f"{name}{suffix}"
+            for name, _kind in _SQLITE_OUTPUTS
+            for suffix in ("-wal", "-shm")
+        }
+        if not set(transaction_outputs) <= allowed_names or any(
+            not isinstance(identity, dict)
+            for identity in transaction_outputs.values()
+        ):
+            raise MigrationBlocked("retry preflight output identities are invalid")
+        for name in transaction_outputs:
+            current = (
+                _directory_identity_at(self._durable_root_fd, name)
+                if name in directory_names
+                else _regular_file_identity_at(self._durable_root_fd, name)
+            )
+            if current is not None:
+                raise MigrationBlocked(
+                    "retry preflight found a previous transaction output"
+                )
+
+        self._journal = {
+            "schemaVersion": 1,
+            "transactionId": uuid.uuid4().hex,
+            "phase": "preflight",
+            "createdAt": self._now().isoformat(),
+            "intent": None,
+            "retryOf": previous_transaction,
+            "retryRoot": retry_root,
+            "attemptNumber": previous_attempt + 1,
+            "retryPreflightOnly": True,
+            "archiveDirectory": retry_archive_identity,
+            "transactionOutputIdentities": {},
         }
         self._write_journal()
         return dict(self._journal)
@@ -3176,13 +3341,15 @@ class ApplicationMigration:
                     if key != "plistBytes"
                 }
                 sanitized[label]["plistSnapshot"] = reference
-            self._journal = {
+            next_journal = {
                 **self._journal,
                 "phase": "snapshotted",
                 "intent": {"action": "snapshot-jobs"},
                 "updatedAt": self._now().isoformat(),
                 "jobSnapshot": sanitized,
             }
+            next_journal.pop("retryPreflightOnly", None)
+            self._journal = next_journal
             self._write_journal()
             completed = True
         finally:

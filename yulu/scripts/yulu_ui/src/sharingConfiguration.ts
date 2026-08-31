@@ -358,6 +358,9 @@ export class SharingConfiguration {
     const duplicateWarningRequired = snapshot
       ? this.options.host.hasVerifiedRecordingShareAction(snapshot.hash)
       : false;
+    const actionCounts = snapshot
+      ? this.options.host.recordingShareActionCounts(snapshot.hash)
+      : { total: 0, verified: 0 };
     const latestAction = latest ? {
       id: latest.id,
       status: latest.status,
@@ -372,6 +375,7 @@ export class SharingConfiguration {
         remediation: "Generate a current summary before sharing.",
         snapshot,
         latestAction,
+        actionCounts,
         duplicateWarningRequired,
       };
     }
@@ -382,6 +386,7 @@ export class SharingConfiguration {
         remediation: `Do not retry. Reconcile or abandon Share Action ${latest.id} before creating another attempt.`,
         snapshot,
         latestAction,
+        actionCounts,
         duplicateWarningRequired,
       };
     }
@@ -392,6 +397,7 @@ export class SharingConfiguration {
         remediation: readiness.remediation || "Return to Settings > Sharing and prove the selected destination.",
         snapshot,
         latestAction,
+        actionCounts,
         duplicateWarningRequired,
       };
     }
@@ -401,6 +407,7 @@ export class SharingConfiguration {
       remediation: "",
       snapshot,
       latestAction,
+      actionCounts,
       duplicateWarningRequired,
     };
   }

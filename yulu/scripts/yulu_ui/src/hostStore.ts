@@ -2041,6 +2041,16 @@ export class HostStore {
     `).get(snapshotSha256.toLowerCase()));
   }
 
+  recordingShareActionCounts(snapshotSha256: string): { total: number; verified: number } {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS total,
+        SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) AS verified
+      FROM recording_share_actions
+      WHERE snapshot_sha256 = ?
+    `).get(snapshotSha256.toLowerCase()) as { total: number; verified: number | null };
+    return { total: Number(row.total), verified: Number(row.verified ?? 0) };
+  }
+
   beginRecordingShareAction(input: {
     id: string;
     recordingStem: string;

@@ -863,11 +863,13 @@ describe("HostStore", () => {
       destination: "Product Notes",
       duplicateConfirmed: false,
     };
+    expect(store!.recordingShareActionCounts(snapshot.snapshotSha256)).toEqual({ total: 0, verified: 0 });
     const { action: pending } = store!.beginRecordingShareAction({
       id: "00000000-0000-4000-8000-000000000111",
       ...snapshot,
     });
     expect(pending).toMatchObject({ status: "pending", summary: snapshot.summary });
+    expect(store!.recordingShareActionCounts(snapshot.snapshotSha256)).toEqual({ total: 1, verified: 0 });
 
     const dbPath = join(root, "host.sqlite");
     store!.close();
@@ -899,6 +901,7 @@ describe("HostStore", () => {
       status: "abandoned",
       summary: snapshot.summary,
     });
+    expect(store!.recordingShareActionCounts(snapshot.snapshotSha256)).toEqual({ total: 2, verified: 1 });
   });
 
   it("clears the Summary input snapshot only when an explicit retry discards its transcript artifact", () => {

@@ -183,6 +183,11 @@ same release DMG: quit Yulu, drag its `Yulu.app` over the existing copy in
 `/Applications`, then reopen it. Replacing the App preserves configuration and
 recordings stored outside the bundle.
 
+If an upgrade shows migration recovery, use the visible **Cancel Service
+Migration** action to roll back the current attempt, inspect the preserved
+evidence, then choose **Retry Service Migration** after correcting the blocker.
+Do not edit the migration journal or application databases by hand.
+
 ## How Yulu works
 
 ```text

@@ -147,6 +147,10 @@ Yulu 通过签名的 Sparkle feed 获取稳定版更新。手动恢复也使用�
 退出 Yulu，把其中的 `Yulu.app` 拖入 `/Applications` 覆盖现有版本，再重新打开。
 替换 App 不会删除保存在 bundle 外的配置与录音。
 
+如果升级时出现迁移恢复界面，请先用可见的 **Cancel Service Migration** 回滚当前
+尝试，检查系统保留的证据并修复阻塞原因，再选择 **Retry Service Migration**。
+不要手工修改迁移 journal 或应用数据库。
+
 ## 工作原理
 
 ```text

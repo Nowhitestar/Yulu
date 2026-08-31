@@ -90,6 +90,11 @@ jobs:
           python -m pip install pytest
           python -m pytest -q
 
+      - name: Public-DMG policy harness contract (not formal acceptance)
+        run: |
+          set -euo pipefail
+          make public-dmg-acceptance-policy PYTHON=.venv-ci/bin/python
+
       - name: Doctor JSON smoke test
         run: |
           set -euo pipefail
