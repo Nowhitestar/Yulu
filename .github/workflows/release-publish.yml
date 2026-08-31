@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: yulu-release-publish
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build and verify release assets
@@ -87,6 +91,7 @@ jobs:
           python3 -m py_compile packaging/scripts/release_identity.py
           python3 -m py_compile packaging/scripts/validate_runtime_archive.py
           python3 -m py_compile packaging/scripts/runtime_node_version.py
+          python3 -m py_compile packaging/scripts/validate_sparkle_feed_promotion.py
 
       - name: Python unit tests
         run: |
@@ -185,8 +190,8 @@ jobs:
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          YULU_SPARKLE_FEED_URL: ${{ secrets.YULU_SPARKLE_FEED_URL }}
-          YULU_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.YULU_SPARKLE_PUBLIC_ED_KEY }}
+          YULU_SPARKLE_FEED_URL: https://raw.githubusercontent.com/Nowhitestar/Yulu/sparkle-feed/appcast.xml
+          YULU_SPARKLE_PUBLIC_ED_KEY: lzut/+rQs8ZM9JEHaQFmsHgnEZPjr6gLWCdQZ0j1Anc=
           YULU_RELEASE_VERSION: ${{ steps.release-identity.outputs.release_version }}
           YULU_BUNDLE_SHORT_VERSION: ${{ steps.release-identity.outputs.bundle_short_version }}
           YULU_BUILD_NUMBER: ${{ steps.release-identity.outputs.build_number }}
@@ -239,6 +244,8 @@ jobs:
           notes.write_text(body + "\n")
           print(notes)
           PY
+          cp packaging/scripts/validate_sparkle_feed_promotion.py \
+            dist/validate_sparkle_feed_promotion.py
 
       # upload-artifact@v4 artifacts are immutable, so the privileged publish
       # job receives exactly the bytes verified above and cannot replace them.
@@ -255,6 +262,7 @@ jobs:
             dist/appcast.xml
             dist/checksums.txt
             dist/release-notes.md
+            dist/validate_sparkle_feed_promotion.py
 
       # Tear down the ephemeral signing keychain and remove the decoded cert/key,
       # ALWAYS — even if an earlier step failed — so the imported Developer ID
@@ -273,7 +281,7 @@ jobs:
     name: Attest and publish verified release assets
     needs: build
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: write
@@ -292,6 +300,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s dist/release-notes.md
+          test -s dist/validate_sparkle_feed_promotion.py
           (cd dist && shasum -a 256 -c checksums.txt)
 
       # SLSA build-provenance attestation for every published update payload.
@@ -404,10 +413,12 @@ jobs:
           done
 
       - name: Publish completed GitHub Release
+        id: release_tx
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          printf 'started=1\n' >> "$GITHUB_OUTPUT"
           PUBLISH_ARGS=(
             "$TAG"
             --draft=false
@@ -418,3 +429,214 @@ jobs:
             PUBLISH_ARGS+=(--prerelease=false)
           fi
           gh release edit "${PUBLISH_ARGS[@]}"
+
+      - name: Verify public Release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          EXPECTED_PRERELEASE=false
+          if [[ "$TAG" == *-* ]]; then EXPECTED_PRERELEASE=true; fi
+          RELEASE_STATE="$(gh release view "$TAG" --json isDraft,isPrerelease \
+            --jq '[.isDraft, .isPrerelease] | @tsv')"
+          [[ "$RELEASE_STATE" == $'false\t'"$EXPECTED_PRERELEASE" ]] || {
+            echo "Public Release state does not match the requested channel." >&2
+            exit 1
+          }
+
+          PUBLIC_DMG="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/yulu-macos-arm64-$TAG.dmg"
+          curl --fail --location --silent --show-error --head "$PUBLIC_DMG" >/dev/null
+
+      - name: Stage signed Sparkle channel feed
+        id: sparkle_feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          FEED_BRANCH="sparkle-feed"
+          FEED_PATH="appcast.xml"
+          CONTENT_API="repos/$GITHUB_REPOSITORY/contents/appcast.xml"
+          PREVIOUS_FEED="$RUNNER_TEMP/sparkle-channel-previous.xml"
+          REMOTE_FEED="$RUNNER_TEMP/sparkle-channel-appcast.xml"
+          {
+            printf 'touched=0\n'
+            printf 'previous_existed=0\n'
+            printf 'branch_created=0\n'
+            printf 'channel_promotion=0\n'
+            printf 'feed_verified=0\n'
+          } >> "$GITHUB_OUTPUT"
+
+          # v0.23.0-rc.4 is the one accepted bootstrap for the new signed feed.
+          # Later prereleases publish release-specific appcasts without moving
+          # the stable channel seen by installed users.
+          if [[ "$TAG" == *-* && "$TAG" != "v0.23.0-rc.4" ]]; then
+            exit 0
+          fi
+          printf 'channel_promotion=1\n' >> "$GITHUB_OUTPUT"
+
+          BRANCH_CREATED=0
+
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$FEED_BRANCH" \
+              >/dev/null 2>&1; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/heads/$FEED_BRANCH" \
+              -f sha="$GITHUB_SHA" >/dev/null
+            BRANCH_CREATED=1
+          fi
+
+          FEED_SHA=""
+          PREVIOUS_EXISTED=0
+          if FEED_SHA="$(gh api "$CONTENT_API?ref=$FEED_BRANCH" --jq .sha 2>/dev/null)"; then
+            gh api "$CONTENT_API?ref=$FEED_BRANCH" --jq .content | \
+              tr -d '\n' | base64 --decode > "$PREVIOUS_FEED"
+            PREVIOUS_EXISTED=1
+          fi
+
+          if [[ "$PREVIOUS_EXISTED" -eq 1 ]] && \
+              ! cmp -s dist/appcast.xml "$PREVIOUS_FEED"; then
+            python3 dist/validate_sparkle_feed_promotion.py \
+              "$PREVIOUS_FEED" dist/appcast.xml
+          fi
+
+          TOUCHED=0
+          if [[ ! -s "$PREVIOUS_FEED" ]] || ! cmp -s dist/appcast.xml "$PREVIOUS_FEED"; then
+            TOUCHED=1
+          fi
+          {
+            printf 'touched=%s\n' "$TOUCHED"
+            printf 'previous_existed=%s\n' "$PREVIOUS_EXISTED"
+            printf 'branch_created=%s\n' "$BRANCH_CREATED"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$TOUCHED" -eq 1 ]]; then
+            FEED_CONTENT="$(base64 < dist/appcast.xml | tr -d '\n')"
+            UPDATE_ARGS=(
+              --method PUT
+              "$CONTENT_API"
+              -f message="chore: publish Sparkle feed for $TAG"
+              -f content="$FEED_CONTENT"
+              -f branch="$FEED_BRANCH"
+            )
+            if [[ -n "$FEED_SHA" ]]; then
+              UPDATE_ARGS+=(-f sha="$FEED_SHA")
+            fi
+            gh api "${UPDATE_ARGS[@]}" >/dev/null
+          fi
+
+          gh api "$CONTENT_API?ref=$FEED_BRANCH" --jq .content | \
+            tr -d '\n' | base64 --decode > "$REMOTE_FEED"
+          cmp dist/appcast.xml "$REMOTE_FEED"
+
+          PUBLIC_FEED="https://raw.githubusercontent.com/Nowhitestar/Yulu/$FEED_BRANCH/$FEED_PATH"
+          PUBLIC_MATCH=0
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if curl --fail --location --silent --show-error \
+                --header 'Cache-Control: no-cache' "$PUBLIC_FEED" \
+                --output "$REMOTE_FEED" && cmp -s dist/appcast.xml "$REMOTE_FEED"; then
+              PUBLIC_MATCH=1
+              break
+            fi
+            sleep 5
+          done
+          [[ "$PUBLIC_MATCH" -eq 1 ]] || {
+            echo "Public Sparkle channel feed did not match the signed release asset." >&2
+            exit 1
+          }
+          printf 'feed_verified=1\n' >> "$GITHUB_OUTPUT"
+
+      - name: Verify public Sparkle feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REMOTE_FEED="$RUNNER_TEMP/sparkle-channel-public.xml"
+          PUBLIC_FEED="https://raw.githubusercontent.com/Nowhitestar/Yulu/sparkle-feed/appcast.xml"
+          if [[ "${{ steps.sparkle_feed.outputs.channel_promotion }}" == "1" ]]; then
+            curl --fail --location --silent --show-error \
+              --header 'Cache-Control: no-cache' "$PUBLIC_FEED" \
+              --output "$REMOTE_FEED"
+            cmp dist/appcast.xml "$REMOTE_FEED"
+          fi
+
+      - name: Roll back failed Release transaction
+        if: ${{ always() && !success() && steps.release_tx.outputs.started == '1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          FEED_BRANCH="sparkle-feed"
+          CONTENT_API="repos/$GITHUB_REPOSITORY/contents/appcast.xml"
+          PREVIOUS_FEED="$RUNNER_TEMP/sparkle-channel-previous.xml"
+          REMOTE_FEED="$RUNNER_TEMP/sparkle-channel-rollback.xml"
+          PUBLIC_FEED="https://raw.githubusercontent.com/Nowhitestar/Yulu/$FEED_BRANCH/appcast.xml"
+
+          if [[ "${{ steps.sparkle_feed.outputs.touched }}" != "1" && \
+                "${{ steps.sparkle_feed.outputs.feed_verified }}" == "1" ]]; then
+            exit 0
+          fi
+
+          if [[ "${{ steps.sparkle_feed.outputs.touched }}" == "1" ]]; then
+            CURRENT_SHA="$(gh api "$CONTENT_API?ref=$FEED_BRANCH" --jq .sha 2>/dev/null || true)"
+            if [[ -n "$CURRENT_SHA" ]]; then
+              gh api "$CONTENT_API?ref=$FEED_BRANCH" --jq .content | \
+                tr -d '\n' | base64 --decode > "$REMOTE_FEED"
+              cmp dist/appcast.xml "$REMOTE_FEED" || {
+                echo "Sparkle channel changed after this run; refusing to clobber it." >&2
+                exit 1
+              }
+            elif [[ "${{ steps.sparkle_feed.outputs.previous_existed }}" == "1" ]]; then
+              echo "Published Sparkle channel disappeared before rollback." >&2
+              exit 1
+            fi
+
+            if [[ "${{ steps.sparkle_feed.outputs.previous_existed }}" == "1" ]]; then
+              [[ -s "$PREVIOUS_FEED" && -n "$CURRENT_SHA" ]]
+              PREVIOUS_CONTENT="$(base64 < "$PREVIOUS_FEED" | tr -d '\n')"
+              gh api --method PUT "$CONTENT_API" \
+                -f message="chore: roll back failed Sparkle publication for $TAG" \
+                -f content="$PREVIOUS_CONTENT" \
+                -f branch="$FEED_BRANCH" \
+                -f sha="$CURRENT_SHA" >/dev/null
+              for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                if curl --fail --location --silent --show-error \
+                    --header 'Cache-Control: no-cache' "$PUBLIC_FEED" \
+                    --output "$REMOTE_FEED" && cmp -s "$PREVIOUS_FEED" "$REMOTE_FEED"; then
+                  ROLLBACK_MATCH=1
+                  break
+                fi
+                sleep 5
+              done
+              [[ "${ROLLBACK_MATCH:-0}" -eq 1 ]] || {
+                echo "Sparkle feed rollback did not become public." >&2
+                exit 1
+              }
+            else
+              if [[ -n "$CURRENT_SHA" ]]; then
+                gh api --method DELETE "$CONTENT_API" \
+                  -f message="chore: remove failed Sparkle publication for $TAG" \
+                  -f branch="$FEED_BRANCH" \
+                  -f sha="$CURRENT_SHA" >/dev/null
+              fi
+              if [[ "${{ steps.sparkle_feed.outputs.branch_created }}" == "1" ]]; then
+                gh api --method DELETE \
+                  "repos/$GITHUB_REPOSITORY/git/refs/heads/$FEED_BRANCH" >/dev/null
+              fi
+              FEED_ABSENT=0
+              for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+                HTTP_CODE="$(curl --location --silent --show-error \
+                  --header 'Cache-Control: no-cache' --output "$REMOTE_FEED" \
+                  --write-out '%{http_code}' "$PUBLIC_FEED" || true)"
+                if [[ "$HTTP_CODE" == "404" ]]; then
+                  FEED_ABSENT=1
+                  break
+                fi
+                sleep 5
+              done
+              [[ "$FEED_ABSENT" -eq 1 ]] || {
+                echo "Public Sparkle feed remained present after rollback." >&2
+                exit 1
+              }
+            fi
+          fi
+
+          gh release edit "$TAG" --draft

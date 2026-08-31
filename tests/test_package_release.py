@@ -601,8 +601,16 @@ def test_release_publish_uploads_exact_dmg_optional_pack_feed_and_checksums():
     assert "bash packaging/scripts/sign_and_notarize.sh --update-release" in workflow
     assert "YULU_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.YULU_SPARKLE_PRIVATE_ED_KEY }}" not in workflow
     assert 'YULU_SPARKLE_PRIVATE_ED_KEY="${{ secrets.YULU_SPARKLE_PRIVATE_ED_KEY }}" \\' in workflow
-    assert "YULU_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.YULU_SPARKLE_PUBLIC_ED_KEY }}" in workflow
-    assert "YULU_SPARKLE_FEED_URL: ${{ secrets.YULU_SPARKLE_FEED_URL }}" in workflow
+    assert (
+        "YULU_SPARKLE_PUBLIC_ED_KEY: "
+        "lzut/+rQs8ZM9JEHaQFmsHgnEZPjr6gLWCdQZ0j1Anc="
+    ) in workflow
+    assert "secrets.YULU_SPARKLE_PUBLIC_ED_KEY" not in workflow
+    assert (
+        "YULU_SPARKLE_FEED_URL: "
+        "https://raw.githubusercontent.com/Nowhitestar/Yulu/sparkle-feed/appcast.xml"
+    ) in workflow
+    assert "secrets.YULU_SPARKLE_FEED_URL" not in workflow
     assert "bash packaging/scripts/verify_dmg.sh" in workflow
     assert 'gh release download "$TAG" --pattern "$name"' in workflow
     assert 'cmp "$asset" "$REMOTE_DIR/$name"' in workflow
@@ -615,6 +623,8 @@ def test_release_publish_uploads_exact_dmg_optional_pack_feed_and_checksums():
     assert 'pathlib.Path("docs/release-notes") / f"{tag}.md"' in workflow
     assert (ROOT / "docs" / "release-notes" / "v0.18.0.md").is_file()
     assert "timeout-minutes: 30" in workflow
+    assert "group: yulu-release-publish" in workflow
+    assert "cancel-in-progress: false" in workflow
     assert "node-version: ${{ steps.application-runtime-node.outputs.version }}" in workflow
     assert "Checkout release commit" in workflow
     assert "ref: ${{ github.sha }}" in workflow
@@ -630,6 +640,39 @@ def test_release_publish_uploads_exact_dmg_optional_pack_feed_and_checksums():
     assert "release_installer" not in workflow
     assert "--draft=false" in workflow
     assert workflow.index("gh release upload") < workflow.index("--draft=false")
+    assert "Stage signed Sparkle channel feed" in workflow
+    channel_feed = workflow.split("Stage signed Sparkle channel feed", 1)[1]
+    assert 'FEED_BRANCH="sparkle-feed"' in channel_feed
+    assert 'repos/$GITHUB_REPOSITORY/git/refs' in channel_feed
+    assert 'repos/$GITHUB_REPOSITORY/contents/appcast.xml' in channel_feed
+    assert 'cmp dist/appcast.xml "$REMOTE_FEED"' in channel_feed
+    assert "?release=$TAG" not in channel_feed
+    assert '"$TAG" != "v0.23.0-rc.4"' in channel_feed
+    assert workflow.index("--draft=false") < workflow.index("Stage signed Sparkle channel feed")
+    assert workflow.index("Verify public Release asset") < workflow.index(
+        "Stage signed Sparkle channel feed"
+    )
+    assert "Verify public Sparkle feed" in workflow
+    assert "Roll back failed Release transaction" in workflow
+    rollback = workflow.split("Roll back failed Release transaction", 1)[1]
+    assert "steps.release_tx.outputs.started == '1'" in rollback
+    assert '"${{ steps.sparkle_feed.outputs.feed_verified }}" == "1"' in rollback
+    channel_stage = workflow.split("Stage signed Sparkle channel feed", 1)[1].split(
+        "Verify public Sparkle feed", 1
+    )[0]
+    assert "printf 'feed_verified=0\\n'" in channel_stage
+    assert channel_stage.index("Public Sparkle channel feed did not match") < channel_stage.index(
+        "printf 'feed_verified=1\\n'"
+    )
+    assert "always() && !success()" in rollback
+    assert 'gh release edit "$TAG" --draft' in rollback
+    assert rollback.index("--method PUT") < rollback.index('gh release edit "$TAG" --draft')
+    assert "Public Sparkle feed remained present after rollback" in rollback
+    assert 'cmp dist/appcast.xml "$REMOTE_FEED"' in rollback
+    assert "--method DELETE" in rollback
+    assert 'cmp -s "$PREVIOUS_FEED" "$REMOTE_FEED"' in rollback
+    assert "dist/validate_sparkle_feed_promotion.py" in workflow
+    assert '"dist/validate_sparkle_feed_promotion.py"' not in assets_block
     release_please = (ROOT / "release-please-config.json").read_text(encoding="utf-8")
     assert '"draft": true' in release_please
 
