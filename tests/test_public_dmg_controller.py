@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -376,6 +377,58 @@ def test_controller_validator_is_controller_only_and_binds_public_release_author
         assert required in source
     for forbidden in ("requests", "urllib.request", "curl", "formalAcceptance\": true"):
         assert forbidden not in source
+
+
+def test_formal_harness_builder_runs_under_system_bash(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--no-hardlinks", str(ROOT), str(repo)],
+        check=True,
+    )
+    shutil.copytree(
+        ACCEPTANCE,
+        repo / "packaging" / "acceptance",
+        dirs_exist_ok=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "packaging/acceptance"],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "-c",
+            "user.name=Yulu Test",
+            "-c",
+            "user.email=yulu-test@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "formal harness fixture",
+        ],
+        check=True,
+    )
+    delivery = tmp_path / "delivery"
+    delivery.mkdir()
+    output = delivery / "harness"
+
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            str(repo / "packaging" / "acceptance" / "build_public_dmg_harness.sh"),
+            "--output",
+            str(output),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["buildMode"] == "formal"
 
 
 def test_controller_cli_rejects_incomplete_or_unsafe_returned_ledger(tmp_path: Path) -> None:

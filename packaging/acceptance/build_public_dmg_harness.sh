@@ -73,12 +73,17 @@ trap cleanup EXIT
 /bin/cp "$SCRIPT_DIR/public_dmg_upgrade_target.sh" "$STAGING/public_dmg_upgrade_target.sh"
 if [[ "$POLICY_TEST" -eq 1 ]]; then BUILD_MODE="policy-test"; else BUILD_MODE="formal"; fi
 printf '%s\n' "$BUILD_MODE" > "$STAGING/build-mode.txt"
-SYNC_DEFINES=()
-if [[ "$POLICY_TEST" -eq 1 ]]; then SYNC_DEFINES=(-DYULU_DURABLE_SYNC_POLICY_LOG=1); fi
-/usr/bin/xcrun --sdk macosx clang \
-    -arch arm64 -mmacosx-version-min=13.0 -Os -std=c11 -Wall -Wextra -Werror \
-    "${SYNC_DEFINES[@]}" \
-    -o "$STAGING/yulu-durable-sync" "$SCRIPT_DIR/yulu_durable_sync.c" || \
+DURABLE_SYNC_COMMAND=(
+    /usr/bin/xcrun --sdk macosx clang
+    -arch arm64 -mmacosx-version-min=13.0 -Os -std=c11 -Wall -Wextra -Werror
+)
+if [[ "$POLICY_TEST" -eq 1 ]]; then
+    DURABLE_SYNC_COMMAND+=(-DYULU_DURABLE_SYNC_POLICY_LOG=1)
+fi
+DURABLE_SYNC_COMMAND+=(
+    -o "$STAGING/yulu-durable-sync" "$SCRIPT_DIR/yulu_durable_sync.c"
+)
+"${DURABLE_SYNC_COMMAND[@]}" || \
     fail "could not build the arm64 durable-sync harness component"
 [[ "$(/usr/bin/lipo -archs "$STAGING/yulu-durable-sync")" == "arm64" ]] || \
     fail "durable-sync harness component is not arm64-only"
