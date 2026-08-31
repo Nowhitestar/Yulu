@@ -182,6 +182,10 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
         assert "CLIProxyAPI" not in guidance
     assert "Grok CLI-compatible OAuth" in readme
     assert "兼容 Grok CLI 的 OAuth" in readme_zh
+    assert "releases/latest" not in readme
+    assert "releases/latest" not in readme_zh
+    assert "public release candidate" in readme
+    assert "公开候选版" in readme_zh
     assert "xAI、Codex 或 Claude Code" in skill
     assert "Hermes 负责会议纪要" not in skill
     assert "Hermes 租约任务规则" not in skill

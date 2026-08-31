@@ -148,10 +148,11 @@ The official App contains its compatible Application Runtime and audio tools.
 
 ### Install
 
-Open the [latest GitHub Release](https://github.com/Nowhitestar/Yulu/releases/latest),
-download `yulu-macos-arm64-vX.Y.Z.dmg`, open it, and drag `Yulu.app` onto the
-`/Applications` alias. Launch `/Applications/Yulu.app`; the self-contained App
-opens the setup flow and guides you through the three macOS permissions it needs:
+Open [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases), choose the
+currently advertised stable release or public release candidate, download its
+`yulu-macos-arm64-vX.Y.Z.dmg`, and drag `Yulu.app` onto the `/Applications`
+alias. Launch `/Applications/Yulu.app`; the self-contained App opens the setup
+flow and guides you through the three macOS permissions it needs:
 
 | Component | Permission | Why |
 |---|---|---|

@@ -114,10 +114,10 @@ Codex 会在临时项目中加载仅属于 Yulu 的调用前守卫，同时继�
 
 ### 安装
 
-打开 [GitHub 最新 Release](https://github.com/Nowhitestar/Yulu/releases/latest)，
-下载 `yulu-macos-arm64-vX.Y.Z.dmg`，打开后把 `Yulu.app` 拖到
-`/Applications` 别名。启动 `/Applications/Yulu.app`；自包含 App 会打开设置流程，
-并引导授权三项 macOS 权限：
+打开 [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases)，选择当前公告的
+稳定版或公开候选版，下载对应的 `yulu-macos-arm64-vX.Y.Z.dmg`，打开后把
+`Yulu.app` 拖到 `/Applications` 别名。启动 `/Applications/Yulu.app`；自包含 App
+会打开设置流程，并引导授权三项 macOS 权限：
 
 | 组件 | 权限 | 用途 |
 |---|---|---|
