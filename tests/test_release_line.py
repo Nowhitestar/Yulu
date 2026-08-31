@@ -256,3 +256,10 @@ def test_release_checklist_requires_public_surface_read_back():
         "Release Please PR",
     ):
         assert surface in release
+
+
+def test_full_ci_budget_covers_python_and_swift_gates():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    build_job = workflow.split("  yulu_ui:\n", 1)[0]
+
+    assert "timeout-minutes: 20" in build_job

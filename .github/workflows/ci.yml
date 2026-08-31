@@ -17,7 +17,7 @@ jobs:
   build:
     name: Syntax + Swift build
     runs-on: macos-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
