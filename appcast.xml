@@ -1,0 +1,19 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Yulu</title>
+        <item>
+            <title>0.23.0</title>
+            <pubDate>Mon, 31 Aug 2026 10:05:38 +0000</pubDate>
+            <sparkle:version>1520</sparkle:version>
+            <sparkle:shortVersionString>0.23.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>10.13</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/Nowhitestar/Yulu/releases/download/v0.23.0-rc.4/yulu-macos-arm64-v0.23.0-rc.4.dmg" length="77537498" type="application/octet-stream" sparkle:edSignature="74Y1y73R3SVwp3YCkk8JFLMoEaVrQKPUlzm+IW+6R8B9m0f4pptL9OgwuUda+c5pvaQpNXx1GiJN+Pe+s5DsBg=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: lqDlfDrws+0S+L0nltpMMJsNaZJmHeD1Gu47OwS0wfVdEMmGPqcOFcLbbrcSi5DSOxJRxAVBWqxjZ303gFhjBg==
+length: 1143
+-->
