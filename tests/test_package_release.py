@@ -625,6 +625,8 @@ def test_release_publish_uploads_exact_dmg_optional_pack_feed_and_checksums():
     assert "timeout-minutes: 30" in workflow
     assert "group: yulu-release-publish" in workflow
     assert "cancel-in-progress: false" in workflow
+    publish_job = workflow.split("  publish:\n", 1)[1]
+    assert "GH_REPO: ${{ github.repository }}" in publish_job.split("    steps:\n", 1)[0]
     assert "node-version: ${{ steps.application-runtime-node.outputs.version }}" in workflow
     assert "Checkout release commit" in workflow
     assert "ref: ${{ github.sha }}" in workflow
