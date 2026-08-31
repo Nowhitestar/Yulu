@@ -76,7 +76,7 @@ def _run(
     _command(fake_bin / "uname", f"echo {arch}")
     _command(fake_bin / "sw_vers", f"echo {version}")
     _command(fake_bin / "xattr", f"printf '%s' {json.dumps(quarantine)}")
-    _command(fake_bin / "mdls", f"printf '%s' {json.dumps(origin)}")
+    _command(fake_bin / "mdls", f"printf '%b' {json.dumps(origin)}")
     checksums_sha = hashlib.sha256(checksums.read_bytes()).hexdigest()
     _command(fake_bin / "shasum", f"""
 if [[ "$3" == *.txt ]]; then echo '{checksums_sha}  $3'; else echo '{actual_sha}  $3'; fi
@@ -329,8 +329,9 @@ def test_formal_evidence_root_is_fixed_and_policy_bundle_cannot_enter_formal_mod
 
 def test_public_preflight_accepts_github_release_asset_redirect_provenance(tmp_path: Path) -> None:
     origin = (
-        '("https://release-assets.githubusercontent.com/github-production-release-asset/'
-        '1223740140/rc5-fixture?download=1", "https://github.com/Nowhitestar/Yulu/releases")'
+        '(\n    "https://release-assets.githubusercontent.com/github-production-release-asset/'
+        '1223740140/rc5-fixture?download=1",\n'
+        '    "https://github.com/Nowhitestar/Yulu/releases"\n)'
     )
     result = _run(tmp_path, origin=origin)
     assert result.returncode == 0, result.stderr
@@ -350,6 +351,16 @@ def test_public_input_fails_closed_for_local_url_quarantine_and_checksum(tmp_pat
         _run(
             tmp_path / "origin-lookalike",
             origin="https://release-assets.githubusercontent.com.evil.example/yulu.dmg",
+        ),
+        "browser provenance",
+    )
+    _assert_failed(
+        _run(
+            tmp_path / "origin-embedded",
+            origin=(
+                "https://evil.example/?next="
+                "https://release-assets.githubusercontent.com/github-production-release-asset/fake"
+            ),
         ),
         "browser provenance",
     )

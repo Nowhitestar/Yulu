@@ -9,9 +9,19 @@ fail() {
 }
 
 has_github_release_provenance() {
-    local provenance="$1" canonical_url="$2"
-    [[ "$provenance" == *"$canonical_url"* || \
-       "$provenance" == *"https://release-assets.githubusercontent.com/"* ]]
+    local provenance="$1" canonical_url="$2" entry
+    while IFS= read -r entry || [[ -n "$entry" ]]; do
+        entry="${entry#"${entry%%[![:space:]]*}"}"
+        entry="${entry%"${entry##*[![:space:]]}"}"
+        [[ -n "$entry" && "$entry" != "(" && "$entry" != ")" ]] || continue
+        [[ "$entry" != *, ]] || entry="${entry%,}"
+        if [[ "$entry" == \"*\" ]]; then
+            entry="${entry:1:${#entry}-2}"
+        fi
+        [[ "$entry" == "$canonical_url" || \
+           "$entry" == "https://release-assets.githubusercontent.com/"* ]] && return 0
+    done <<< "$provenance"
+    return 1
 }
 
 TAG="v0.22.2"

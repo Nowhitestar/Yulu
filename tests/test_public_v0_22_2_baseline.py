@@ -61,7 +61,7 @@ printf '{\n  "schema": 1,\n  "source": "release",\n  "version": "v0.22.2",\n  "a
     fake_bin.mkdir()
     _write_command(fake_bin / "xattr", "printf '0081;66d00000;Safari;fixture\\n'")
     if provenance is not None:
-        _write_command(fake_bin / "mdls", f"printf '%s\\n' {json.dumps(provenance)}")
+        _write_command(fake_bin / "mdls", f"printf '%b\\n' {json.dumps(provenance)}")
     else:
         _write_command(fake_bin / "mdls", f'''case "${{@: -1}}" in
   */checksums.txt) printf '%s\\n' '{CHECKSUMS_URL}' ;;
@@ -198,11 +198,22 @@ def test_policy_preparer_runs_only_verified_public_installer_and_resumes(tmp_pat
 
 def test_policy_preparer_accepts_github_release_asset_redirect_provenance(tmp_path: Path) -> None:
     provenance = (
-        '("https://release-assets.githubusercontent.com/github-production-release-asset/'
-        '1223740140/v022-fixture?download=1", "https://github.com/Nowhitestar/Yulu/releases")'
+        '(\n    "https://release-assets.githubusercontent.com/github-production-release-asset/'
+        '1223740140/v022-fixture?download=1",\n'
+        '    "https://github.com/Nowhitestar/Yulu/releases"\n)'
     )
     result, *_ = _run(tmp_path, provenance=provenance)
     assert result.returncode == 0, result.stderr
+
+
+def test_policy_preparer_rejects_embedded_github_release_asset_url(tmp_path: Path) -> None:
+    provenance = (
+        "https://evil.example/?next="
+        "https://release-assets.githubusercontent.com/github-production-release-asset/fake"
+    )
+    result, *_ = _run(tmp_path, provenance=provenance)
+    assert result.returncode != 0
+    assert "browser provenance" in result.stderr.lower()
 
 
 @pytest.mark.parametrize(
