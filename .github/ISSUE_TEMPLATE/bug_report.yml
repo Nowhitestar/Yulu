@@ -51,7 +51,7 @@ body:
     attributes:
       label: Yulu version / commit
       description: Open Settings → About, or run `yulu version` from a development checkout.
-      placeholder: "Yulu 0.23.0-rc.4"
+      placeholder: "Yulu 0.23.0-rc.5"
     validations:
       required: true
 

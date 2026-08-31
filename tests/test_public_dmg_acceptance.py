@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "packaging" / "acceptance" / "public_dmg_target.sh"
-TAG = "v0.23.0-rc.4"
+TAG = "v0.23.0-rc.5"
 NAME = f"yulu-macos-arm64-{TAG}.dmg"
 PUBLIC_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/{NAME}"
 CHECKSUMS_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/checksums.txt"
@@ -327,6 +327,15 @@ def test_formal_evidence_root_is_fixed_and_policy_bundle_cannot_enter_formal_mod
     assert 'Library/Application Support/Yulu Acceptance' in source
 
 
+def test_public_preflight_accepts_github_release_asset_redirect_provenance(tmp_path: Path) -> None:
+    origin = (
+        '("https://release-assets.githubusercontent.com/github-production-release-asset/'
+        '1223740140/rc5-fixture?download=1", "https://github.com/Nowhitestar/Yulu/releases")'
+    )
+    result = _run(tmp_path, origin=origin)
+    assert result.returncode == 0, result.stderr
+
+
 def test_public_input_fails_closed_for_local_url_quarantine_and_checksum(tmp_path: Path) -> None:
     _assert_failed(_run(tmp_path / "http", url="http://127.0.0.1/yulu.dmg"), "public release URL")
     _assert_failed(_run(tmp_path / "file", url="file:///tmp/yulu.dmg"), "public release URL")
@@ -337,6 +346,13 @@ def test_public_input_fails_closed_for_local_url_quarantine_and_checksum(tmp_pat
     _assert_failed(_run(tmp_path / "quarantine", quarantine=""), "quarantine")
     _assert_failed(_run(tmp_path / "quarantine-format", quarantine="present"), "quarantine format")
     _assert_failed(_run(tmp_path / "origin", origin="file:///tmp/yulu.dmg"), "browser provenance")
+    _assert_failed(
+        _run(
+            tmp_path / "origin-lookalike",
+            origin="https://release-assets.githubusercontent.com.evil.example/yulu.dmg",
+        ),
+        "browser provenance",
+    )
     _assert_failed(_run(tmp_path / "checksum", checksum_rows=[f"{'0' * 64}  {NAME}"]), "checksum")
 
 
@@ -457,7 +473,7 @@ def _make_fixture_app(app: Path, *, large_file_bytes: int = 0) -> None:
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.yulu.app</string>
 <key>CFBundleShortVersionString</key><string>0.23.0</string>
-<key>YuluReleaseVersion</key><string>0.23.0-rc.4</string>
+<key>YuluReleaseVersion</key><string>0.23.0-rc.5</string>
 <key>CFBundleVersion</key><string>2304</string>
 </dict></plist>
 """)

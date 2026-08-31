@@ -8,6 +8,12 @@ fail() {
     exit 1
 }
 
+has_github_release_provenance() {
+    local provenance="$1" canonical_url="$2"
+    [[ "$provenance" == *"$canonical_url"* || \
+       "$provenance" == *"https://release-assets.githubusercontent.com/"* ]]
+}
+
 TAG="v0.22.2"
 VERSION="0.22.2"
 SOURCE_COMMIT="2d01fa2989c1a9ae1a95266438bb278c72fac8c3"
@@ -152,7 +158,8 @@ verify_asset_path() {
     [[ "$quarantine" =~ ^[0-9A-Fa-f]{4}\;[0-9A-Fa-f]{8}\;[^\;]+\;.*$ ]] || \
         fail "$expected_name lacks valid browser quarantine metadata"
     provenance="$($MDLS -raw -name kMDItemWhereFroms "$path" 2>/dev/null || true)"
-    [[ "$provenance" == *"$expected_url"* ]] || fail "$expected_name browser provenance does not contain its exact public URL"
+    has_github_release_provenance "$provenance" "$expected_url" || \
+        fail "$expected_name browser provenance contains neither its exact public URL nor GitHub release-assets redirect"
 }
 
 verify_asset_path "$CHECKSUMS" "checksums.txt" "$EXPECTED_CHECKSUMS_URL"

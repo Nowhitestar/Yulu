@@ -8,6 +8,12 @@ fail() {
     exit 1
 }
 
+has_github_release_provenance() {
+    local provenance="$1" canonical_url="$2"
+    [[ "$provenance" == *"$canonical_url"* || \
+       "$provenance" == *"https://release-assets.githubusercontent.com/"* ]]
+}
+
 VERIFIED_HARNESS_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)"
 [[ "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/${BASH_SOURCE[0]##*/}" == "$VERIFIED_HARNESS_DIR/public_dmg_target.sh" ]] || \
     fail "target must execute from the delivered harness directory"
@@ -72,7 +78,7 @@ if [[ "$POLICY_TEST" -eq 1 ]]; then EXPECTED_BUILD_MODE="policy-test"; else EXPE
 
 [[ "$SCENARIO" == "fresh" || "$SCENARIO" == "upgrade" ]] || fail "scenario must be fresh or upgrade"
 if [[ "$SCENARIO" == "upgrade" ]]; then
-    [[ "$TAG" == "v0.23.0-rc.4" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.4"
+    [[ "$TAG" == "v0.23.0-rc.5" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.5"
     [[ "$UPGRADE_JOURNEY" == "upgrade-success" || "$UPGRADE_JOURNEY" == "upgrade-cancel-retry" ]] || fail "upgrade journey is invalid"
     [[ "$MIGRATION_BEFORE" == /* && -f "$MIGRATION_BEFORE" && ! -L "$MIGRATION_BEFORE" ]] ||
         fail "upgrade requires absolute regular migration-before evidence"
@@ -263,7 +269,8 @@ QUARANTINE="$($XATTR -p com.apple.quarantine "$DMG" 2>/dev/null || true)"
 [[ -n "$QUARANTINE" ]] || fail "DMG lacks a pre-existing com.apple.quarantine attribute"
 [[ "$QUARANTINE" =~ ^[0-9A-Fa-f]{4}\;[0-9A-Fa-f]{8}\;[^\;]+\;.*$ ]] || fail "DMG quarantine format is invalid"
 WHERE_FROMS="$($MDLS -raw -name kMDItemWhereFroms "$DMG" 2>/dev/null || true)"
-[[ "$WHERE_FROMS" == *"$EXPECTED_URL"* ]] || fail "DMG browser provenance does not contain the canonical public release URL"
+has_github_release_provenance "$WHERE_FROMS" "$EXPECTED_URL" || \
+    fail "DMG browser provenance contains neither the canonical public URL nor GitHub release-assets redirect"
 
 MANIFEST_SHA=""
 MANIFEST_MATCHES=0

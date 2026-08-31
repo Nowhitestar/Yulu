@@ -649,7 +649,7 @@ def test_release_publish_uploads_exact_dmg_optional_pack_feed_and_checksums():
     assert 'repos/$GITHUB_REPOSITORY/contents/appcast.xml' in channel_feed
     assert 'cmp dist/appcast.xml "$REMOTE_FEED"' in channel_feed
     assert "?release=$TAG" not in channel_feed
-    assert '"$TAG" != "v0.23.0-rc.4"' in channel_feed
+    assert '"$TAG" != "v0.23.0-rc.5"' in channel_feed
     assert workflow.index("--draft=false") < workflow.index("Stage signed Sparkle channel feed")
     assert workflow.index("Verify public Release asset") < workflow.index(
         "Stage signed Sparkle channel feed"

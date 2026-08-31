@@ -467,10 +467,10 @@ jobs:
             printf 'feed_verified=0\n'
           } >> "$GITHUB_OUTPUT"
 
-          # v0.23.0-rc.4 is the one accepted bootstrap for the new signed feed.
+          # v0.23.0-rc.5 is the acceptance bootstrap for the new signed feed.
           # Later prereleases publish release-specific appcasts without moving
           # the stable channel seen by installed users.
-          if [[ "$TAG" == *-* && "$TAG" != "v0.23.0-rc.4" ]]; then
+          if [[ "$TAG" == *-* && "$TAG" != "v0.23.0-rc.5" ]]; then
             exit 0
           fi
           printf 'channel_promotion=1\n' >> "$GITHUB_OUTPUT"

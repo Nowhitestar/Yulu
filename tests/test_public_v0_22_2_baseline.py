@@ -29,7 +29,11 @@ def _write_command(path: Path, source: str) -> None:
     path.chmod(0o755)
 
 
-def _fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path, Path, Path]:
+def _fixture(
+    tmp_path: Path,
+    *,
+    provenance: str | None = None,
+) -> tuple[Path, dict[str, str], Path, Path, Path]:
     assets = tmp_path / "browser-downloads"
     assets.mkdir(parents=True)
     archive = assets / ARCHIVE_NAME
@@ -56,7 +60,10 @@ printf '{\n  "schema": 1,\n  "source": "release",\n  "version": "v0.22.2",\n  "a
     fake_bin = tmp_path / "fake-system"
     fake_bin.mkdir()
     _write_command(fake_bin / "xattr", "printf '0081;66d00000;Safari;fixture\\n'")
-    _write_command(fake_bin / "mdls", f'''case "${{@: -1}}" in
+    if provenance is not None:
+        _write_command(fake_bin / "mdls", f"printf '%s\\n' {json.dumps(provenance)}")
+    else:
+        _write_command(fake_bin / "mdls", f'''case "${{@: -1}}" in
   */checksums.txt) printf '%s\\n' '{CHECKSUMS_URL}' ;;
   */install.sh) printf '%s\\n' '{INSTALLER_URL}' ;;
   */{ARCHIVE_NAME}) printf '%s\\n' '{ARCHIVE_URL}' ;;
@@ -95,8 +102,9 @@ def _run(
     *,
     extra_env: dict[str, str] | None = None,
     arg_mutations: dict[str, str] | None = None,
+    provenance: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path, dict[str, str]]:
-    delivery, env, checksums, installer, archive = _fixture(tmp_path)
+    delivery, env, checksums, installer, archive = _fixture(tmp_path, provenance=provenance)
     if extra_env:
         env.update(extra_env)
     install_dir = tmp_path / "legacy-home" / ".yulu"
@@ -188,6 +196,15 @@ def test_policy_preparer_runs_only_verified_public_installer_and_resumes(tmp_pat
     assert not (Path(env["YULU_V022_BASELINE_TEST_APPLICATIONS"]) / "Yulu.app").exists()
 
 
+def test_policy_preparer_accepts_github_release_asset_redirect_provenance(tmp_path: Path) -> None:
+    provenance = (
+        '("https://release-assets.githubusercontent.com/github-production-release-asset/'
+        '1223740140/v022-fixture?download=1", "https://github.com/Nowhitestar/Yulu/releases")'
+    )
+    result, *_ = _run(tmp_path, provenance=provenance)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
@@ -216,7 +233,10 @@ def test_preparer_rejects_bad_digest_provenance_embedded_helper_and_checksum_row
 
     provenance_root = tmp_path / "provenance"
     delivery, env, checksums, installer, archive = _fixture(provenance_root)
-    _write_command(Path(env["YULU_V022_BASELINE_TEST_BIN"]) / "mdls", "printf 'https://example.invalid/wrong\\n'")
+    _write_command(
+        Path(env["YULU_V022_BASELINE_TEST_BIN"]) / "mdls",
+        "printf 'https://release-assets.githubusercontent.com.evil.example/wrong\\n'",
+    )
     values = {
         "--checksums": str(checksums), "--checksums-url": CHECKSUMS_URL,
         "--installer": str(installer), "--installer-url": INSTALLER_URL,

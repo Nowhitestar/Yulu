@@ -18,7 +18,7 @@ from test_public_dmg_acceptance import _run_flow
 
 ROOT = Path(__file__).resolve().parents[1]
 OBSERVER = ROOT / "packaging" / "acceptance" / "observe_journey.mjs"
-TAG = "v0.23.0-rc.4"
+TAG = "v0.23.0-rc.5"
 TRANSCRIPT = "private transcript bait"
 SUMMARY = "private summary bait"
 STEM = "private-title_20260831_120000"
@@ -48,7 +48,7 @@ def _responses(*, core: bool) -> dict[str, object]:
     health = {
         "status": "ok",
         "serviceOwner": "com.yulu.ui",
-        "productVersion": "0.23.0-rc.4",
+        "productVersion": "0.23.0-rc.5",
         "bundleVersion": "2304",
         "database": {"status": "ok", "schemaVersion": 1, "minimumReadableVersion": 1},
     }
@@ -375,7 +375,7 @@ def test_baseline_uses_only_exact_read_only_gets_and_proves_fresh_zero_state() -
             "databaseStatus": "ok",
             "database": {"schemaVersion": 1, "minimumReadableVersion": 1},
         },
-        "version": {"product": "0.23.0-rc.4", "bundle": "2304"},
+        "version": {"product": "0.23.0-rc.5", "bundle": "2304"},
         "ipc": {"transport": "ipv4-loopback-http", "readOnly": True},
         "onboarding": {"installationKind": "fresh", "coreCompleted": False},
         "recordings": {"count": 0},

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 
-TAG = "v0.23.0-rc.4"
+TAG = "v0.23.0-rc.5"
 TAG_COMMIT_SUFFIX = "^{commit}"
 REPOSITORY = "Nowhitestar/Yulu"
 SIGNER_WORKFLOW = "Nowhitestar/Yulu/.github/workflows/release-publish.yml"
