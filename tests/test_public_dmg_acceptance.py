@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "packaging" / "acceptance" / "public_dmg_target.sh"
-TAG = "v0.23.0-rc.6"
+TAG = "v0.23.0-rc.7"
 NAME = f"yulu-macos-arm64-{TAG}.dmg"
 PUBLIC_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/{NAME}"
 CHECKSUMS_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/checksums.txt"
@@ -418,49 +418,53 @@ def test_clean_target_fails_closed_for_checkout_platform_and_host_dependencies(t
     _assert_failed(_run(tmp_path / "clt", command_line_tools=True), "Command Line Tools")
 
 
-def test_clean_target_allows_inert_apple_xcode_select_python_shim(tmp_path: Path) -> None:
-    result = _run(
-        tmp_path,
-        host_tool="python3",
-        host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
-        host_tool_codesign_apple_anchor=True,
-        host_tool_codesign_platform="26",
-        host_tool_is_system=True,
-    )
-    assert result.returncode == 0, result.stderr
+def test_clean_target_allows_inert_apple_xcode_select_python_shims(tmp_path: Path) -> None:
+    for tool in ("python3", "pip3"):
+        result = _run(
+            tmp_path / tool,
+            host_tool=tool,
+            host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
+            host_tool_codesign_apple_anchor=True,
+            host_tool_codesign_platform="26",
+            host_tool_is_system=True,
+        )
+        assert result.returncode == 0, result.stderr
 
 
-def test_clean_target_rejects_non_system_python_with_apple_shim_identifier(tmp_path: Path) -> None:
-    result = _run(
-        tmp_path,
-        host_tool="python3",
-        host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
-        host_tool_codesign_apple_anchor=True,
-        host_tool_codesign_platform="26",
-    )
-    _assert_failed(result, "host tool")
+def test_clean_target_rejects_non_system_python_shims_with_apple_identifier(tmp_path: Path) -> None:
+    for tool in ("python3", "pip3"):
+        result = _run(
+            tmp_path / tool,
+            host_tool=tool,
+            host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
+            host_tool_codesign_apple_anchor=True,
+            host_tool_codesign_platform="26",
+        )
+        _assert_failed(result, "host tool")
 
 
-def test_clean_target_rejects_system_python_without_apple_platform_identity(tmp_path: Path) -> None:
-    result = _run(
-        tmp_path,
-        host_tool="python3",
-        host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
-        host_tool_codesign_apple_anchor=True,
-        host_tool_is_system=True,
-    )
-    _assert_failed(result, "host tool")
+def test_clean_target_rejects_system_python_shims_without_apple_platform_identity(tmp_path: Path) -> None:
+    for tool in ("python3", "pip3"):
+        result = _run(
+            tmp_path / tool,
+            host_tool=tool,
+            host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
+            host_tool_codesign_apple_anchor=True,
+            host_tool_is_system=True,
+        )
+        _assert_failed(result, "host tool")
 
 
-def test_clean_target_rejects_system_python_without_apple_anchor(tmp_path: Path) -> None:
-    result = _run(
-        tmp_path,
-        host_tool="python3",
-        host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
-        host_tool_codesign_platform="26",
-        host_tool_is_system=True,
-    )
-    _assert_failed(result, "host tool")
+def test_clean_target_rejects_system_python_shims_without_apple_anchor(tmp_path: Path) -> None:
+    for tool in ("python3", "pip3"):
+        result = _run(
+            tmp_path / tool,
+            host_tool=tool,
+            host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
+            host_tool_codesign_platform="26",
+            host_tool_is_system=True,
+        )
+        _assert_failed(result, "host tool")
 
 
 def test_clean_target_detects_dependencies_hidden_from_path(tmp_path: Path) -> None:
@@ -554,7 +558,7 @@ def _make_fixture_app(app: Path, *, large_file_bytes: int = 0) -> None:
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.yulu.app</string>
 <key>CFBundleShortVersionString</key><string>0.23.0</string>
-<key>YuluReleaseVersion</key><string>0.23.0-rc.6</string>
+<key>YuluReleaseVersion</key><string>0.23.0-rc.7</string>
 <key>CFBundleVersion</key><string>2304</string>
 </dict></plist>
 """)

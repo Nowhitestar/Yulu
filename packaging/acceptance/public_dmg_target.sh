@@ -88,7 +88,7 @@ if [[ "$POLICY_TEST" -eq 1 ]]; then EXPECTED_BUILD_MODE="policy-test"; else EXPE
 
 [[ "$SCENARIO" == "fresh" || "$SCENARIO" == "upgrade" ]] || fail "scenario must be fresh or upgrade"
 if [[ "$SCENARIO" == "upgrade" ]]; then
-    [[ "$TAG" == "v0.23.0-rc.6" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.6"
+    [[ "$TAG" == "v0.23.0-rc.7" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.7"
     [[ "$UPGRADE_JOURNEY" == "upgrade-success" || "$UPGRADE_JOURNEY" == "upgrade-cancel-retry" ]] || fail "upgrade journey is invalid"
     [[ "$MIGRATION_BEFORE" == /* && -f "$MIGRATION_BEFORE" && ! -L "$MIGRATION_BEFORE" ]] ||
         fail "upgrade requires absolute regular migration-before evidence"
@@ -346,9 +346,10 @@ if [[ "$SCENARIO" == "fresh" ]]; then
         fail "Homebrew is present on the fresh target"
 
     is_apple_xcode_select_tool_shim() {
-        local candidate="$1" expected details line
+        local tool="$1" candidate="$2" expected details line
         local identifier_matches=0 platform_binary=0 apple_anchored=0
-        expected="$(root_path /usr/bin/python3)"
+        [[ "$tool" == "python3" || "$tool" == "pip3" ]] || return 1
+        expected="$(root_path "/usr/bin/$tool")"
         [[ "$candidate" == "$expected" && -f "$candidate" && ! -L "$candidate" ]] || return 1
         details="$("$CODESIGN" --display --verbose=4 --requirements - "$candidate" 2>&1)" || return 1
         while IFS= read -r line; do
@@ -363,7 +364,7 @@ if [[ "$SCENARIO" == "fresh" ]]; then
     for host_tool in brew node npm python3 pip pip3; do
         host_tool_path="$(command -v "$host_tool" 2>/dev/null || true)"
         [[ -n "$host_tool_path" ]] || continue
-        if [[ "$host_tool" == "python3" ]] && is_apple_xcode_select_tool_shim "$host_tool_path"; then
+        if is_apple_xcode_select_tool_shim "$host_tool" "$host_tool_path"; then
             continue
         fi
         fail "forbidden host tool is available: $host_tool"
