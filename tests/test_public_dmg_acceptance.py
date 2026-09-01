@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "packaging" / "acceptance" / "public_dmg_target.sh"
-TAG = "v0.23.0-rc.5"
+TAG = "v0.23.0-rc.6"
 NAME = f"yulu-macos-arm64-{TAG}.dmg"
 PUBLIC_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/{NAME}"
 CHECKSUMS_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/checksums.txt"
@@ -38,6 +38,10 @@ def _run(
     arch: str = "arm64",
     version: str = "14.7.1",
     host_tool: str | None = None,
+    host_tool_codesign_identifier: str | None = None,
+    host_tool_codesign_apple_anchor: bool = False,
+    host_tool_codesign_platform: str | None = None,
+    host_tool_is_system: bool = False,
     xcode_selected: bool = False,
     homebrew_directory: bool = False,
     xcode_app: bool = False,
@@ -55,6 +59,11 @@ def _run(
     upgrade_journey: str = "",
 ) -> subprocess.CompletedProcess[str]:
     tmp_path.mkdir(parents=True, exist_ok=True)
+    system_root = tmp_path / "system-root"
+    applications = system_root / "Applications"
+    home = system_root / "Users" / "acceptance"
+    applications.mkdir(parents=True, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True)
     dmg = tmp_path / dmg_name
     if dmg_symlink:
         real_dmg = tmp_path / "actual-download.dmg"
@@ -71,8 +80,8 @@ def _run(
         checksums.symlink_to(real_checksums)
     else:
         checksums.write_text("\n".join(rows) + "\n")
-    fake_bin = tmp_path / "fake-bin"
-    fake_bin.mkdir(exist_ok=True)
+    fake_bin = system_root / "usr" / "bin"
+    fake_bin.mkdir(parents=True, exist_ok=True)
     _command(fake_bin / "uname", f"echo {arch}")
     _command(fake_bin / "sw_vers", f"echo {version}")
     _command(fake_bin / "xattr", f"printf '%s' {json.dumps(quarantine)}")
@@ -83,7 +92,23 @@ if [[ "$3" == *.txt ]]; then echo '{checksums_sha}  $3'; else echo '{actual_sha}
 """)
     _command(fake_bin / "xcode-select", "echo /tmp/Xcode; exit 0" if xcode_selected else "exit 1")
     _command(fake_bin / "launchctl", "exit 0" if service_loaded else "exit 1")
-    _command(fake_bin / "codesign", "exit 0")
+    codesign_body = "exit 0"
+    if host_tool and host_tool_codesign_identifier:
+        codesign_details = [f"Identifier={host_tool_codesign_identifier}"]
+        if host_tool_codesign_platform:
+            codesign_details.append(f"Platform identifier={host_tool_codesign_platform}")
+        if host_tool_codesign_apple_anchor:
+            codesign_details.append(
+                f'designated => identifier "{host_tool_codesign_identifier}" and anchor apple'
+            )
+        rendered_codesign_details = "\\n".join(codesign_details)
+        codesign_body = f'''
+if [[ "$*" == *"{host_tool}"* ]]; then
+  printf '{rendered_codesign_details}\\n'
+fi
+exit 0
+'''
+    _command(fake_bin / "codesign", codesign_body)
     _command(fake_bin / "spctl", "exit 0")
     _command(fake_bin / "hdiutil", "exit 1")
     _command(fake_bin / "diskutil", "exit 1")
@@ -91,14 +116,14 @@ if [[ "$3" == *.txt ]]; then echo '{checksums_sha}  $3'; else echo '{actual_sha}
     _command(fake_bin / "readlink", "exec /usr/bin/readlink \"$@\"")
     _command(fake_bin / "mktemp", "exec /usr/bin/mktemp \"$@\"")
     _command(fake_bin / "stat", "exec /usr/bin/stat \"$@\"")
+    path_entries = [fake_bin]
     if host_tool:
-        _command(fake_bin / host_tool, "exit 0")
-
-    system_root = tmp_path / "system-root"
-    applications = system_root / "Applications"
-    home = system_root / "Users" / "acceptance"
-    applications.mkdir(parents=True, exist_ok=True)
-    home.mkdir(parents=True, exist_ok=True)
+        host_tool_bin = fake_bin
+        if not host_tool_is_system:
+            host_tool_bin = tmp_path / "user-bin"
+            host_tool_bin.mkdir(exist_ok=True)
+            path_entries.insert(0, host_tool_bin)
+        _command(host_tool_bin / host_tool, "exit 0")
     if homebrew_directory:
         (system_root / "opt" / "homebrew").mkdir(parents=True, exist_ok=True)
     if xcode_app:
@@ -149,7 +174,7 @@ if [[ "$3" == *.txt ]]; then echo '{checksums_sha}  $3'; else echo '{actual_sha}
     for variable in ("NVM_DIR", "PYENV_ROOT", "ASDF_DIR", "ASDF_DATA_DIR", "VIRTUAL_ENV", "CONDA_PREFIX", "NODE_PATH", "PYTHONPATH"):
         env.pop(variable, None)
     env.update({
-        "PATH": str(fake_bin),
+        "PATH": os.pathsep.join(str(path) for path in path_entries),
         "YULU_ACCEPTANCE_TEST_BIN": str(fake_bin),
         "YULU_ACCEPTANCE_TEST_SYSTEM_ROOT": str(system_root),
         "YULU_ACCEPTANCE_TEST_APPLICATIONS": str(applications),
@@ -330,7 +355,7 @@ def test_formal_evidence_root_is_fixed_and_policy_bundle_cannot_enter_formal_mod
 def test_public_preflight_accepts_github_release_asset_redirect_provenance(tmp_path: Path) -> None:
     origin = (
         '(\n    "https://release-assets.githubusercontent.com/github-production-release-asset/'
-        '1223740140/rc5-fixture?download=1",\n'
+        '1223740140/rc6-fixture?download=1",\n'
         '    "https://github.com/Nowhitestar/Yulu/releases"\n)'
     )
     result = _run(tmp_path, origin=origin)
@@ -391,6 +416,51 @@ def test_clean_target_fails_closed_for_checkout_platform_and_host_dependencies(t
     _assert_failed(_run(tmp_path / "xcode", xcode_selected=True), "Xcode")
     _assert_failed(_run(tmp_path / "xcode-app", xcode_app=True), "Xcode")
     _assert_failed(_run(tmp_path / "clt", command_line_tools=True), "Command Line Tools")
+
+
+def test_clean_target_allows_inert_apple_xcode_select_python_shim(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        host_tool="python3",
+        host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
+        host_tool_codesign_apple_anchor=True,
+        host_tool_codesign_platform="26",
+        host_tool_is_system=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_clean_target_rejects_non_system_python_with_apple_shim_identifier(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        host_tool="python3",
+        host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
+        host_tool_codesign_apple_anchor=True,
+        host_tool_codesign_platform="26",
+    )
+    _assert_failed(result, "host tool")
+
+
+def test_clean_target_rejects_system_python_without_apple_platform_identity(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        host_tool="python3",
+        host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
+        host_tool_codesign_apple_anchor=True,
+        host_tool_is_system=True,
+    )
+    _assert_failed(result, "host tool")
+
+
+def test_clean_target_rejects_system_python_without_apple_anchor(tmp_path: Path) -> None:
+    result = _run(
+        tmp_path,
+        host_tool="python3",
+        host_tool_codesign_identifier="com.apple.dt.xcode_select.tool-shim-public",
+        host_tool_codesign_platform="26",
+        host_tool_is_system=True,
+    )
+    _assert_failed(result, "host tool")
 
 
 def test_clean_target_detects_dependencies_hidden_from_path(tmp_path: Path) -> None:
@@ -484,7 +554,7 @@ def _make_fixture_app(app: Path, *, large_file_bytes: int = 0) -> None:
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.yulu.app</string>
 <key>CFBundleShortVersionString</key><string>0.23.0</string>
-<key>YuluReleaseVersion</key><string>0.23.0-rc.5</string>
+<key>YuluReleaseVersion</key><string>0.23.0-rc.6</string>
 <key>CFBundleVersion</key><string>2304</string>
 </dict></plist>
 """)
@@ -535,7 +605,7 @@ def _run_flow(
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     prepared = _run(tmp_path)
     assert prepared.returncode == 0, prepared.stderr
-    fake_bin = tmp_path / "fake-bin"
+    fake_bin = tmp_path / "system-root" / "usr" / "bin"
     mount_source = tmp_path / "mount-source"
     mount_source.mkdir()
     _make_fixture_app(mount_source / "Yulu.app")

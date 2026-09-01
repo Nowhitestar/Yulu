@@ -18,7 +18,7 @@ SEMVER = re.compile(
     rf"(?:-{PRERELEASE_IDENTIFIER}(?:\.{PRERELEASE_IDENTIFIER})*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
-ACCEPTED_RC_VERSION = "0.23.0-rc.5"
+ACCEPTED_RC_VERSION = "0.23.0-rc.6"
 STABLE_PROMOTION_VERSION = "0.23.0"
 
 
@@ -75,7 +75,7 @@ def resolve_identity(
         accepted_rc = git(repository, "rev-parse", f"refs/tags/v{ACCEPTED_RC_VERSION}^{{commit}}")
         if head != accepted_rc:
             raise ReleaseIdentityError(
-                "Stable v0.23.0 must use the same source commit as accepted v0.23.0-rc.5."
+                f"Stable v0.23.0 must use the same source commit as accepted v{ACCEPTED_RC_VERSION}."
             )
 
     build_number = "0"

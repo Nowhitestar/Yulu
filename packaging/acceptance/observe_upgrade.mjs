@@ -12,7 +12,7 @@ import {
 import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const CURRENT_TAG = "v0.23.0-rc.5";
+const CURRENT_TAG = "v0.23.0-rc.6";
 const LEGACY_TAG = "v0.22.2";
 const LEGACY_COMMIT = "2d01fa2989c1a9ae1a95266438bb278c72fac8c3";
 const FORMAL_NODE = "/Applications/Yulu.app/Contents/Resources/runtime/bin/node";
@@ -107,7 +107,7 @@ for (let index = 2; index < process.argv.length; index += 1) {
 }
 
 if (!MODES.has(options.mode)) fail("mode is invalid");
-if (options.releaseTag !== CURRENT_TAG) fail("upgrade acceptance is pinned to v0.23.0-rc.5");
+if (options.releaseTag !== CURRENT_TAG) fail("upgrade acceptance is pinned to v0.23.0-rc.6");
 if (!isSha256(options.snapshotWitnessSha256)) fail("operator snapshot witness hash is invalid");
 const needsPrior = new Set(["committed", "committed_stable", "rolled_back_stable", "retry_awaiting_approval"]);
 if (needsPrior.has(options.mode) !== Boolean(options.priorEvidence)) {

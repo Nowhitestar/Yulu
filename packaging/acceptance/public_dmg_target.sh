@@ -88,7 +88,7 @@ if [[ "$POLICY_TEST" -eq 1 ]]; then EXPECTED_BUILD_MODE="policy-test"; else EXPE
 
 [[ "$SCENARIO" == "fresh" || "$SCENARIO" == "upgrade" ]] || fail "scenario must be fresh or upgrade"
 if [[ "$SCENARIO" == "upgrade" ]]; then
-    [[ "$TAG" == "v0.23.0-rc.5" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.5"
+    [[ "$TAG" == "v0.23.0-rc.6" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.6"
     [[ "$UPGRADE_JOURNEY" == "upgrade-success" || "$UPGRADE_JOURNEY" == "upgrade-cancel-retry" ]] || fail "upgrade journey is invalid"
     [[ "$MIGRATION_BEFORE" == /* && -f "$MIGRATION_BEFORE" && ! -L "$MIGRATION_BEFORE" ]] ||
         fail "upgrade requires absolute regular migration-before evidence"
@@ -344,10 +344,29 @@ root_path() {
 if [[ "$SCENARIO" == "fresh" ]]; then
     [[ ! -e "$(root_path /opt/homebrew)" && ! -e "$(root_path /usr/local/Homebrew)" ]] || \
         fail "Homebrew is present on the fresh target"
+
+    is_apple_xcode_select_tool_shim() {
+        local candidate="$1" expected details line
+        local identifier_matches=0 platform_binary=0 apple_anchored=0
+        expected="$(root_path /usr/bin/python3)"
+        [[ "$candidate" == "$expected" && -f "$candidate" && ! -L "$candidate" ]] || return 1
+        details="$("$CODESIGN" --display --verbose=4 --requirements - "$candidate" 2>&1)" || return 1
+        while IFS= read -r line; do
+            [[ "$line" == "Identifier=com.apple.dt.xcode_select.tool-shim-public" ]] && identifier_matches=1
+            [[ "$line" =~ ^Platform\ identifier=[1-9][0-9]*$ ]] && platform_binary=1
+            [[ "$line" == 'designated => identifier "com.apple.dt.xcode_select.tool-shim-public" and anchor apple' ]] && \
+                apple_anchored=1
+        done <<< "$details"
+        [[ "$identifier_matches" -eq 1 && "$platform_binary" -eq 1 && "$apple_anchored" -eq 1 ]]
+    }
+
     for host_tool in brew node npm python3 pip pip3; do
-        if command -v "$host_tool" >/dev/null 2>&1; then
-            fail "forbidden host tool is available: $host_tool"
+        host_tool_path="$(command -v "$host_tool" 2>/dev/null || true)"
+        [[ -n "$host_tool_path" ]] || continue
+        if [[ "$host_tool" == "python3" ]] && is_apple_xcode_select_tool_shim "$host_tool_path"; then
+            continue
         fi
+        fail "forbidden host tool is available: $host_tool"
     done
     for direct_install in \
         /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/python3 /usr/local/bin/pip /usr/local/bin/pip3 \

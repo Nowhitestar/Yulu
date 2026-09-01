@@ -13,7 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 ACCEPTANCE = ROOT / "packaging" / "acceptance"
 CONTROLLER = ACCEPTANCE / "validate_returned_public_dmg.py"
-TAG = "v0.23.0-rc.5"
+TAG = "v0.23.0-rc.6"
 _POLICY_MANIFESTS: dict[str, str] = {}
 
 
@@ -53,7 +53,7 @@ def _returned_fixture(tmp_path: Path, scenario: str, journey: str | None) -> tup
     revision = "a" * 40
     dmg = tmp_path / f"yulu-macos-arm64-{TAG}.dmg"
     checksums = tmp_path / "checksums.txt"
-    dmg.write_bytes(b"public rc5 fixture")
+    dmg.write_bytes(b"public rc6 fixture")
     checksums.write_text(f"{_sha(dmg)}  {dmg.name}\n")
     ledger = tmp_path / "ledger"
     ledger.mkdir(mode=0o700)
@@ -84,7 +84,7 @@ def _returned_fixture(tmp_path: Path, scenario: str, journey: str | None) -> tup
     bundle = {
         "schema": 1, "classification": "harness_policy_test", "formalAcceptance": False,
         "status": "matched", "release": {"bundleIdentifier": "com.yulu.app", "shortVersion": "0.23.0",
-        "releaseVersion": "0.23.0-rc.5", "buildVersion": "23"},
+        "releaseVersion": "0.23.0-rc.6", "buildVersion": "23"},
         "node": {"version": "v22.19.0", "architecture": "arm64", "executableSha256": "4" * 64},
         "runtimeInventory": {"sha256": "5" * 64, "files": 10, "bytes": 100},
         "contents": {"sha256": "6" * 64, "entries": 20, "bytes": 200}, "signatures": signatures,
@@ -104,7 +104,7 @@ def _returned_fixture(tmp_path: Path, scenario: str, journey: str | None) -> tup
     health = {"status": "ok", "serviceOwner": "com.yulu.ui", "databaseStatus": "ok", "database": {"schemaVersion": 13, "minimumReadableVersion": 12}}
     common_journey = {
         "schema": 1, "classification": "journey_policy_test", "formalAcceptance": False,
-        "releaseTag": TAG, "health": health, "version": {"product": "0.23.0-rc.5"},
+        "releaseTag": TAG, "health": health, "version": {"product": "0.23.0-rc.6"},
         "ipc": {"transport": "ipv4-loopback-http", "readOnly": True},
     }
     core = {
