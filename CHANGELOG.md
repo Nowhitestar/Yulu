@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.8](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.7...v0.23.0-rc.8) (2026-09-01)
+
+
+### Bug Fixes
+
+* **app:** register fresh-install background services ([#170](https://github.com/Nowhitestar/Yulu/issues/170)) ([fea5faf](https://github.com/Nowhitestar/Yulu/commit/fea5faf173ea88da8dd9bd9300b45c3b288eaa09))
+
 ## [0.23.0-rc.7](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.6...v0.23.0-rc.7) (2026-09-01)
 
 
