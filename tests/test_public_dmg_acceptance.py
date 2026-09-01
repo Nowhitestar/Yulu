@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "packaging" / "acceptance" / "public_dmg_target.sh"
-TAG = "v0.23.0-rc.7"
+TAG = "v0.23.0-rc.8"
 NAME = f"yulu-macos-arm64-{TAG}.dmg"
 PUBLIC_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/{NAME}"
 CHECKSUMS_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/checksums.txt"
@@ -558,7 +558,7 @@ def _make_fixture_app(app: Path, *, large_file_bytes: int = 0) -> None:
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.yulu.app</string>
 <key>CFBundleShortVersionString</key><string>0.23.0</string>
-<key>YuluReleaseVersion</key><string>0.23.0-rc.7</string>
+<key>YuluReleaseVersion</key><string>0.23.0-rc.8</string>
 <key>CFBundleVersion</key><string>2304</string>
 </dict></plist>
 """)

@@ -88,7 +88,7 @@ if [[ "$POLICY_TEST" -eq 1 ]]; then EXPECTED_BUILD_MODE="policy-test"; else EXPE
 
 [[ "$SCENARIO" == "fresh" || "$SCENARIO" == "upgrade" ]] || fail "scenario must be fresh or upgrade"
 if [[ "$SCENARIO" == "upgrade" ]]; then
-    [[ "$TAG" == "v0.23.0-rc.7" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.7"
+    [[ "$TAG" == "v0.23.0-rc.8" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.8"
     [[ "$UPGRADE_JOURNEY" == "upgrade-success" || "$UPGRADE_JOURNEY" == "upgrade-cancel-retry" ]] || fail "upgrade journey is invalid"
     [[ "$MIGRATION_BEFORE" == /* && -f "$MIGRATION_BEFORE" && ! -L "$MIGRATION_BEFORE" ]] ||
         fail "upgrade requires absolute regular migration-before evidence"

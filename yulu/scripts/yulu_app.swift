@@ -116,7 +116,64 @@ struct ServiceRegistrationDecision: Encodable {
             return nil
         }
         return ServiceRegistrationDecision(
-            register: policy.persistentRegistrationAllowed && status == "notRegistered"
+            register: policy.persistentRegistrationAllowed
+                && (status == "notRegistered" || status == "notFound")
+        )
+    }
+}
+
+enum FreshInstallRegistrationDisposition: String, Encodable {
+    case pending
+    case awaitingApproval = "awaiting_approval"
+    case verifyHealth = "verify_health"
+    case blocked
+
+    static func evaluate(statuses: [String], attempt: Int) -> FreshInstallRegistrationDisposition? {
+        let accepted = ["notRegistered", "enabled", "requiresApproval", "notFound"]
+        guard attempt >= 0,
+              statuses.count == BackgroundServiceDescriptor.bundledOwners.count,
+              statuses.allSatisfy({ accepted.contains($0) }) else { return nil }
+        if statuses.allSatisfy({ $0 == "enabled" }) { return .verifyHealth }
+        if statuses.contains("requiresApproval") { return .awaitingApproval }
+        return attempt < 40 ? .pending : .blocked
+    }
+}
+
+enum FreshInstallHealthDisposition: String, Encodable {
+    case pending
+    case committed
+    case blocked
+
+    static func evaluate(
+        hostReady: Bool,
+        captureReady: Bool,
+        timedOut: Bool
+    ) -> FreshInstallHealthDisposition {
+        if hostReady && captureReady { return .committed }
+        return timedOut ? .blocked : .pending
+    }
+}
+
+enum FreshInstallRecoveryAction: String {
+    case cancel
+    case retry
+}
+
+struct FreshInstallRecoveryPlan: Encodable {
+    let unregister: [String]
+    let retryAfterUnregistration: Bool
+
+    static func evaluate(
+        phaseActive: Bool,
+        needsServiceReset: Bool,
+        recoveryInProgress: Bool,
+        action: FreshInstallRecoveryAction
+    ) -> FreshInstallRecoveryPlan? {
+        guard !recoveryInProgress,
+              phaseActive || needsServiceReset else { return nil }
+        return FreshInstallRecoveryPlan(
+            unregister: BackgroundServiceDescriptor.bundledOwners.map(\.plistName),
+            retryAfterUnregistration: action == .retry
         )
     }
 }
@@ -653,7 +710,7 @@ final class BackgroundServiceRegistry: PersistentServiceMutating {
         guard policy.persistentRegistrationAllowed else { return }
         for descriptor in BackgroundServiceDescriptor.bundledOwners {
             let service = SMAppService.agent(plistName: descriptor.plistName)
-            guard service.status == .notRegistered else { continue }
+            guard service.status == .notRegistered || service.status == .notFound else { continue }
             do {
                 try service.register()
                 registrationErrors.removeValue(forKey: descriptor.plistName)
@@ -665,7 +722,7 @@ final class BackgroundServiceRegistry: PersistentServiceMutating {
 
     func register(_ descriptor: BackgroundServiceDescriptor) {
         let service = SMAppService.agent(plistName: descriptor.plistName)
-        guard service.status == .notRegistered else { return }
+        guard service.status == .notRegistered || service.status == .notFound else { return }
         do {
             try service.register()
             registrationErrors.removeValue(forKey: descriptor.plistName)
@@ -1423,6 +1480,16 @@ final class BoundedRedactedStderrDrain {
 }
 
 final class ApplicationMigrationCoordinator {
+    private enum FreshInstallPhase {
+        case inactive
+        case registering
+        case awaitingApproval
+        case awaitingHealth
+        case registrationBlocked
+        case healthBlocked
+        case cancelling
+    }
+
     private let policy: LaunchPolicy
     private let layout: BundleLayout
     private let applicationPaths: ApplicationDataPaths
@@ -1436,6 +1503,11 @@ final class ApplicationMigrationCoordinator {
     private var pendingHealth: (transactionId: String, nonce: String)?
     private var retryAvailable = false
     private var retryAfterProcessExit = false
+    private var freshInstallPhase = FreshInstallPhase.inactive
+    private var freshInstallHealthGeneration = 0
+    private var freshInstallHostReady = false
+    private var freshInstallCaptureReady = false
+    private var freshInstallNeedsServiceReset = false
 
     var onStateChange: ((String, String?) -> Void)?
     var onNeedsHealth: (() -> Void)?
@@ -1492,6 +1564,8 @@ final class ApplicationMigrationCoordinator {
         guard retryAvailable else { return }
         retryAvailable = false
         pendingHealth = nil
+        if beginFreshInstallRecovery(action: .retry) { return }
+        freshInstallPhase = .inactive
         if migrationProcess != nil {
             retryAfterProcessExit = true
             migrationInput?.closeFile()
@@ -1604,10 +1678,51 @@ final class ApplicationMigrationCoordinator {
     }
 
     func cancel() {
+        if freshInstallPhase == .cancelling { return }
+        if beginFreshInstallRecovery(action: .cancel) { return }
         advance(event: "cancel")
     }
 
+    @discardableResult
+    private func beginFreshInstallRecovery(action: FreshInstallRecoveryAction) -> Bool {
+        guard let plan = FreshInstallRecoveryPlan.evaluate(
+            phaseActive: freshInstallPhase != .inactive,
+            needsServiceReset: freshInstallNeedsServiceReset,
+            recoveryInProgress: freshInstallPhase == .cancelling,
+            action: action
+        ) else { return false }
+        retryAvailable = false
+        freshInstallNeedsServiceReset = false
+        freshInstallPhase = .cancelling
+        onStateChange?("cancelling", action.rawValue)
+        for plistName in plan.unregister {
+            guard let service = BackgroundServiceDescriptor.bundledOwners.first(
+                where: { $0.plistName == plistName }
+            ) else { continue }
+            services.unregister(service)
+        }
+        observeFreshInstallCancellation(
+            attempt: 0,
+            retryAfterUnregistration: plan.retryAfterUnregistration
+        )
+        return true
+    }
+
     func submitHealth(host: RuntimeOwnerEvidence, capture: RuntimeOwnerEvidence) {
+        if freshInstallPhase == .awaitingHealth {
+            freshInstallHostReady = runtimeOwnerIsReady(host)
+            freshInstallCaptureReady = runtimeOwnerIsReady(capture)
+            if FreshInstallHealthDisposition.evaluate(
+                hostReady: freshInstallHostReady,
+                captureReady: freshInstallCaptureReady,
+                timedOut: false
+            ) == .committed {
+                freshInstallPhase = .inactive
+                freshInstallNeedsServiceReset = false
+                onStateChange?("committed", nil)
+            }
+            return
+        }
         guard let pendingHealth,
               host.running,
               capture.running,
@@ -1709,8 +1824,10 @@ final class ApplicationMigrationCoordinator {
         case "fresh_install":
             migrationTerminalSeen = true
             retryAvailable = false
+            freshInstallPhase = .registering
+            onStateChange?("registering", nil)
             services.registerBundledOwners(policy: policy)
-            onStateChange?("committed", nil)
+            observeFreshInstallRegistration(attempt: 0)
         case "committed":
             migrationTerminalSeen = true
             retryAvailable = false
@@ -1732,6 +1849,122 @@ final class ApplicationMigrationCoordinator {
         default:
             onStateChange?("blocked", "Unknown migration action: \(action.action)")
         }
+    }
+
+    private func observeFreshInstallRegistration(attempt: Int) {
+        guard freshInstallPhase == .registering
+                || freshInstallPhase == .awaitingApproval else { return }
+        let statuses = services.statuses()
+        let values = BackgroundServiceDescriptor.bundledOwners.map {
+            statuses[$0.plistName] ?? "notFound"
+        }
+        switch FreshInstallRegistrationDisposition.evaluate(
+            statuses: values,
+            attempt: attempt
+        ) {
+        case .verifyHealth:
+            freshInstallPhase = .awaitingHealth
+            freshInstallHostReady = false
+            freshInstallCaptureReady = false
+            freshInstallHealthGeneration += 1
+            let generation = freshInstallHealthGeneration
+            onStateChange?("verifying", nil)
+            onNeedsHealth?()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+                self?.freshInstallHealthTimedOut(generation: generation)
+            }
+        case .awaitingApproval:
+            if freshInstallPhase != .awaitingApproval {
+                freshInstallPhase = .awaitingApproval
+                onStateChange?("awaiting_approval", nil)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.observeFreshInstallRegistration(attempt: attempt)
+            }
+        case .pending:
+            freshInstallPhase = .registering
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.observeFreshInstallRegistration(attempt: attempt + 1)
+            }
+        case .blocked:
+            freshInstallPhase = .registrationBlocked
+            retryAvailable = true
+            freshInstallNeedsServiceReset = true
+            let detail = services.registrationErrors.values.sorted().first
+                ?? "Yulu could not register its bundled background services."
+            onStateChange?("registration_blocked", detail)
+        case nil:
+            freshInstallPhase = .registrationBlocked
+            retryAvailable = false
+            freshInstallNeedsServiceReset = true
+            onStateChange?("blocked", "Yulu received an invalid background service state.")
+        }
+    }
+
+    private func observeFreshInstallCancellation(
+        attempt: Int,
+        retryAfterUnregistration: Bool
+    ) {
+        guard freshInstallPhase == .cancelling else { return }
+        let statuses = services.statuses()
+        let values = BackgroundServiceDescriptor.bundledOwners.map {
+            statuses[$0.plistName] ?? "notFound"
+        }
+        if values.allSatisfy({ $0 == "notRegistered" || $0 == "notFound" }) {
+            if retryAfterUnregistration {
+                freshInstallPhase = .registering
+                onStateChange?("registering", nil)
+                services.registerBundledOwners(policy: policy)
+                observeFreshInstallRegistration(attempt: 0)
+            } else {
+                freshInstallPhase = .inactive
+                retryAvailable = true
+                onStateChange?("fresh_install_cancelled", nil)
+            }
+            return
+        }
+        if attempt < 40 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.observeFreshInstallCancellation(
+                    attempt: attempt + 1,
+                    retryAfterUnregistration: retryAfterUnregistration
+                )
+            }
+            return
+        }
+        freshInstallPhase = .inactive
+        retryAvailable = false
+        let detail = services.registrationErrors.values.sorted().first
+            ?? "Yulu could not unregister its bundled background services."
+        onStateChange?("blocked", detail)
+    }
+
+    private func freshInstallHealthTimedOut(generation: Int) {
+        guard freshInstallPhase == .awaitingHealth,
+              generation == freshInstallHealthGeneration,
+              FreshInstallHealthDisposition.evaluate(
+                hostReady: freshInstallHostReady,
+                captureReady: freshInstallCaptureReady,
+                timedOut: true
+              ) == .blocked else { return }
+        freshInstallPhase = .healthBlocked
+        retryAvailable = true
+        freshInstallNeedsServiceReset = true
+        let component: String
+        if !freshInstallHostReady && !freshInstallCaptureReady {
+            component = "Host and Capture did not become ready"
+        } else if !freshInstallHostReady {
+            component = "Host did not become ready"
+        } else {
+            component = "Capture did not become ready"
+        }
+        onStateChange?("health_blocked", "\(component) within 30 seconds.")
+    }
+
+    private func runtimeOwnerIsReady(_ evidence: RuntimeOwnerEvidence) -> Bool {
+        evidence.running
+            && evidence.ownerPID != nil
+            && evidence.codeIdentity?.accepted == true
     }
 
     private func observeServiceAction(_ action: MigrationServiceAction, attempt: Int) {
@@ -2454,6 +2687,46 @@ if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--inspect-regi
         exit(64)
     }
     try writeJSON(decision)
+    exit(0)
+}
+
+if CommandLine.arguments.count == 5,
+   CommandLine.arguments[1] == "--inspect-fresh-install-registration",
+   let attempt = Int(CommandLine.arguments[4]),
+   let disposition = FreshInstallRegistrationDisposition.evaluate(
+        statuses: [CommandLine.arguments[2], CommandLine.arguments[3]],
+        attempt: attempt
+   ) {
+    try writeJSON(disposition)
+    exit(0)
+}
+
+if CommandLine.arguments.count == 5,
+   CommandLine.arguments[1] == "--inspect-fresh-install-health",
+   let hostReady = Bool(CommandLine.arguments[2]),
+   let captureReady = Bool(CommandLine.arguments[3]),
+   let timedOut = Bool(CommandLine.arguments[4]) {
+    try writeJSON(FreshInstallHealthDisposition.evaluate(
+        hostReady: hostReady,
+        captureReady: captureReady,
+        timedOut: timedOut
+    ))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 6,
+   CommandLine.arguments[1] == "--inspect-fresh-install-recovery",
+   let phaseActive = Bool(CommandLine.arguments[2]),
+   let needsServiceReset = Bool(CommandLine.arguments[3]),
+   let recoveryInProgress = Bool(CommandLine.arguments[4]),
+   let action = FreshInstallRecoveryAction(rawValue: CommandLine.arguments[5]) {
+    let plan = FreshInstallRecoveryPlan.evaluate(
+        phaseActive: phaseActive,
+        needsServiceReset: needsServiceReset,
+        recoveryInProgress: recoveryInProgress,
+        action: action
+    )
+    try writeJSON(plan)
     exit(0)
 }
 
@@ -3644,6 +3917,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     private var serviceWindow: NSWindow?
     private let backgroundServices = BackgroundServiceRegistry()
     private var migrationCoordinator: ApplicationMigrationCoordinator?
+    private weak var cancelMigrationMenuItem: NSMenuItem?
     private weak var retryMigrationMenuItem: NSMenuItem?
     private var updateCoordinator: ApplicationUpdateCoordinator?
     #if canImport(Sparkle)
@@ -3818,6 +4092,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             keyEquivalent: ""
         )
         cancelMigration.target = self
+        cancelMigrationMenuItem = cancelMigration
         let retryMigration = components.addItem(
             withTitle: "Retry Service Migration…",
             action: #selector(onRetryMigration),
@@ -3947,8 +4222,17 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
 
     private func migrationStateChanged(_ state: String, detail: String?) {
         switch state {
+        case "registering":
+            migrationRetryAvailable = false
+            cancelMigrationMenuItem?.isEnabled = true
+            retryMigrationMenuItem?.isEnabled = false
+            window?.contentView = centeredMessage(
+                "Setting up background services…",
+                detail: "Registering the bundled Host and Capture owners."
+            )
         case "awaiting_approval":
             migrationRetryAvailable = false
+            cancelMigrationMenuItem?.isEnabled = true
             retryMigrationMenuItem?.isEnabled = false
             window?.contentView = centeredMessage(
                 "Background approval is required",
@@ -3957,39 +4241,65 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             refreshServiceWindow(show: true)
         case "verifying":
             migrationRetryAvailable = false
+            cancelMigrationMenuItem?.isEnabled = true
             retryMigrationMenuItem?.isEnabled = false
             window?.contentView = centeredMessage(
                 "Finishing migration…",
                 detail: "Verifying the bundled Host and Capture owners."
             )
+        case "cancelling":
+            migrationRetryAvailable = false
+            cancelMigrationMenuItem?.isEnabled = false
+            retryMigrationMenuItem?.isEnabled = false
+            window?.contentView = centeredMessage(
+                "Stopping background services…",
+                detail: detail == FreshInstallRecoveryAction.retry.rawValue
+                    ? "Yulu will register a fresh service set after cleanup."
+                    : "Yulu will leave both bundled services unregistered."
+            )
         case "committed":
             migrationCommitted = true
             migrationRetryAvailable = false
+            cancelMigrationMenuItem?.isEnabled = false
             retryMigrationMenuItem?.isEnabled = false
             window?.contentView = centeredMessage("Starting Yulu…", detail: "Waiting for the bundled Host.")
             configureUpdater()
             beginServicePolling()
         case "rolled_back":
             migrationRetryAvailable = true
+            cancelMigrationMenuItem?.isEnabled = false
             retryMigrationMenuItem?.isEnabled = true
-            let message = centeredMessage(
+            showMigrationRetry(
                 "Migration was cancelled",
                 detail: "The previous Yulu background services were restored."
             )
-            let button = NSButton(
-                title: "Retry Service Migration…",
-                target: self,
-                action: #selector(onRetryMigration)
+        case "fresh_install_cancelled":
+            migrationRetryAvailable = true
+            cancelMigrationMenuItem?.isEnabled = false
+            retryMigrationMenuItem?.isEnabled = true
+            showMigrationRetry(
+                "Background setup was cancelled",
+                detail: "No Yulu background service remains registered. Retry when you are ready."
             )
-            button.translatesAutoresizingMaskIntoConstraints = false
-            message.addSubview(button)
-            NSLayoutConstraint.activate([
-                button.centerXAnchor.constraint(equalTo: message.centerXAnchor),
-                button.bottomAnchor.constraint(equalTo: message.bottomAnchor, constant: -80),
-            ])
-            window?.contentView = message
+        case "registration_blocked":
+            migrationRetryAvailable = true
+            cancelMigrationMenuItem?.isEnabled = true
+            retryMigrationMenuItem?.isEnabled = true
+            showMigrationRetry(
+                "Background service registration failed",
+                detail: "\(detail ?? "Yulu could not register its bundled background services.") Retry the service setup, or open Background Services for current status."
+            )
+        case "health_blocked":
+            migrationRetryAvailable = true
+            cancelMigrationMenuItem?.isEnabled = true
+            retryMigrationMenuItem?.isEnabled = true
+            showMigrationRetry(
+                "Yulu components did not become ready",
+                detail: "\(detail ?? "The bundled services did not become ready.") Retry restarts both bundled services; Background Services shows their current status."
+            )
         case "blocked":
             migrationRetryAvailable = false
+            cancelMigrationMenuItem?.isEnabled = false
             retryMigrationMenuItem?.isEnabled = false
             window?.contentView = centeredMessage(
                 "Yulu migration needs attention",
@@ -3998,6 +4308,22 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         default:
             break
         }
+    }
+
+    private func showMigrationRetry(_ title: String, detail: String) {
+        let message = centeredMessage(title, detail: detail)
+        let button = NSButton(
+            title: "Retry Service Migration…",
+            target: self,
+            action: #selector(onRetryMigration)
+        )
+        button.translatesAutoresizingMaskIntoConstraints = false
+        message.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.centerXAnchor.constraint(equalTo: message.centerXAnchor),
+            button.bottomAnchor.constraint(equalTo: message.bottomAnchor, constant: -80),
+        ])
+        window?.contentView = message
     }
 
     private func configureUpdater() {
@@ -4147,7 +4473,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                         self.pollHost(generation: generation)
                     }
-                } else {
+                } else if self.migrationCommitted {
                     self.window?.contentView = self.centeredMessage(
                         "Yulu Host is unavailable",
                         detail: "Choose Components > Background Services for registration and approval status."

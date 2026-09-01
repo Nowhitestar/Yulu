@@ -445,7 +445,7 @@ preserved source/audit evidence, correct the blocking condition, then use
 back transaction. Do not manually edit the journal or databases, and do not
 remove the old runtime until the committed state is stable after relaunch.
 
-For the `v0.23.0-rc.7` public-DMG acceptance harness, keep the target ledger
+For the `v0.23.0-rc.8` public-DMG acceptance harness, keep the target ledger
 private (`0700` directory, exact `0600` files) and outside any snapshot rollback
 boundary. The harness is resumable after logout/login and records only bounded,
 secret-safe machine evidence; the operator performs the actual App/UI actions.

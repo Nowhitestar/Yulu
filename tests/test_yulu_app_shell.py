@@ -917,9 +917,6 @@ def test_installed_shell_uses_the_bundled_python_migration_authority_command(
     assert "JSONSerialization.data(withJSONObject: envelope)" in coordinator
     assert "migrationProcess?.terminate()" not in coordinator
     assert "migrationInput?.closeFile()" in coordinator
-    fresh_path = coordinator.split('case "fresh_install":', 1)[1].split("case ", 1)[0]
-    assert "services.registerBundledOwners(policy: policy)" in fresh_path
-    assert 'onStateChange?("committed", nil)' in fresh_path
 
 
 def test_service_state_contract_never_treats_approval_as_health_or_readiness(tmp_path: Path):
@@ -1645,7 +1642,11 @@ def test_production_application_routes_smappservice_through_the_migration_coordi
     rolled_back = application.split('case "rolled_back":', 1)[1].split(
         'case "blocked":', 1
     )[0]
-    assert 'title: "Retry Service Migration…"' in rolled_back
+    assert "showMigrationRetry(" in rolled_back
+    retry_presentation = application.split("private func showMigrationRetry", 1)[1].split(
+        "private func configureUpdater", 1
+    )[0]
+    assert 'title: "Retry Service Migration…"' in retry_presentation
     assert "migrationRetryAvailable = true" in rolled_back
 
     coordinator = source.split("final class ApplicationMigrationCoordinator", 1)[1].split(
@@ -1679,7 +1680,9 @@ def test_production_application_routes_smappservice_through_the_migration_coordi
     assert "generation == pollGeneration" in polling
 
 
-def test_registration_decision_only_mutates_not_registered_installed_services(tmp_path: Path):
+def test_registration_decision_registers_missing_or_not_registered_installed_services(
+    tmp_path: Path,
+):
     binary = tmp_path / "yulu_app"
     compile_result = subprocess.run(
         [
@@ -1717,7 +1720,11 @@ def test_registration_decision_only_mutates_not_registered_installed_services(tm
         "register": True,
         "unregister": False,
     }
-    for status in ("enabled", "requiresApproval", "notFound"):
+    assert inspect("/Applications/Yulu.app", "notFound") == {
+        "register": True,
+        "unregister": False,
+    }
+    for status in ("enabled", "requiresApproval"):
         assert inspect("/Applications/Yulu.app", status) == {
             "register": False,
             "unregister": False,
@@ -1726,6 +1733,111 @@ def test_registration_decision_only_mutates_not_registered_installed_services(tm
         "register": False,
         "unregister": False,
     }
+
+
+def test_fresh_install_registration_requires_runtime_health_and_has_a_retryable_blocker(
+    tmp_path: Path,
+):
+    binary = tmp_path / "yulu_app"
+    compile_result = subprocess.run(
+        [
+            "swiftc",
+            "-module-cache-path",
+            str(tmp_path / "swift-cache"),
+            "-o",
+            str(binary),
+            str(SCRIPTS / "yulu_app.swift"),
+            "-framework",
+            "Cocoa",
+            "-framework",
+            "WebKit",
+            "-framework",
+            "ServiceManagement",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stderr
+
+    def inspect(host: str, capture: str, attempt: int) -> str:
+        result = subprocess.run(
+            [
+                str(binary),
+                "--inspect-fresh-install-registration",
+                host,
+                capture,
+                str(attempt),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    assert inspect("notFound", "notRegistered", 0) == "pending"
+    assert inspect("enabled", "requiresApproval", 0) == "awaiting_approval"
+    assert inspect("enabled", "enabled", 0) == "verify_health"
+    assert inspect("notFound", "notRegistered", 40) == "blocked"
+
+    def inspect_health(host_ready: bool, capture_ready: bool, timed_out: bool) -> str:
+        result = subprocess.run(
+            [
+                str(binary),
+                "--inspect-fresh-install-health",
+                str(host_ready).lower(),
+                str(capture_ready).lower(),
+                str(timed_out).lower(),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    assert inspect_health(True, True, False) == "committed"
+    assert inspect_health(True, False, False) == "pending"
+    assert inspect_health(True, False, True) == "blocked"
+
+    def inspect_recovery(
+        phase_active: bool,
+        needs_reset: bool,
+        recovery_in_progress: bool,
+        action: str,
+    ) -> dict | None:
+        result = subprocess.run(
+            [
+                str(binary),
+                "--inspect-fresh-install-recovery",
+                str(phase_active).lower(),
+                str(needs_reset).lower(),
+                str(recovery_in_progress).lower(),
+                action,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    cancel = inspect_recovery(False, True, False, "cancel")
+    retry = inspect_recovery(False, True, False, "retry")
+    active_cancel = inspect_recovery(True, False, False, "cancel")
+    assert inspect_recovery(True, False, True, "retry") is None
+    assert inspect_recovery(True, False, True, "cancel") is None
+    expected_services = {"com.yulu.ui.plist", "com.yulu.audiodaemon.plist"}
+    assert set(cancel["unregister"]) == expected_services
+    assert cancel["retryAfterUnregistration"] is False
+    assert set(retry["unregister"]) == expected_services
+    assert retry["retryAfterUnregistration"] is True
+    assert set(active_cancel["unregister"]) == expected_services
+    assert active_cancel["retryAfterUnregistration"] is False
 
 
 def test_native_background_services_view_reports_both_owner_states(tmp_path: Path):
