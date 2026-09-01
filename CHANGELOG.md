@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.7](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.6...v0.23.0-rc.7) (2026-09-01)
+
+
+### Bug Fixes
+
+* accept inert macOS pip3 shim ([#170](https://github.com/Nowhitestar/Yulu/issues/170)) ([34471cf](https://github.com/Nowhitestar/Yulu/commit/34471cfd41468d30d349f353aae22ba7485c4c2c))
+
 ## [0.23.0-rc.6](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.5...v0.23.0-rc.6) (2026-09-01)
 
 
