@@ -87,8 +87,8 @@ if [[ "$POLICY_TEST" -eq 1 ]]; then EXPECTED_BUILD_MODE="policy-test"; else EXPE
 [[ "$HARNESS_BUILD_MODE" == "$EXPECTED_BUILD_MODE" ]] || fail "harness build mode does not match the execution path"
 
 [[ "$SCENARIO" == "fresh" || "$SCENARIO" == "upgrade" ]] || fail "scenario must be fresh or upgrade"
+[[ "$TAG" == "v0.23.0-rc.10" ]] || fail "acceptance is pinned to v0.23.0-rc.10"
 if [[ "$SCENARIO" == "upgrade" ]]; then
-    [[ "$TAG" == "v0.23.0-rc.9" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.9"
     [[ "$UPGRADE_JOURNEY" == "upgrade-success" || "$UPGRADE_JOURNEY" == "upgrade-cancel-retry" ]] || fail "upgrade journey is invalid"
     [[ "$MIGRATION_BEFORE" == /* && -f "$MIGRATION_BEFORE" && ! -L "$MIGRATION_BEFORE" ]] ||
         fail "upgrade requires absolute regular migration-before evidence"

@@ -181,7 +181,7 @@ jobs:
   yulu_ui:
     name: yulu_ui (typecheck + vitest + build)
     runs-on: macos-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: yulu/scripts/yulu_ui

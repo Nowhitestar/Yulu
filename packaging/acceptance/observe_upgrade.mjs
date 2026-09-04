@@ -12,7 +12,9 @@ import {
 import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const CURRENT_TAG = "v0.23.0-rc.9";
+const CURRENT_TAG = "v0.23.0-rc.10";
+const CURRENT_VERSION = CURRENT_TAG.slice(1);
+const CURRENT_SHORT_VERSION = CURRENT_VERSION.split("-", 1)[0];
 const LEGACY_TAG = "v0.22.2";
 const LEGACY_COMMIT = "2d01fa2989c1a9ae1a95266438bb278c72fac8c3";
 const FORMAL_NODE = "/Applications/Yulu.app/Contents/Resources/runtime/bin/node";
@@ -107,7 +109,7 @@ for (let index = 2; index < process.argv.length; index += 1) {
 }
 
 if (!MODES.has(options.mode)) fail("mode is invalid");
-if (options.releaseTag !== CURRENT_TAG) fail("upgrade acceptance is pinned to v0.23.0-rc.9");
+if (options.releaseTag !== CURRENT_TAG) fail("upgrade acceptance is pinned to v0.23.0-rc.10");
 if (!isSha256(options.snapshotWitnessSha256)) fail("operator snapshot witness hash is invalid");
 const needsPrior = new Set(["committed", "committed_stable", "rolled_back_stable", "retry_awaiting_approval"]);
 if (needsPrior.has(options.mode) !== Boolean(options.priorEvidence)) {
@@ -307,7 +309,7 @@ const expectedBundleClassification = options.policyTest ? "harness_policy_test" 
 if (
   bundle.schema !== 1 || bundle.classification !== expectedBundleClassification ||
   bundle.formalAcceptance !== false || bundle.status !== "matched" ||
-  bundle.release?.shortVersion !== CURRENT_TAG.slice(1) || bundle.release?.releaseVersion !== CURRENT_TAG.slice(1) ||
+  bundle.release?.shortVersion !== CURRENT_SHORT_VERSION || bundle.release?.releaseVersion !== CURRENT_VERSION ||
   !isSha256(bundle.contents?.sha256) || !isSha256(bundle.runtimeInventory?.sha256)
 ) fail("installed App is not identical to the mounted public DMG App");
 
