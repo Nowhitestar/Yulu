@@ -427,6 +427,10 @@ curl -fsS http://127.0.0.1:7777/healthz
 
 Expected behavior:
 
+- an enabled/disabled override retained by `launchd` after service
+  unregistration does not by itself trigger legacy migration when no legacy
+  data root, allowlisted LaunchAgent plist, or loaded legacy job remains;
+  unreadable or unexpected `launchctl` observations still fail closed;
 - retired services are unloaded and their plist files removed;
 - retired active config keys are copied to private timestamped archives before
   removal;

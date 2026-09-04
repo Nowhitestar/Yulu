@@ -1402,15 +1402,11 @@ def legacy_install_present(
         pass
 
     uid = os.geteuid()
-    disabled = launchctl(["print-disabled", f"gui/{uid}"])
-    if getattr(disabled, "returncode", 1) != 0:
+    disabled_state = launchctl(["print-disabled", f"gui/{uid}"])
+    if getattr(disabled_state, "returncode", 1) != 0:
         return True
-    disabled_output = str(getattr(disabled, "stdout", ""))
-    if any(
-        re.search(rf'"{re.escape(label)}"\s*=>', disabled_output)
-        for label in LEGACY_JOB_LABELS
-    ):
-        return True
+    # launchd keeps enabled/disabled overrides after a service is unregistered.
+    # Those historical keys alone do not represent a runnable legacy install.
     for label in LEGACY_JOB_LABELS:
         observed = launchctl(["print", f"gui/{uid}/{label}"])
         returncode = int(getattr(observed, "returncode", 1))

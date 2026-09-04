@@ -276,6 +276,94 @@ def test_empty_home_takes_fresh_install_path_without_any_migration_mutation(
     assert not agents.exists()
 
 
+def test_disabled_state_residue_without_legacy_artifacts_is_fresh_install(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import (
+        LEGACY_JOB_LABELS,
+        MigrationPaths,
+        run_migration_session,
+    )
+
+    home = tmp_path / "empty-home"
+    durable = home / "Library/Application Support/Yulu"
+    cache = home / "Library/Caches/Yulu"
+    legacy = home / ".config/yulu"
+    agents = home / "Library/LaunchAgents"
+    output = io.BytesIO()
+    commands = []
+
+    def launchctl(arguments):
+        commands.append(arguments)
+        if arguments[0] == "print-disabled":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=(
+                    'disabled services = {\n'
+                    '"com.yulu.ui" => false\n'
+                    '"com.yulu.audiodaemon" => true\n'
+                    "}"
+                ),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=113, stdout="", stderr="")
+
+    result = run_migration_session(
+        paths=MigrationPaths(durable_root=durable, cache_root=cache),
+        home_dir=home,
+        legacy_root=legacy,
+        launch_agents_dir=agents,
+        archive_dir=durable / "application-migration/rollback/LaunchAgents",
+        legacy_capture_socket=legacy / "audio_daemon.sock",
+        node_executable=tmp_path / "missing-node",
+        server_js=tmp_path / "missing-server.js",
+        launchctl=launchctl,
+        input_stream=io.BytesIO(),
+        output_stream=output,
+    )
+
+    assert result == 0
+    assert json.loads(output.getvalue()) == {"action": "fresh_install"}
+    assert commands == [
+        ["print-disabled", f"gui/{os.geteuid()}"],
+        *[
+            ["print", f"gui/{os.geteuid()}/{label}"]
+            for label in LEGACY_JOB_LABELS
+        ],
+    ]
+    assert not home.exists()
+    assert not durable.exists()
+    assert not cache.exists()
+    assert not legacy.exists()
+    assert not agents.exists()
+
+
+def test_loaded_legacy_job_without_files_still_requires_migration(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import LEGACY_JOB_LABELS, legacy_install_present
+
+    loaded_label = LEGACY_JOB_LABELS[0]
+
+    def launchctl(arguments):
+        if arguments[0] == "print-disabled":
+            return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        label = arguments[-1].rsplit("/", 1)[-1]
+        return SimpleNamespace(
+            returncode=0 if label == loaded_label else 113,
+            stdout="service" if label == loaded_label else "",
+            stderr="",
+        )
+
+    assert legacy_install_present(
+        legacy_root=tmp_path / "missing-legacy",
+        launch_agents_dir=tmp_path / "missing-launch-agents",
+        launchctl=launchctl,
+    )
+
+
 def test_python_session_stdin_eof_compensates_before_releasing_attempt_lock(
     tmp_path, monkeypatch
 ):
