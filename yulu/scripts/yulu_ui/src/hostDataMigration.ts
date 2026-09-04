@@ -5,6 +5,7 @@ import {
   constants,
   fchmodSync,
   fstatSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -16,6 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { defaultYuluConfig } from "./config.js";
 
 interface HostDataPaths {
   durableDataDir: string;
@@ -328,6 +330,54 @@ function copyPrivateFileIfMissing(
     setPrivateFile(destination, destinationRoot, `standard ${label}`);
   } finally {
     rmSync(ioPath(destinationRoot, staging), { force: true });
+  }
+}
+
+function createDefaultConfigIfMissing(
+  destination: string,
+  destinationRoot: AuthorityRoot,
+): void {
+  if (assertEntry(destination, destinationRoot, "file", "standard configuration")) return;
+  ensureDirectory(dirname(destination), destinationRoot, "standard configuration parent");
+  const staging = stagingPath(destination);
+  let destinationReady = false;
+  try {
+    const content = Buffer.from(`${JSON.stringify(defaultYuluConfig(), null, 2)}\n`, "utf8");
+    writeRegularFileExclusive(
+      staging,
+      content,
+      destinationRoot,
+      0o600,
+      "staged default configuration",
+    );
+    assertEntry(
+      staging,
+      destinationRoot,
+      "file",
+      "staged default configuration",
+    );
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        // A hard link is one atomic create-if-absent operation. Unlike rename,
+        // it cannot replace a configuration that appears after the first check.
+        linkSync(ioPath(destinationRoot, staging), ioPath(destinationRoot, destination));
+        destinationReady = true;
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (assertEntry(destination, destinationRoot, "file", "standard configuration")) {
+          destinationReady = true;
+          return;
+        }
+      }
+    }
+    throw unsafeAuthority("standard configuration");
+  } finally {
+    try {
+      rmSync(ioPath(destinationRoot, staging), { force: true });
+    } catch (error) {
+      if (!destinationReady) throw error;
+    }
   }
 }
 
@@ -671,6 +721,7 @@ export async function prepareHostDurableData(paths: HostDataPaths): Promise<void
       authority.durable,
       "local caption runtime",
     );
+    createDefaultConfigIfMissing(paths.configFile, authority.durable);
   } finally {
     try {
       process.chdir(originalCwd);

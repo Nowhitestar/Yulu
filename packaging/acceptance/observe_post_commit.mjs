@@ -5,7 +5,7 @@ import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const RELEASE_TAG = "v0.23.0-rc.8";
+const RELEASE_TAG = "v0.23.0-rc.9";
 const FORMAL_APP = "/Applications/Yulu.app";
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 const MAX_COMMAND_BYTES = 1024 * 1024;
@@ -81,7 +81,7 @@ const CHECKPOINTS = new Set([
 ]);
 if (!CHECKPOINTS.has(options.checkpoint)) fail("checkpoint is invalid");
 if (!new Set(["fresh", "upgrade"]).has(options.scenario)) fail("scenario is invalid");
-if (options.releaseTag !== RELEASE_TAG) fail("post-commit acceptance is pinned to v0.23.0-rc.8");
+if (options.releaseTag !== RELEASE_TAG) fail("post-commit acceptance is pinned to v0.23.0-rc.9");
 const needsPrior = options.checkpoint !== "post-commit-baseline";
 if (needsPrior !== Boolean(options.priorEvidence)) fail("checkpoint prior-evidence binding is invalid");
 if ((options.checkpoint === "post-commit-restart-login") !== options.operatorRestartLoginConfirmed) {

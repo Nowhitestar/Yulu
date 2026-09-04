@@ -112,6 +112,7 @@ export const ConfigSchema = z.object({
     silence_threshold: z.number().default(0.01),
     silence_duration_sec: z.number().default(300),
     backend: z.string().optional(),
+    half_duplex: z.boolean().optional(),
   }).default({}),
   transcription: z.object({
     engine: z.enum(["local", "xai"]).default("local"),
@@ -142,6 +143,38 @@ export const ConfigSchema = z.object({
 }).passthrough();
 
 export type YuluConfig = z.infer<typeof ConfigSchema>;
+
+export function defaultYuluConfig(): YuluConfig {
+  return ConfigSchema.parse({
+    audio: {
+      backend: "daemon",
+      mic_device: "",
+      system_audio_device: null,
+      output_dir: "~/Movies/Yulu",
+      silence_threshold: 0.01,
+      silence_duration_sec: 300,
+      half_duplex: true,
+    },
+    transcription: {},
+    intelligence: {},
+    agent_pipeline: {},
+    llm: {
+      enabled: false,
+      command: null,
+      agent: {},
+    },
+    agent_console: {},
+    status_agent: {},
+    calendars: [{ type: "macos", enabled: true, watch_calendars: [] }],
+    meeting_detection: {
+      enabled: true,
+      interval_sec: 10,
+      stable_sec: 15,
+      prompt_cooldown_sec: 1800,
+    },
+    ui: {},
+  });
+}
 
 // RESTART_MAP removed — reload classification is now registry-driven via settingsRegistry.ts
 

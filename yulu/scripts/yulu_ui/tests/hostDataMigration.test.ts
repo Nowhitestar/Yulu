@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { HostStore } from "../src/hostStore.js";
@@ -22,6 +23,10 @@ import { resolveHostPaths } from "../src/paths.js";
 import { startServer, type RunningServer } from "../src/server.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const mutableFs = createRequire(import.meta.url)("node:fs") as {
+  linkSync: typeof import("node:fs").linkSync;
+  writeFileSync: typeof import("node:fs").writeFileSync;
+};
 const roots: string[] = [];
 const originalPort = process.env.YULU_UI_PORT;
 const originalDevelopmentSmoke = process.env.YULU_DEV_SMOKE;
@@ -36,6 +41,117 @@ afterEach(() => {
 });
 
 describe("Host durable-data migration", () => {
+  it("starts a fresh Host by creating one private default config", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-host-fresh-config-"));
+    roots.push(root);
+    const paths = resolveHostPaths({ homeDir: root, environment: {} });
+    process.env.YULU_UI_PORT = "0";
+    process.env.YULU_DEV_SMOKE = "1";
+    let server: RunningServer | null = null;
+
+    try {
+      server = await startServer(paths);
+
+      expect(existsSync(paths.configFile)).toBe(true);
+      expect(statSync(paths.configFile).mode & 0o777).toBe(0o600);
+      const persisted = JSON.parse(readFileSync(paths.configFile, "utf8"));
+      expect(persisted).toMatchObject({
+        audio: {
+          backend: "daemon",
+          mic_device: "",
+          output_dir: "~/Movies/Yulu",
+          half_duplex: true,
+        },
+        transcription: { engine: "local", language: "zh" },
+        intelligence: {
+          summary: { provider: "agent", model: "runtime-managed" },
+          conversation: { provider: "agent", model: "runtime-managed" },
+        },
+        agent_pipeline: { auto_process_recordings: true },
+        llm: { enabled: false, command: null, agent: { provider: "auto" } },
+        calendars: [{ type: "macos", enabled: true, watch_calendars: [] }],
+        meeting_detection: {
+          enabled: true,
+          interval_sec: 10,
+          stable_sec: 15,
+          prompt_cooldown_sec: 1800,
+        },
+      });
+
+      const response = await fetch(`http://127.0.0.1:${server.address.port}/healthz`);
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ status: "ok" });
+
+      await server.close();
+      server = null;
+      persisted.audio.output_dir = "~/Movies/Custom";
+      const customized = `${JSON.stringify(persisted, null, 2)}\n`;
+      writeFileSync(paths.configFile, customized);
+      await prepareHostDurableData(paths);
+      expect(readFileSync(paths.configFile, "utf8")).toBe(customized);
+      server = await startServer(paths);
+      expect(readFileSync(paths.configFile, "utf8")).toBe(customized);
+      const restarted = await fetch(`http://127.0.0.1:${server.address.port}/healthz`);
+      expect(restarted.status).toBe(200);
+    } finally {
+      await server?.close();
+    }
+  });
+
+  it("does not replace a config created during exclusive default publication", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-host-config-race-"));
+    roots.push(root);
+    const paths = resolveHostPaths({ homeDir: root, environment: {} });
+    const competing = `${JSON.stringify({ audio: { output_dir: "~/Movies/Competing" } }, null, 2)}\n`;
+    const originalLinkSync = mutableFs.linkSync;
+
+    try {
+      mutableFs.linkSync = ((_source, destination) => {
+        mutableFs.writeFileSync(destination, competing, { mode: 0o600 });
+        throw Object.assign(new Error("destination exists"), { code: "EEXIST" });
+      }) as typeof mutableFs.linkSync;
+      syncBuiltinESMExports();
+
+      await prepareHostDurableData(paths);
+
+      expect(readFileSync(paths.configFile, "utf8")).toBe(competing);
+    } finally {
+      mutableFs.linkSync = originalLinkSync;
+      syncBuiltinESMExports();
+    }
+  });
+
+  it("retries when a competing config disappears before it can be accepted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-host-config-vanished-race-"));
+    roots.push(root);
+    const paths = resolveHostPaths({ homeDir: root, environment: {} });
+    const originalLinkSync = mutableFs.linkSync;
+    let attempts = 0;
+
+    try {
+      mutableFs.linkSync = ((source, destination) => {
+        attempts += 1;
+        if (attempts === 1) {
+          mutableFs.writeFileSync(destination, "{}\n", { mode: 0o600 });
+          rmSync(destination);
+          throw Object.assign(new Error("destination existed and vanished"), { code: "EEXIST" });
+        }
+        originalLinkSync(source, destination);
+      }) as typeof mutableFs.linkSync;
+      syncBuiltinESMExports();
+
+      await prepareHostDurableData(paths);
+
+      expect(attempts).toBe(2);
+      expect(JSON.parse(readFileSync(paths.configFile, "utf8"))).toMatchObject({
+        audio: { output_dir: "~/Movies/Yulu" },
+      });
+    } finally {
+      mutableFs.linkSync = originalLinkSync;
+      syncBuiltinESMExports();
+    }
+  });
+
   it("rejects standard file and directory symlink authorities", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-host-authority-symlinks-"));
     roots.push(root);
@@ -187,6 +303,7 @@ describe("Host durable-data migration", () => {
     expect((error as Error).message).toBe("MCP token migration failed");
     expect((error as Error).message).not.toContain(paths.mcpTokenJson);
     expect((error as Error).message).not.toContain(paths.legacyReadOnlyDataDir);
+    expect(existsSync(paths.configFile)).toBe(false);
   });
 
   it("starts from a live legacy SQLite snapshot and writes only standard durable state", async () => {

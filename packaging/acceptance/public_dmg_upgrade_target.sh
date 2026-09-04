@@ -67,7 +67,7 @@ fi
 
 [[ "$JOURNEY" == "upgrade-success" || "$JOURNEY" == "upgrade-cancel-retry" ]] || fail "upgrade journey is invalid"
 [[ "$RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || fail "run-id contains unsafe characters"
-[[ "$RELEASE_TAG" == "v0.23.0-rc.8" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.8"
+[[ "$RELEASE_TAG" == "v0.23.0-rc.9" ]] || fail "upgrade acceptance is pinned to v0.23.0-rc.9"
 for input in "$MIGRATION_BEFORE" "$CURRENT_PREFLIGHT" "$BUNDLE_EVIDENCE"; do
     [[ "$input" == /* && -f "$input" && ! -L "$input" ]] || fail "bound input must be an absolute regular non-symlink file"
 done

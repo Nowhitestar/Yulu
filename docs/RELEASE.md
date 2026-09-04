@@ -84,16 +84,16 @@ Required assets, exactly:
 - `checksums.txt`
 
 The current release line uses release-please's prerelease strategy. The Phase 13
-fresh-install Service Management repair includes `Release-As: 0.23.0-rc.8`, so the rolling
-Release PR advances the accepted line to RC8 instead of opening a new minor
+fresh-install Host bootstrap repair includes `Release-As: 0.23.0-rc.9`, so the rolling
+Release PR advances the accepted line to RC9 instead of opening a new minor
 line. Tags with a prerelease suffix are published as prereleases.
 
 ## Manual escape hatch
 
 `.github/workflows/release.yml` still accepts a manually pushed `v*.*.*` tag for
 an emergency. The tag must match `VERSION`, with one fail-closed exception:
-`v0.23.0` may be pushed only while `VERSION` is `0.23.0-rc.8` and the local
-`v0.23.0-rc.8` tag resolves to the same source commit. That stable promotion uses
+`v0.23.0` may be pushed only while `VERSION` is `0.23.0-rc.9` and the local
+`v0.23.0-rc.9` tag resolves to the same source commit. That stable promotion uses
 the odd build number immediately after the RC's even build number; the next
 source commit receives the next even build number, so Sparkle ordering remains
 strict. All other mismatches fail before packaging. Use the
@@ -119,9 +119,9 @@ This creates an unsigned packaging-only DMG. Developer ID signing, App and DMG
 notarization/stapling, Gatekeeper checks, and Sparkle signature verification run
 only in the credentialed release workflow.
 
-## RC8 public-DMG acceptance controller
+## RC9 public-DMG acceptance controller
 
-The `v0.23.0-rc.8` public-DMG harness is a clean-target collector, not an
+The `v0.23.0-rc.9` public-DMG harness is a clean-target collector, not an
 acceptance authority. Before transfer, the release controller runs
 `make public-dmg-acceptance-policy` and builds the deterministic harness with
 `packaging/acceptance/build_public_dmg_harness.sh`. Transfer that verified
@@ -157,15 +157,15 @@ On the controller, use the exact returned ledger and public asset bytes:
 python3 packaging/acceptance/validate_returned_public_dmg.py \
   --scenario fresh \
   --ledger /private/path/to/returned-ledger \
-  --tag v0.23.0-rc.8 \
-  --dmg /private/path/to/yulu-macos-arm64-v0.23.0-rc.8.dmg \
+  --tag v0.23.0-rc.9 \
+  --dmg /private/path/to/yulu-macos-arm64-v0.23.0-rc.9.dmg \
   --checksums /private/path/to/checksums.txt
 ```
 
 For upgrade, add `--journey upgrade-success` or
 `--journey upgrade-cancel-retry`. The controller requires the exact ledger
 allowlist, `0700`/`0600` modes, completion and cross-file SHA bindings, the local
-`refs/tags/v0.23.0-rc.8` commit, the public DMG/checksum bytes, bundle/signature
+`refs/tags/v0.23.0-rc.9` commit, the public DMG/checksum bytes, bundle/signature
 immutability, final restart/login and no-update observations, and committed
 migration lineage. It also revalidates the bounded product semantics instead of
 trusting completion labels: Core Activation artifacts and completed task,
@@ -193,6 +193,6 @@ The validator returns `status: validated` and always
 cannot claim real UI, quit/relaunch, logout/login, public-network, notarization,
 or clean-machine completion. A human may make the release acceptance decision
 only after private-ledger review in #170. RC-to-stable update behavior belongs to
-#171; do not substitute an RC7-to-RC8 update for either the required v0.22.2
-migration or the RC8-to-stable journey. Keep #169's broader release guidance
-separate from this RC8 evidence procedure.
+#171; do not substitute an RC8-to-RC9 update for either the required v0.22.2
+migration or the RC9-to-stable journey. Keep #169's broader release guidance
+separate from this RC9 evidence procedure.

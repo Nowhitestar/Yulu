@@ -80,7 +80,7 @@
     "auto_process_recordings": true
   },
   "llm": {
-    "enabled": true,
+    "enabled": false,
     "command": null,
     "agent": {
       "provider": "auto",

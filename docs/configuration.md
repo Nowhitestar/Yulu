@@ -46,7 +46,7 @@ capability silently falls back to another provider or model.
     "auto_process_recordings": true
   },
   "llm": {
-    "enabled": true,
+    "enabled": false,
     "command": null,
     "agent": {
       "provider": "auto"
@@ -243,7 +243,7 @@ pinned connection, provider, model, and native session identity.
 
 | Field | Default | Meaning |
 |---|---:|---|
-| `enabled` | `true` | Enable the general Agent used by interactive conversations. This does not disable the selected Yulu audio engine. |
+| `enabled` | `false` | Keep the retired general-Agent path disabled. Current conversations use the explicit `intelligence.conversation` selection. |
 | `command` | `null` | Optional explicit general-Agent argv. No shell interpolation is performed. |
 | `agent.provider` | `"auto"` | Legacy general-Agent hint. Supported current connections are selected explicitly in AI Providers; Hermes and OpenClaw remain optional Conversation-only providers. |
 
@@ -254,7 +254,7 @@ committed while its summary task waits in `awaiting_provider`.
 
 To pause automatic recording processing, set `agent_pipeline.enabled=false`.
 Realtime captions, transcription, and dictation remain controlled by the selected
-audio engine. `llm.enabled=false` only disables general conversation work.
+audio engine. `llm.enabled` controls only the legacy general-Agent path.
 
 `agent_console.plugins.added` is a presentation filter for capabilities shown in
 Agent Console. `agent_console.destinations` stores human-readable destination
