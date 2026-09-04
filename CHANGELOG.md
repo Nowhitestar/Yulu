@@ -4,6 +4,14 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.10](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.9...v0.23.0-rc.10) (2026-09-04)
+
+
+### Bug Fixes
+
+* **app:** ignore stale launchd override residue ([#170](https://github.com/Nowhitestar/Yulu/issues/170)) ([#178](https://github.com/Nowhitestar/Yulu/issues/178)) ([c2491f8](https://github.com/Nowhitestar/Yulu/commit/c2491f8d3596ac9d1e7860dce2f59332a257b6a4))
+* **release:** bind RC10 acceptance gates ([#180](https://github.com/Nowhitestar/Yulu/issues/180)) ([cc6eb06](https://github.com/Nowhitestar/Yulu/commit/cc6eb0662301d42e153a3273d547eefa8554f695)), closes [#170](https://github.com/Nowhitestar/Yulu/issues/170)
+
 ## [0.23.0-rc.9](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.8...v0.23.0-rc.9) (2026-09-04)
 
 
