@@ -19,6 +19,10 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+if __name__ == "__main__":
+    # Isolated Python omits the script directory; trust only our bundled siblings.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from application_paths import DURABLE_DATA_DIR, MODELS_DIR
 
 
