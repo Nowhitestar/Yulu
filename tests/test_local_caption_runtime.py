@@ -1,11 +1,49 @@
 import hashlib
 import json
+import os
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yulu.scripts.local_caption_runtime as runtime
+
+
+def test_cli_status_starts_isolated_without_loading_cwd_or_pythonpath_modules(tmp_path):
+    untrusted = tmp_path / "untrusted"
+    untrusted.mkdir()
+    marker = tmp_path / "untrusted-module-ran"
+    for name in ("application_paths.py", "sitecustomize.py", "json.py"):
+        (untrusted / name).write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('unsafe')\n",
+            encoding="utf-8",
+        )
+    config_dir = tmp_path / "Application Support" / "Yulu"
+    models_dir = config_dir / "Models"
+
+    result = subprocess.run(
+        [
+            sys.executable, "-I", "-S", "-B", str(Path(runtime.__file__).resolve()),
+            "status", "--config-dir", str(config_dir), "--models-dir", str(models_dir),
+        ],
+        cwd=untrusted,
+        env={**os.environ, "PYTHONPATH": str(untrusted)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    event = json.loads(result.stdout)
+    assert event["event"] == "result"
+    assert event["ok"] is True
+    assert event["status"]["installed"] is False
+    assert event["status"]["modelDir"] == str(models_dir / runtime.MODEL_NAME)
+    assert not marker.exists()
+    assert not config_dir.exists()
 
 
 def create_complete_runtime(config_dir: Path):

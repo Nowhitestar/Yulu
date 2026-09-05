@@ -279,6 +279,8 @@ if [[ "${YULU_SKIP_RUNTIME_EXECUTION:-0}" != "1" ]]; then
   PYTHON_PROBE="$(PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -B -I -c 'import platform,sys; print(platform.machine()+"|"+platform.python_version()+"|"+sys.prefix)')"
   [[ "$PYTHON_PROBE" == "arm64|$PYTHON_VERSION|$RUNTIME/python" ]] || \
     fail "bundled Python identity does not match runtime inventory: $PYTHON_PROBE"
+  "$PYTHON" -I -S -B "$RUNTIME/yulu/scripts/local_caption_runtime.py" --help >/dev/null || \
+    fail "bundled Python cannot start the local caption installer in isolated mode"
   set +o pipefail
   FFMPEG_FIRST_LINE="$("$FFMPEG" -hide_banner -version 2>&1 | head -1)"
   set -o pipefail

@@ -1231,6 +1231,11 @@ def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(tmp
     write(
         runtime / "python/bin/python3",
         b"#!/usr/bin/env bash\n"
+        b"if [[ ${4:-} == */local_caption_runtime.py ]]; then\n"
+        b"  [[ $1 == -I && $2 == -S && $3 == -B && ${5:-} == --help ]] || exit 74\n"
+        b"  [[ ${YULU_FIXTURE_CAPTION_START_FAIL:-0} != 1 ]] || exit 73\n"
+        b"  exit 0\n"
+        b"fi\n"
         b"prefix=$(cd \"$(dirname \"$0\")/..\" && pwd)\n"
         b"echo \"arm64|test-python|$prefix\"\n",
         executable=True,
@@ -1265,3 +1270,14 @@ def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(tmp
     )
     assert abi_failure.returncode != 0
     assert "cannot load the bundled better-sqlite3 native addon" in abi_failure.stderr
+
+    caption_failure = subprocess.run(
+        ["bash", str(VERIFY), str(app)],
+        env={**os.environ, **tools, "YULU_FIXTURE_CAPTION_START_FAIL": "1"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert caption_failure.returncode != 0
+    assert "cannot start the local caption installer in isolated mode" in caption_failure.stderr
