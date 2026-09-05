@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.11](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.10...v0.23.0-rc.11) (2026-09-05)
+
+
+### Bug Fixes
+
+* **runtime:** restore isolated local caption installer startup ([#181](https://github.com/Nowhitestar/Yulu/issues/181)) ([9885747](https://github.com/Nowhitestar/Yulu/commit/98857476db8b9d7c31b0c95db26a9b47a45e438a))
+
 ## [0.23.0-rc.10](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.9...v0.23.0-rc.10) (2026-09-04)
 
 
