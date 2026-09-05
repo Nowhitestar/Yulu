@@ -18,13 +18,13 @@ def git(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def make_release_repository(tmp_path: Path) -> Path:
     repository = tmp_path / "release-repository"
     repository.mkdir()
-    (repository / "VERSION").write_text("0.23.0-rc.10\n", encoding="utf-8")
+    (repository / "VERSION").write_text("0.23.0-rc.11\n", encoding="utf-8")
     assert git(repository, "init", "-q").returncode == 0
     assert git(repository, "config", "user.email", "release-test@example.invalid").returncode == 0
     assert git(repository, "config", "user.name", "Release Test").returncode == 0
     assert git(repository, "add", "VERSION").returncode == 0
-    assert git(repository, "commit", "-qm", "chore: release 0.23.0-rc.10").returncode == 0
-    assert git(repository, "tag", "v0.23.0-rc.10").returncode == 0
+    assert git(repository, "commit", "-qm", "chore: release 0.23.0-rc.11").returncode == 0
+    assert git(repository, "tag", "v0.23.0-rc.11").returncode == 0
     assert git(repository, "tag", "v0.23.0").returncode == 0
     return repository
 
@@ -45,10 +45,10 @@ def resolve(repository: Path, tag: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_release_identity_accepts_rc10_and_reserves_the_next_build_for_stable(tmp_path: Path):
+def test_release_identity_accepts_rc11_and_reserves_the_next_build_for_stable(tmp_path: Path):
     repository = make_release_repository(tmp_path)
 
-    rc = resolve(repository, "v0.23.0-rc.10")
+    rc = resolve(repository, "v0.23.0-rc.11")
     stable = resolve(repository, "v0.23.0")
 
     assert rc.returncode == 0, rc.stderr
@@ -56,7 +56,7 @@ def test_release_identity_accepts_rc10_and_reserves_the_next_build_for_stable(tm
     assert json.loads(rc.stdout) == {
         "buildNumber": "2",
         "bundleShortVersion": "0.23.0",
-        "releaseVersion": "0.23.0-rc.10",
+        "releaseVersion": "0.23.0-rc.11",
         "stablePromotion": False,
     }
     assert json.loads(stable.stdout) == {
@@ -82,19 +82,19 @@ def test_stable_promotion_rejects_a_different_source_commit(tmp_path: Path):
 
 def test_release_identity_rejects_missing_and_mismatched_requested_tags(tmp_path: Path):
     repository = make_release_repository(tmp_path)
-    assert git(repository, "tag", "-d", "v0.23.0-rc.10").returncode == 0
+    assert git(repository, "tag", "-d", "v0.23.0-rc.11").returncode == 0
 
-    missing = resolve(repository, "v0.23.0-rc.10")
+    missing = resolve(repository, "v0.23.0-rc.11")
 
     assert missing.returncode != 0
     assert "unknown revision" in missing.stderr.lower() or "needed a single revision" in missing.stderr.lower()
 
-    assert git(repository, "tag", "v0.23.0-rc.10").returncode == 0
+    assert git(repository, "tag", "v0.23.0-rc.11").returncode == 0
     (repository / "after-tag.txt").write_text("new source\n", encoding="utf-8")
     assert git(repository, "add", "after-tag.txt").returncode == 0
     assert git(repository, "commit", "-qm", "fix: change after tag").returncode == 0
 
-    mismatched = resolve(repository, "v0.23.0-rc.10")
+    mismatched = resolve(repository, "v0.23.0-rc.11")
 
     assert mismatched.returncode != 0
     assert "current release commit" in mismatched.stderr
@@ -174,7 +174,7 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
         encoding="utf-8"
     )
     release_notes = (
-        (ROOT / "docs" / "release-notes" / "v0.23.0-rc.10.md").read_text(encoding="utf-8")
+        (ROOT / "docs" / "release-notes" / "v0.23.0-rc.11.md").read_text(encoding="utf-8")
         + (ROOT / "docs" / "release-notes" / "v0.23.0.md").read_text(encoding="utf-8")
     )
 
@@ -191,7 +191,7 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
     assert "Hermes 租约任务规则" not in skill
     assert "手动 Share Action" in skill
     assert "Official GitHub Release DMG" in issue_template
-    assert 'placeholder: "Yulu 0.23.0-rc.10"' in issue_template
+    assert 'placeholder: "Yulu 0.23.0-rc.11"' in issue_template
     assert "one-line installer" not in issue_template
     assert "compatible Hermes Agent" not in issue_template
     for guidance in (readme, readme_zh, skill):
