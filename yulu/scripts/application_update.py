@@ -184,7 +184,8 @@ def _valid_update_health(
     except ValueError:
         nonce_is_valid = False
     return (
-        host.get("hostIPCVersion") == _HOST_IPC_VERSION
+        application.get("nativeControlsReady") is True
+        and host.get("hostIPCVersion") == _HOST_IPC_VERSION
         and host.get("serviceOwner") == "com.yulu.ui"
         and host.get("portOwnerPID") == host_pid
         and nonce_is_valid

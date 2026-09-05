@@ -37,6 +37,26 @@ Host. It does not synchronously run speech or summary code in Python.
 
 ## Verify the runtime
 
+### Native recording controls in the product App
+
+The signed App includes its menu-bar controls, dictation/translation hotkeys, and
+voice-chat presentation in the visible Yulu process. It does not require a second
+StatusAgent installation. Closing the window keeps these controls running;
+quitting Yulu removes them after current native commands finish. Reopen the App
+to restore controls.
+
+`recording.state` reporting `unknown` means the native control endpoint is not
+available; it is not proof that Capture is idle. Check the installed App's build
+contract with `/Applications/Yulu.app/Contents/MacOS/yulu_app --inspect-build`:
+`nativeRecordingControls` must be true. If the shell reports an existing IPC owner,
+quit the older Yulu instance and reopen the installed App. Do not remove a live
+socket or manually install a legacy StatusAgent to repair the product bundle.
+
+Native commands use the App's sealed Python and helper paths. Updates defer while
+owned native work runs, then reject new commands until update completion. A failed
+or timed-out toggle is not replayed automatically; confirm the current recording
+state before explicitly trying again.
+
 ### 1. Native capture
 
 ```bash

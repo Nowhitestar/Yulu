@@ -98,6 +98,21 @@
   line-height: 1.5;
 }
 .pill-warn { font-size: 14px; }
+.pill-command-error {
+  position: fixed;
+  right: 18px;
+  bottom: 64px;
+  z-index: 110;
+  width: min(300px, calc(100vw - 40px));
+  padding: 10px 12px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-control);
+  background: var(--surface-solid);
+  color: var(--red);
+  font-size: 13px;
+}
+.topbar-record { position: relative; }
+.topbar-record .pill-command-error { top: calc(100% + 8px); bottom: auto; right: 0; }
 
 .topbar-record .pill {
   position: static;

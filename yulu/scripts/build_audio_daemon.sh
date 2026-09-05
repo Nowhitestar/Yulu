@@ -76,11 +76,8 @@ if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then
   )
 fi
 
-swiftc "${SWIFT_TARGET[@]}" ${SHELL_SWIFT_FLAGS[@]+"${SHELL_SWIFT_FLAGS[@]}"} -o "$SHELL_BIN" yulu_app.swift \
-  -framework Cocoa \
-  -framework ServiceManagement \
-  -framework WebKit \
-  -framework Security \
+bash "$SCRIPT_DIR/build_yulu_shell.sh" "$SHELL_BIN" \
+  ${SHELL_SWIFT_FLAGS[@]+"${SHELL_SWIFT_FLAGS[@]}"} \
   ${SPARKLE_LINK_FLAGS[@]+"${SPARKLE_LINK_FLAGS[@]}"}
 swiftc "${SWIFT_TARGET[@]}" -o "$BIN" audio_daemon.swift \
   -framework Cocoa \
@@ -95,6 +92,9 @@ swiftc "${SWIFT_TARGET[@]}" -o "$APP_CALENDAR_BIN" calendar_probe.swift \
   -framework EventKit \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist \
   -Xlinker "$SCRIPT_DIR/calendar_probe-Info.plist"
+for native_helper in recorder_status meeting_prompt; do
+  swiftc "${SWIFT_TARGET[@]}" -o "$APP/Contents/MacOS/$native_helper" "$native_helper.swift" -framework Cocoa
+done
 
 cp "$BIN" "$APP_BIN"
 # Keep the historical binary path during the pre-migration development window.
@@ -115,6 +115,9 @@ if [[ -f "$ICNS_SRC" ]]; then
   cp "$ICNS_SRC" "$RES_DIR/Yulu.icns"
 else
   echo "⚠️ assets/Yulu.icns missing — bundle will have no icon." >&2
+fi
+if [[ -d "$SCRIPT_DIR/status_agent_icons" ]]; then
+  cp "$SCRIPT_DIR/status_agent_icons/"*.png "$RES_DIR/"
 fi
 
 DEVELOPMENT_HOST_NATIVE=""
@@ -265,6 +268,10 @@ codesign --force --options runtime --timestamp \
   --sign "$IDENTITY" "$APP_KEYCHAIN_BIN"
 codesign --force --options runtime --timestamp \
   --sign "$IDENTITY" "$APP_CALENDAR_BIN"
+for native_helper in recorder_status meeting_prompt; do
+  codesign --force --options runtime --timestamp \
+    --sign "$IDENTITY" "$APP/Contents/MacOS/$native_helper"
+done
 if [[ -n "$DEVELOPMENT_HOST_NATIVE" ]]; then
   codesign --force --options runtime --timestamp \
     --sign "$IDENTITY" "$DEVELOPMENT_HOST_NATIVE"

@@ -40,20 +40,9 @@ def compile_yulu_app_inspector(tmp_path: Path) -> Path:
     binary = tmp_path / "yulu_app"
     result = subprocess.run(
         [
-            "swiftc",
-            "-module-cache-path",
-            str(tmp_path / "swift-cache"),
-            "-o",
+            "bash",
+            str(SCRIPTS / "build_yulu_shell.sh"),
             str(binary),
-            str(SCRIPTS / "yulu_app.swift"),
-            "-framework",
-            "Cocoa",
-            "-framework",
-            "WebKit",
-            "-framework",
-            "ServiceManagement",
-            "-framework",
-            "Security",
         ],
         capture_output=True,
         text=True,
@@ -92,6 +81,18 @@ def compile_audio_daemon_inspector(tmp_path: Path) -> Path:
     )
     assert result.returncode == 0, result.stderr
     return binary
+
+
+def test_application_shell_delivers_native_recording_controls(tmp_path: Path):
+    binary = compile_yulu_app_inspector(tmp_path)
+    result = subprocess.run(
+        [str(binary), "--inspect-build"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    assert json.loads(result.stdout).get("nativeRecordingControls") is True
 
 
 def inspect_recording_start_gate(binary: Path, cache_root: Path) -> str:
@@ -240,6 +241,7 @@ def test_update_health_payload_contains_concrete_runtime_attestation(
         "uid": os.geteuid(),
         "generation": "100:1",
         "executable": "/Applications/Yulu.app/Contents/MacOS/yulu_app",
+        "nativeControlsReady": True,
     }
     assert health["host"] == {
         "identifier": "node",
@@ -293,6 +295,16 @@ def test_update_health_payload_contains_concrete_runtime_attestation(
         expected={"version": "0.23.0", "build": "732"},
     )
     assert "accepted" not in json.dumps(health)
+
+    unready = subprocess.run(
+        [str(binary), "--inspect-update-health-payload", "/Applications/Yulu.app", "unavailable"],
+        capture_output=True, text=True, check=True,
+    )
+    assert not _valid_update_health(
+        json.loads(unready.stdout), expected={"version": "0.23.0", "build": "732"},
+    )
+    del health["application"]["nativeControlsReady"]
+    assert not _valid_update_health(health, expected={"version": "0.23.0", "build": "732"})
 
 
 def test_capture_start_uses_the_shared_attempt_lock_and_rejects_unsafe_entries(
@@ -2041,8 +2053,8 @@ def test_release_shell_excludes_the_development_smoke_entrypoint(tmp_path: Path)
         check=False,
     )
 
-    assert json.loads(release.stdout) == {"developmentSmoke": False}
-    assert json.loads(development.stdout) == {"developmentSmoke": True}
+    assert json.loads(release.stdout) == {"developmentSmoke": False, "nativeRecordingControls": False}
+    assert json.loads(development.stdout) == {"developmentSmoke": True, "nativeRecordingControls": False}
 
 
 def test_compiled_code_identity_attestation_binds_static_and_live_code(tmp_path: Path):

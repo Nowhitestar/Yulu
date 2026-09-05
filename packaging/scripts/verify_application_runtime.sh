@@ -34,6 +34,8 @@ REQUIRED_FILES=(
   "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist"
   "Contents/MacOS/xai_keychain"
   "Contents/MacOS/calendar_probe"
+  "Contents/MacOS/recorder_status"
+  "Contents/MacOS/meeting_prompt"
   "Contents/Helpers/YuluCapture.app/Contents/Info.plist"
   "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"
   "Contents/Resources/runtime/bin/node"
@@ -61,6 +63,8 @@ REQUIRED_MACHO=(
   "Contents/MacOS/yulu_app"
   "Contents/MacOS/xai_keychain"
   "Contents/MacOS/calendar_probe"
+  "Contents/MacOS/recorder_status"
+  "Contents/MacOS/meeting_prompt"
   "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"
   "Contents/Resources/runtime/bin/node"
   "Contents/Resources/runtime/bin/ffmpeg"
@@ -269,6 +273,10 @@ elif node_entitlement_is_true "com.apple.security.cs.disable-library-validation"
 fi
 
 if [[ "${YULU_SKIP_RUNTIME_EXECUTION:-0}" != "1" ]]; then
+  NATIVE_CONTROLS="$("$APP/Contents/MacOS/yulu_app" --inspect-build)" || \
+    fail "could not inspect bundled native recording controls"
+  python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("nativeRecordingControls") is True else 1)' \
+    "$NATIVE_CONTROLS" || fail "native recording controls are missing from the Application Runtime"
   NODE="$RUNTIME/bin/node"
   PYTHON="$RUNTIME/python/bin/python3"
   FFMPEG="$RUNTIME/bin/ffmpeg"
@@ -313,6 +321,8 @@ fixed = [
     app / "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist",
     app / "Contents/MacOS/xai_keychain",
     app / "Contents/MacOS/calendar_probe",
+    app / "Contents/MacOS/recorder_status",
+    app / "Contents/MacOS/meeting_prompt",
     app / "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
     app / "Contents/Resources/Sparkle-LICENSE.txt",
 ]
@@ -385,6 +395,8 @@ fixed = {
     "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist",
     "Contents/MacOS/xai_keychain",
     "Contents/MacOS/calendar_probe",
+    "Contents/MacOS/recorder_status",
+    "Contents/MacOS/meeting_prompt",
     "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
     "Contents/Resources/Sparkle-LICENSE.txt",
 }

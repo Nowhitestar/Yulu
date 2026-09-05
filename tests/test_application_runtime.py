@@ -45,6 +45,8 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         "MacOS/yulu_app",
         "MacOS/xai_keychain",
         "MacOS/calendar_probe",
+        "MacOS/recorder_status",
+        "MacOS/meeting_prompt",
         "Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
     ):
         write(contents / relative, executable=True)
@@ -1209,6 +1211,26 @@ def test_node24_native_addon_uses_a_release_with_environment_cleanup_support():
     assert len(native["binarySha256"]) == 64
 
 
+def test_runtime_verifier_requires_bundled_recording_presenters(tmp_path: Path):
+    app, overrides = runtime_fixture(tmp_path)
+    prepared = subprocess.run(
+        ["bash", str(PREPARE), str(app)], env={**os.environ, **overrides},
+        capture_output=True, text=True, check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    for name in ("recorder_status", "meeting_prompt"):
+        helper = app / "Contents/MacOS" / name
+        helper.unlink()
+        result = subprocess.run(
+            ["bash", str(VERIFY), "--write-inventory", str(app)],
+            env={**os.environ, **fake_verification_tools(tmp_path)},
+            capture_output=True, text=True, check=False,
+        )
+        write(helper, executable=True)
+        assert result.returncode != 0
+        assert f"required Application Runtime file missing: Contents/MacOS/{name}" in result.stderr
+
+
 def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(tmp_path: Path):
     app, overrides = runtime_fixture(tmp_path)
     prepared = subprocess.run(
@@ -1249,6 +1271,15 @@ def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(tmp
     )
     tools = fake_verification_tools(tmp_path)
     tools.pop("YULU_SKIP_RUNTIME_EXECUTION")
+    write(
+        app / "Contents/MacOS/yulu_app",
+        b"#!/usr/bin/env bash\n"
+        b"[[ ${1:-} == --inspect-build ]] || exit 75\n"
+        b"if [[ ${YULU_FIXTURE_NATIVE_CONTROLS_MISSING:-0} == 1 ]]; then\n"
+        b"  echo '{\"nativeRecordingControls\":false}'\n"
+        b"else echo '{\"nativeRecordingControls\":true}'; fi\n",
+        executable=True,
+    )
 
     inventoried = subprocess.run(
         ["bash", str(VERIFY), "--write-inventory", str(app)],
@@ -1281,3 +1312,11 @@ def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(tmp
     )
     assert caption_failure.returncode != 0
     assert "cannot start the local caption installer in isolated mode" in caption_failure.stderr
+
+    controls_missing = subprocess.run(
+        ["bash", str(VERIFY), str(app)],
+        env={**os.environ, **tools, "YULU_FIXTURE_NATIVE_CONTROLS_MISSING": "1"},
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert controls_missing.returncode != 0
+    assert "native recording controls are missing" in controls_missing.stderr

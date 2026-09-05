@@ -388,7 +388,7 @@ async function recordingState(statusAgentSock: string) {
     const r = await ipcSend<StatusReply>(statusAgentSock, { action: "status" });
     return { state: r.state ?? "unknown", hotkey: r.hotkey ?? "?", launcherPid: r.launcher_pid };
   } catch {
-    return { state: "idle", hotkey: "?", launcherPid: undefined };
+    return { state: "unknown", hotkey: "?", launcherPid: undefined };
   }
 }
 

@@ -160,6 +160,11 @@ flow and guides you through the three macOS permissions it needs:
 | `Yulu.app` | Screen & System Audio Recording | Capture meeting playback with ScreenCaptureKit |
 | `window_scanner` | Accessibility | Detect supported meeting windows and titles |
 
+The App also owns its recording controls and dictation hotkeys; there is no
+separate StatusAgent to install. Closing the window keeps them available, while
+quitting Yulu removes them. Dictation insertion may require Accessibility approval
+for the installed Yulu App even if an older StatusAgent was already approved.
+
 Open the local workspace at
 [`http://127.0.0.1:7777/agent-console`](http://127.0.0.1:7777/agent-console),
 or start your first recording from the menu bar or CLI:

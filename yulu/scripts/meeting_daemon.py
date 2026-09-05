@@ -66,6 +66,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_DURATION_MIN = 60
 
 
+def _native_helper(name: str) -> Path:
+    declared = os.environ.get("YULU_NATIVE_HELPER_DIR")
+    return Path(declared) / name if declared else SCRIPT_DIR / name
+
+
 # ───────────────────────────────────────────────
 # IO helpers
 # ───────────────────────────────────────────────
@@ -505,7 +510,7 @@ def cmd_ask_record(args):
 
 def _ask_record_choice(title, meeting):
     primary_action = meeting_actions.load_primary_action()
-    prompt = SCRIPT_DIR / "meeting_prompt"
+    prompt = _native_helper("meeting_prompt")
     link = str((meeting or {}).get("link") or "")
     if prompt.exists():
         try:
@@ -748,7 +753,7 @@ def _active_recording_info():
 def _launch_status_window(title):
     """启动状态浮窗（先杀掉旧的）。"""
     _kill_status_window()
-    status_bin = SCRIPT_DIR / "recorder_status"
+    status_bin = _native_helper("recorder_status")
     if not status_bin.exists():
         print("⚠️ recorder_status 未编译，跳过浮窗")
         return

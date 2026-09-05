@@ -177,10 +177,11 @@ def test_status_agent_uses_supported_python_and_daemon_confirmed_meeting_state()
     assert "applyState(.recording)" not in start_body
 
 
-def test_recorder_status_uses_supported_python():
+def test_recorder_status_delegates_stop_without_a_host_python():
     src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
-    assert '"/opt/homebrew/bin/python3"' in src
-    assert 'process.executableURL = URL(fileURLWithPath: "/usr/bin/env")' not in src
+    assert "requestRecordingStop()" in src
+    assert "python3" not in src
+    assert "process.run()" not in src
 
 
 def test_recorder_status_renders_streaming_partials_without_restarting_fade():
@@ -264,8 +265,6 @@ def test_status_agent_has_dictation_menu_entry():
     assert "dictationTargetLanguage(fallback:" in src
     assert '"dictate_toggle"' in src
     assert '"dictate_translate"' in src
-    assert "dictateToggleResponse" in src
-    assert "dictateTranslateResponse" in src
     assert "--target-bundle-id" in src
     assert "currentInputTargetApplication()" in src
     assert "focusedInputApplication()" in src
@@ -390,8 +389,6 @@ def test_status_agent_has_voice_chat_entry():
     assert "http://127.0.0.1:7777/voice-chat" in src
     assert "launchVoiceChatToggle" in src
     assert '"dictate.py", "ask-toggle"' in src
-    assert "voiceChatResponse" in src
-    assert "openVoiceChatResponse" in src
     assert "voiceChatWindowStatus" in src
     assert '"voice_chat_window_visible"' in src
     assert '"Stop Voice Chat"' in src
@@ -402,7 +399,6 @@ def test_status_agent_has_voice_chat_entry():
 def test_status_agent_has_paste_clipboard_ipc():
     src = _swift_source()
     assert '"paste_clipboard"' in src
-    assert "pasteClipboardResponse" in src
     assert "pasteClipboard(text:" in src
     assert "insertTextWithAccessibility" in src
     assert "runningTextTarget" in src
@@ -413,7 +409,7 @@ def test_status_agent_has_paste_clipboard_ipc():
     assert "waitForFrontTextTarget" in src
     assert "Thread.sleep(forTimeInterval: 0.05)" in src
     assert '"error": "target_not_front"' in src
-    assert '"error": "paste_timeout"' in src
+    assert 'timeoutError: "paste_timeout"' in src
     assert '"front_app_name": NSWorkspace.shared.frontmostApplication?.localizedName ?? ""' in src
     assert "findWritableTextElement" in src
     assert "isWritableTextElement" in src

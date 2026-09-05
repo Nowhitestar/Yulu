@@ -3,6 +3,7 @@ import { ipcSend } from "../ipc.js";
 import { z } from "zod";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { TRPCError } from "@trpc/server";
 
 interface StatusReply {
   ok: boolean;
@@ -14,7 +15,7 @@ interface StatusReply {
   voice_chat_window_visible?: boolean;
   voice_chat_window_url?: string;
 }
-interface ToggleReply { ok: boolean; state_before?: string; state_after?: string; }
+interface ToggleReply { ok: boolean; error?: string; state_before?: string; state_after?: string; }
 
 interface HistoryRow {
   id?: unknown;
@@ -44,6 +45,20 @@ function publishState(ctx: Pick<AppContext, "pubsub">, stateAfter: string) {
   if (stateAfter === "idle" || stateAfter === "recording" || stateAfter === "processing" || stateAfter === "meetingBusy" || stateAfter === "daemonDown") {
     ctx.pubsub.publish("recording", { state: stateAfter });
   }
+}
+
+function commandResult(ctx: Pick<AppContext, "pubsub">, reply: ToggleReply) {
+  if (reply.ok !== true) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: reply.error === "controls_quiescing"
+        ? "Recording controls are paused for an update (controls_quiescing)"
+        : "Recording controls rejected the command",
+    });
+  }
+  const stateAfter = reply.state_after ?? "unknown";
+  publishState(ctx, stateAfter);
+  return { stateBefore: reply.state_before ?? "unknown", stateAfter };
 }
 
 async function readHistory(configDir: string, legacyReadOnlyDataDir: string, logsDir: string) {
@@ -203,16 +218,12 @@ export const recordingRouter = router({
 
   toggle: publicProcedure.mutation(async ({ ctx }) => {
     const r = await ipcSend<ToggleReply>(ctx.paths.statusAgentSock, { action: "toggle" });
-    const stateAfter = r.state_after ?? "?";
-    publishState(ctx, stateAfter);
-    return { stateBefore: r.state_before ?? "?", stateAfter };
+    return commandResult(ctx, r);
   }),
 
   dictate: publicProcedure.mutation(async ({ ctx }) => {
     const r = await ipcSend<ToggleReply>(ctx.paths.statusAgentSock, { action: "dictate_toggle" });
-    const stateAfter = r.state_after ?? "?";
-    publishState(ctx, stateAfter);
-    return { stateBefore: r.state_before ?? "?", stateAfter };
+    return commandResult(ctx, r);
   }),
 
   translate: publicProcedure
@@ -222,16 +233,12 @@ export const recordingRouter = router({
         action: "dictate_translate",
         target_language: input?.targetLanguage ?? "",
       });
-      const stateAfter = r.state_after ?? "?";
-      publishState(ctx, stateAfter);
-      return { stateBefore: r.state_before ?? "?", stateAfter };
+      return commandResult(ctx, r);
     }),
 
   voiceChat: publicProcedure.mutation(async ({ ctx }) => {
     const r = await ipcSend<ToggleReply>(ctx.paths.statusAgentSock, { action: "voice_chat" });
-    const stateAfter = r.state_after ?? "?";
-    publishState(ctx, stateAfter);
-    return { stateBefore: r.state_before ?? "?", stateAfter };
+    return commandResult(ctx, r);
   }),
 
   previewSound: publicProcedure.mutation(async ({ ctx }) => {

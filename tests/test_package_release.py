@@ -365,7 +365,7 @@ def test_ci_swift_smoke_build_targets_complete_native_inventory():
         "yulu/scripts/xai_keychain.swift -framework Security"
     ) in build
     assert (
-        'swiftc -target arm64-apple-macosx13.0 -o ".ci-build/status_agent" '
+        'swiftc -target arm64-apple-macosx13.0 -parse-as-library -o ".ci-build/status_agent" '
         "yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon"
     ) in build
 

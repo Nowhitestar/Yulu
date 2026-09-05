@@ -10,7 +10,124 @@ import Carbon
 import ApplicationServices
 import WebKit
 
-let HOME_DIR = FileManager.default.homeDirectoryForCurrentUser.path
+private var embeddedEnvironment: [String: String]?
+private var nativeEnvironment: [String: String] {
+    embeddedEnvironment ?? ProcessInfo.processInfo.environment
+}
+let HOME_DIR = nativeEnvironment["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path
+
+/// The visible Application owns native interaction after service migration.
+/// The same implementation remains usable by the legacy standalone entry point.
+public final class NativeRecordingControls {
+    private let controller: StatusAgentApp
+    private var prepared = false
+    private var active = false
+
+    public init(environment: [String: String], openRoute: @escaping (String) -> Void) {
+        embeddedEnvironment = environment
+        controller = StatusAgentApp()
+        controller.openRoute = openRoute
+    }
+
+    /// Reserve and validate IPC for update health without enabling native input.
+    public func prepare() throws {
+        if !prepared {
+            _ = nativeWork.quiesce()
+            try controller.prepareNativeControls()
+            prepared = true
+        }
+        guard isReady else {
+            throw NSError(domain: "YuluNativeRecording", code: Int(EADDRINUSE), userInfo: [
+                NSLocalizedDescriptionKey: "Native recording controls do not own a ready endpoint."
+            ])
+        }
+    }
+
+    public var isReady: Bool { prepared && controller.ipcServer?.ownsEndpoint == true }
+
+    public func activate() throws {
+        try prepare()
+        guard !active else { nativeWork.resume(); return }
+        nativeWork.resume()
+        try controller.startNativeControls()
+        active = true
+    }
+
+    /// Same fail-closed recording observation consumed by Application Update.
+    public func quiesce(captureRecording: Bool?) -> Bool? {
+        guard captureRecording == false else { return captureRecording }
+        return !nativeWork.quiesce()
+    }
+
+    public func stop() {
+        guard prepared else { return }
+        controller.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+        active = false
+        prepared = false
+    }
+}
+
+private final class NativeWork {
+    final class Admission {
+        private let onCompletion: () -> Void
+
+        init(onCompletion: @escaping () -> Void) { self.onCompletion = onCompletion }
+        deinit { onCompletion() }
+    }
+
+    private let lock = NSLock()
+    private var processes: [Process] = []
+    private var admittedCommands = 0
+    private var accepting = true
+
+    var isAccepting: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return accepting
+    }
+
+    func resume() {
+        lock.lock()
+        defer { lock.unlock() }
+        accepting = true
+    }
+
+    func quiesce() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        processes.removeAll { !$0.isRunning }
+        guard processes.isEmpty, admittedCommands == 0 else { return false }
+        accepting = false
+        return true
+    }
+
+    func admit() -> Admission? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard accepting else { return nil }
+        admittedCommands += 1
+        return Admission { [self] in
+            lock.lock()
+            admittedCommands -= 1
+            lock.unlock()
+        }
+    }
+
+    func run(_ process: Process) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard accepting else {
+            throw NSError(domain: "YuluNativeRecording", code: Int(EBUSY), userInfo: [
+                NSLocalizedDescriptionKey: "Native recording controls are quiescing for an update."
+            ])
+        }
+        processes.removeAll { !$0.isRunning }
+        try process.run()
+        processes.append(process)
+    }
+}
+
+private let nativeWork = NativeWork()
 
 func canonicalDirectory(_ raw: String) -> URL? {
     let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -59,7 +176,7 @@ func pathsOverlap(_ left: URL, _ right: URL) -> Bool {
 }
 
 func environmentDirectory(_ name: String, fallback: String) -> String {
-    guard let raw = ProcessInfo.processInfo.environment[name],
+    guard let raw = nativeEnvironment[name],
           raw.hasPrefix("/"),
           !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         return fallback
@@ -146,7 +263,7 @@ func targetLanguageDisplayName(_ value: String) -> String {
 }
 
 func statusAgentScriptDir() -> String {
-    ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
+    nativeEnvironment["YULU_SCRIPT_DIR"]
         ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
 }
 
@@ -157,13 +274,15 @@ func yuluPythonProcess(scriptDir: String) -> Process {
         "/usr/local/bin/python3",
         "/usr/bin/python3",
     ]
-    let python = candidates.first(where: FileManager.default.isExecutableFile(atPath:))
-        ?? "/usr/bin/python3"
+    let python = embeddedEnvironment != nil
+        ? (nativeEnvironment["YULU_PYTHON"] ?? "/missing-bundled-python")
+        : (candidates.first(where: FileManager.default.isExecutableFile(atPath:)) ?? "/usr/bin/python3")
     task.executableURL = URL(fileURLWithPath: python)
     task.currentDirectoryURL = URL(fileURLWithPath: scriptDir)
-    var env = ProcessInfo.processInfo.environment
+    var env = nativeEnvironment
     let existing = env["PYTHONPATH"] ?? ""
-    env["PYTHONPATH"] = existing.isEmpty ? scriptDir : "\(scriptDir):\(existing)"
+    env["PYTHONPATH"] = embeddedEnvironment != nil || existing.isEmpty ? scriptDir : "\(scriptDir):\(existing)"
+    if embeddedEnvironment != nil { env["PYTHONDONTWRITEBYTECODE"] = "1" }
     task.environment = env
     return task
 }
@@ -532,7 +651,7 @@ func safeMediaDirectory(_ raw: String) -> URL? {
 }
 
 func loadRecordingDir() -> String {
-    if let raw = ProcessInfo.processInfo.environment["YULU_MEDIA_LIBRARY_DIR"],
+    if let raw = nativeEnvironment["YULU_MEDIA_LIBRARY_DIR"],
        let configured = safeMediaDirectory(raw) {
         return configured.path
     }
@@ -623,8 +742,13 @@ func readHotkeysFromConfig() -> [HotkeySpec] {
     task.standardOutput = pipe
     task.standardError = Pipe()
     do {
-        try task.run()
-        task.waitUntilExit()
+        try nativeWork.run(task)
+        let deadline = Date().addingTimeInterval(2)
+        while task.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+        if task.isRunning {
+            task.terminate()
+            return defaultHotkeySpecs()
+        }
     } catch {
         log("⚠️ failed to read status_agent hotkeys: \(error)")
         return defaultHotkeySpecs()
@@ -1005,10 +1129,22 @@ class IconStateMachine {
 // transcribe + enqueue stays in the Python pipeline.
 class RecordingLauncher {
     typealias DictationCompletion = ([String: Any]?, String, Int32) -> Void
+    private static var stopProcess: Process?
+
+    static func stopStatus(pid: Int32) -> [String: Any] {
+        guard let process = stopProcess, process.processIdentifier == pid else {
+            return ["ok": false, "error": "stop_result_unavailable"]
+        }
+        if process.isRunning { return ["ok": true, "state": "running"] }
+        return [
+            "ok": true,
+            "state": process.terminationStatus == 0 ? "completed" : "failed",
+            "exit_status": Int(process.terminationStatus),
+        ]
+    }
 
     private static func scriptDir() -> String {
-        ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
-            ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
+        statusAgentScriptDir()
     }
 
     private static func launcherLog() -> FileHandle {
@@ -1046,7 +1182,7 @@ class RecordingLauncher {
         task.standardOutput = logFH
         task.standardError = logFH
         do {
-            try task.run()
+            try nativeWork.run(task)
             return task.processIdentifier
         } catch {
             log("⚠️ failed to launch meeting_daemon.py start: \(error)")
@@ -1067,7 +1203,7 @@ class RecordingLauncher {
         task.standardOutput = logFH
         task.standardError = logFH
         do {
-            try task.run()
+            try nativeWork.run(task)
             return task.processIdentifier
         } catch {
             log("⚠️ failed to launch meeting_daemon.py start_meeting: \(error)")
@@ -1088,7 +1224,8 @@ class RecordingLauncher {
         task.standardOutput = logFH
         task.standardError = logFH
         do {
-            try task.run()
+            try nativeWork.run(task)
+            stopProcess = task
             return task.processIdentifier
         } catch {
             log("⚠️ failed to launch meeting_daemon.py stop: \(error)")
@@ -1139,7 +1276,7 @@ class RecordingLauncher {
             }
         }
         do {
-            try task.run()
+            try nativeWork.run(task)
             return task.processIdentifier
         } catch {
             try? outputHandle.close()
@@ -1208,7 +1345,7 @@ class RecordingLauncher {
         task.standardOutput = logFH
         task.standardError = logFH
         do {
-            try task.run()
+            try nativeWork.run(task)
             return task.processIdentifier
         } catch {
             log("⚠️ failed to launch dictate.py warm: \(error)")
@@ -1230,7 +1367,7 @@ class RecordingLauncher {
         task.standardOutput = logFH
         task.standardError = logFH
         do {
-            try task.run()
+            try nativeWork.run(task)
             return task.processIdentifier
         } catch {
             log("⚠️ failed to launch dictate.py ask-toggle: \(error)")
@@ -1250,7 +1387,7 @@ class RecordingLauncher {
         task.standardOutput = logFH
         task.standardError = logFH
         do {
-            try task.run()
+            try nativeWork.run(task)
             return task.processIdentifier
         } catch {
             log("⚠️ failed to launch dictate.py cancel: \(error)")
@@ -1273,24 +1410,57 @@ class RecordingLauncher {
 class IPCServer {
     weak var app: StatusAgentApp?
     var sock: Int32 = -1
+    private var ownerLock: Int32 = -1
+    private var socketIdentity: (dev_t, ino_t)?
 
     init(app: StatusAgentApp) { self.app = app }
 
-    func stop() {
-        if sock >= 0 { close(sock); sock = -1 }
-        try? FileManager.default.removeItem(atPath: IPC_SOCKET_PATH)
+    var ownsEndpoint: Bool {
+        var info = stat()
+        var descriptor = stat()
+        guard sock >= 0, ownerLock >= 0, let identity = socketIdentity,
+              fstat(sock, &descriptor) == 0, descriptor.st_mode & S_IFMT == S_IFSOCK,
+              lstat(IPC_SOCKET_PATH, &info) == 0 else { return false }
+        return info.st_dev == identity.0 && info.st_ino == identity.1
+            && info.st_mode & S_IFMT == S_IFSOCK && info.st_uid == geteuid()
     }
 
-    func start() {
-        try? FileManager.default.removeItem(atPath: IPC_SOCKET_PATH)
+    func stop() {
+        if sock >= 0 { shutdown(sock, SHUT_RDWR); close(sock); sock = -1 }
+        var info = stat()
+        if let identity = socketIdentity,
+           lstat(IPC_SOCKET_PATH, &info) == 0,
+           info.st_dev == identity.0, info.st_ino == identity.1 {
+            try? FileManager.default.removeItem(atPath: IPC_SOCKET_PATH)
+        }
+        socketIdentity = nil
+        if ownerLock >= 0 { close(ownerLock); ownerLock = -1 }
+    }
+
+    func start() throws {
+        guard sock < 0 else { return }
+        ownerLock = Darwin.open("\(IPC_SOCKET_PATH).lock", O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        var lockInfo = stat()
+        guard ownerLock >= 0, fstat(ownerLock, &lockInfo) == 0,
+              lockInfo.st_mode & S_IFMT == S_IFREG,
+              lockInfo.st_uid == geteuid(), lockInfo.st_nlink == 1,
+              flock(ownerLock, LOCK_EX | LOCK_NB) == 0 else {
+            stop()
+            throw NSError(domain: "YuluNativeRecording", code: Int(EADDRINUSE), userInfo: [
+                NSLocalizedDescriptionKey: "Native recording controls already have an owner or an unsafe lock."
+            ])
+        }
+        var succeeded = false
+        defer { if !succeeded { stop() } }
         sock = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard sock >= 0 else { log("IPC: socket() failed"); return }
+        guard sock >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        _ = fcntl(sock, F_SETFD, FD_CLOEXEC)
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = IPC_SOCKET_PATH.utf8CString
         guard pathBytes.count < MemoryLayout.size(ofValue: addr.sun_path) else {
             log("IPC: socket path too long (\(pathBytes.count))")
-            close(sock); sock = -1; return
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENAMETOOLONG))
         }
         withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
             ptr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { p in
@@ -1299,6 +1469,24 @@ class IPCServer {
                 }
             }
         }
+        var previous = stat()
+        if lstat(IPC_SOCKET_PATH, &previous) == 0 {
+            guard previous.st_mode & S_IFMT == S_IFSOCK, previous.st_uid == geteuid() else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(EEXIST))
+            }
+            let probe = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+            guard probe >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+            defer { close(probe) }
+            let connected = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.connect(probe, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                }
+            }
+            guard connected != 0, errno == ECONNREFUSED else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(EADDRINUSE))
+            }
+            try FileManager.default.removeItem(atPath: IPC_SOCKET_PATH)
+        }
         let bindResult = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
@@ -1306,10 +1494,18 @@ class IPCServer {
         }
         guard bindResult == 0 else {
             log("IPC: bind failed errno=\(errno)")
-            close(sock); sock = -1; return
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
-        Darwin.listen(sock, 5)
+        var info = stat()
+        guard lstat(IPC_SOCKET_PATH, &info) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard Darwin.listen(sock, 5) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        socketIdentity = (info.st_dev, info.st_ino)
         chmod(IPC_SOCKET_PATH, 0o600)
+        succeeded = true
         log("IPC: ready at \(IPC_SOCKET_PATH)")
 
         DispatchQueue.global(qos: .background).async { [weak self] in
@@ -1345,29 +1541,71 @@ class IPCServer {
             sendJSON(c, ["ok": false, "error": "invalid_json"])
             return
         }
+        let readOnly = action == "status" || action == "stop_status"
+        let admission = readOnly ? nil : nativeWork.admit()
+        guard readOnly || admission != nil else {
+            sendJSON(c, ["ok": false, "error": "controls_quiescing"])
+            return
+        }
+        // Keep synchronous work owned through its response; queued AppKit work
+        // retains the same admission until the main queue has finished with it.
+        defer { withExtendedLifetime(admission) {} }
         switch action {
         case "status":
             sendJSON(c, statusResponse())
         case "toggle":
-            sendJSON(c, toggleResponse())
+            sendJSON(c, stateChangeResponse(admission: admission) { $0.onMenuToggle() })
+        case "stop":
+            sendJSON(c, mainResponse(admission: admission) { _ in
+                guard let pid = RecordingLauncher.launchStop() else {
+                    return ["ok": false, "error": "stop_failed"]
+                }
+                return ["ok": true, "accepted": true, "launcher_pid": Int(pid)]
+            })
+        case "stop_status":
+            sendJSON(c, mainResponse(admission: nil) { _ in
+                guard let rawPID = obj["launcher_pid"] as? Int,
+                      let pid = Int32(exactly: rawPID), pid > 0 else {
+                    return ["ok": false, "error": "invalid_launcher_pid"]
+                }
+                return RecordingLauncher.stopStatus(pid: pid)
+            })
         case "dictate_toggle":
-            sendJSON(c, dictateToggleResponse())
+            sendJSON(c, stateChangeResponse(admission: admission) { $0.onDictateToggle() })
         case "dictate_translate":
-            sendJSON(c, dictateTranslateResponse(obj: obj))
+            sendJSON(c, stateChangeResponse(admission: admission) {
+                $0.onDictateTranslate(targetLanguage: obj["target_language"] as? String ?? "")
+            })
         case "voice_chat":
-            sendJSON(c, voiceChatResponse())
+            sendJSON(c, stateChangeResponse(admission: admission) { $0.onVoiceChat() })
         case "open_inbox":
-            DispatchQueue.main.async { [weak self] in self?.app?.onOpenInbox() }
+            DispatchQueue.main.async { [weak self] in
+                withExtendedLifetime(admission) { self?.app?.onOpenInbox() }
+            }
             sendJSON(c, ["ok": true])
         case "open_agent_console":
-            DispatchQueue.main.async { [weak self] in self?.app?.onOpenAgentConsole() }
+            DispatchQueue.main.async { [weak self] in
+                withExtendedLifetime(admission) { self?.app?.onOpenAgentConsole() }
+            }
             sendJSON(c, ["ok": true])
         case "open_voice_chat":
-            sendJSON(c, openVoiceChatResponse(obj: obj))
+            sendJSON(c, mainResponse(admission: admission) {
+                $0.openVoiceChatWindow(urlString: obj["url"] as? String)
+                return ["ok": true].merging($0.voiceChatWindowStatus()) { _, new in new }
+            })
         case "paste_clipboard":
-            sendJSON(c, pasteClipboardResponse(obj: obj))
+            sendJSON(c, mainResponse(admission: admission, timeoutError: "paste_timeout") {
+                $0.pasteClipboard(
+                    text: obj["text"] as? String,
+                    targetBundleId: obj["target_bundle_id"] as? String,
+                    targetAppName: obj["target_app_name"] as? String
+                )
+            })
         case "preview_sound":
-            sendJSON(c, previewSoundResponse())
+            sendJSON(c, mainResponse(admission: admission) {
+                $0.previewFeedbackSound()
+                return ["ok": true, "enabled": feedbackSoundsEnabled()]
+            })
         case "search":
             // Shell out to python3 -m search.ipc_helper. Keeps all FTS5
             // logic in Python so the Swift binary doesn't need to bind
@@ -1388,7 +1626,7 @@ class IPCServer {
         // env wins so a launchd-installed bundle can point at a different
         // tree (e.g. a PR-branch worktree being smoke-tested) without a
         // rebuild. Falls back to bundle-relative for the production install.
-        let scriptsDir = ProcessInfo.processInfo.environment["YULU_SCRIPT_DIR"]
+        let scriptsDir = nativeEnvironment["YULU_SCRIPT_DIR"]
             ?? (Bundle.main.bundlePath.hasSuffix(".app")
                 ? (Bundle.main.bundleURL
                     .deletingLastPathComponent()      // /scripts
@@ -1407,7 +1645,7 @@ class IPCServer {
         task.standardError = stderrPipe
 
         do {
-            try task.run()
+            try nativeWork.run(task)
         } catch {
             return ["ok": false, "error": "search helper spawn failed: \(error)"]
         }
@@ -1415,8 +1653,14 @@ class IPCServer {
         // Write the original request bytes (so we don't re-serialize and
         // risk losing ordering or precision) then close stdin so the
         // helper sees EOF.
-        stdinPipe.fileHandleForWriting.write(data)
-        try? stdinPipe.fileHandleForWriting.close()
+        do {
+            try stdinPipe.fileHandleForWriting.write(contentsOf: data)
+            try stdinPipe.fileHandleForWriting.close()
+        } catch {
+            try? stdinPipe.fileHandleForWriting.close()
+            if task.isRunning { task.terminate() }
+            return ["ok": false, "error": "search helper closed request input"]
+        }
 
         // Bounded wait — 3s is generous for a 38-doc corpus (~50ms p50).
         let deadline = Date().addingTimeInterval(3.0)
@@ -1442,11 +1686,8 @@ class IPCServer {
     }
 
     private func statusResponse() -> [String: Any] {
-        var resp: [String: Any] = ["ok": true]
-        let sem = DispatchSemaphore(value: 0)
-        DispatchQueue.main.async { [weak self] in
-            defer { sem.signal() }
-            guard let app = self?.app else { return }
+        mainResponse(admission: nil) { app in
+            var resp: [String: Any] = ["ok": true]
             resp["state"] = app.state.rawValue
             resp["dictation_active"] = app.activeRecordingIsDictation
             if app.activeRecordingIsDictation {
@@ -1456,110 +1697,48 @@ class IPCServer {
             if let pid = pids.first { resp["launcher_pid"] = Int(pid) }
             if !pids.isEmpty { resp["launcher_pids"] = pids.map { Int($0) } }
             resp.merge(app.voiceChatWindowStatus()) { _, new in new }
+            return resp
         }
-        _ = sem.wait(timeout: .now() + 2)
-        return resp
     }
 
-    private func toggleResponse() -> [String: Any] {
-        var before = "unknown"
-        var after = "unknown"
-        let sem = DispatchSemaphore(value: 0)
-        DispatchQueue.main.async { [weak self] in
-            defer { sem.signal() }
-            guard let app = self?.app else { return }
-            before = app.state.rawValue
-            app.onMenuToggle()
-            after = app.state.rawValue
+    private func stateChangeResponse(
+        admission: NativeWork.Admission?,
+        action: @escaping (StatusAgentApp) -> Void
+    ) -> [String: Any] {
+        mainResponse(admission: admission) { app in
+            let before = app.state.rawValue
+            action(app)
+            return ["ok": true, "state_before": before, "state_after": app.state.rawValue]
         }
-        _ = sem.wait(timeout: .now() + 3)
-        return ["ok": true, "state_before": before, "state_after": after]
     }
 
-    private func dictateToggleResponse() -> [String: Any] {
-        var before = "unknown"
-        var after = "unknown"
-        let sem = DispatchSemaphore(value: 0)
+    private func mainResponse(
+        admission: NativeWork.Admission?,
+        timeoutError: String = "controls_timeout",
+        action: @escaping (StatusAgentApp) -> [String: Any]
+    ) -> [String: Any] {
+        let condition = NSCondition()
+        var response: [String: Any]?
+        var cancelled = false
         DispatchQueue.main.async { [weak self] in
-            defer { sem.signal() }
-            guard let app = self?.app else { return }
-            before = app.state.rawValue
-            app.onDictateToggle()
-            after = app.state.rawValue
+            withExtendedLifetime(admission) {
+                condition.lock()
+                defer { condition.unlock() }
+                guard !cancelled else { return }
+                response = self?.app.map(action) ?? ["ok": false, "error": "controls_unavailable"]
+                condition.signal()
+            }
         }
-        _ = sem.wait(timeout: .now() + 3)
-        return ["ok": true, "state_before": before, "state_after": after]
-    }
-
-    private func dictateTranslateResponse(obj: [String: Any]) -> [String: Any] {
-        var before = "unknown"
-        var after = "unknown"
-        let targetLanguage = obj["target_language"] as? String ?? ""
-        let sem = DispatchSemaphore(value: 0)
-        DispatchQueue.main.async { [weak self] in
-            defer { sem.signal() }
-            guard let app = self?.app else { return }
-            before = app.state.rawValue
-            app.onDictateTranslate(targetLanguage: targetLanguage)
-            after = app.state.rawValue
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(3)
+        while response == nil {
+            if !condition.wait(until: deadline), response == nil {
+                cancelled = true
+                return ["ok": false, "error": timeoutError]
+            }
         }
-        _ = sem.wait(timeout: .now() + 3)
-        return ["ok": true, "state_before": before, "state_after": after]
-    }
-
-    private func voiceChatResponse() -> [String: Any] {
-        var before = "unknown"
-        var after = "unknown"
-        let sem = DispatchSemaphore(value: 0)
-        DispatchQueue.main.async { [weak self] in
-            defer { sem.signal() }
-            guard let app = self?.app else { return }
-            before = app.state.rawValue
-            app.onVoiceChat()
-            after = app.state.rawValue
-        }
-        _ = sem.wait(timeout: .now() + 3)
-        return ["ok": true, "state_before": before, "state_after": after]
-    }
-
-    private func openVoiceChatResponse(obj: [String: Any]) -> [String: Any] {
-        var resp: [String: Any] = ["ok": false]
-        let url = obj["url"] as? String
-        let sem = DispatchSemaphore(value: 0)
-        DispatchQueue.main.async { [weak self] in
-            defer { sem.signal() }
-            guard let app = self?.app else { return }
-            app.openVoiceChatWindow(urlString: url)
-            resp = ["ok": true]
-            resp.merge(app.voiceChatWindowStatus()) { _, new in new }
-        }
-        _ = sem.wait(timeout: .now() + 3)
-        return resp
-    }
-
-    private func pasteClipboardResponse(obj: [String: Any]) -> [String: Any] {
-        var resp: [String: Any] = ["ok": false, "error": "paste_timeout"]
-        let sem = DispatchSemaphore(value: 0)
-        let bundleId = obj["target_bundle_id"] as? String
-        let appName = obj["target_app_name"] as? String
-        let text = obj["text"] as? String
-        DispatchQueue.main.async { [weak self] in
-            defer { sem.signal() }
-            guard let app = self?.app else { return }
-            resp = app.pasteClipboard(text: text, targetBundleId: bundleId, targetAppName: appName)
-        }
-        _ = sem.wait(timeout: .now() + 2)
-        return resp
-    }
-
-    private func previewSoundResponse() -> [String: Any] {
-        let sem = DispatchSemaphore(value: 0)
-        DispatchQueue.main.async { [weak self] in
-            self?.app?.previewFeedbackSound()
-            sem.signal()
-        }
-        _ = sem.wait(timeout: .now() + 2)
-        return ["ok": true, "enabled": feedbackSoundsEnabled()]
+        return response!
     }
 
     private func sendJSON(_ c: Int32, _ obj: [String: Any]) {
@@ -1572,6 +1751,8 @@ class IPCServer {
 }
 
 class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    var openRoute: ((String) -> Void)?
+    private var configurationGeneration = 0
     var statusItem: NSStatusItem!
     var menu: NSMenu!
     var voiceChatWindow: NSWindow?
@@ -1588,7 +1769,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // ponytail: one pending dictation target; add per-session IDs if overlapping dictations need exact cursor restore.
     var capturedPasteTarget: CapturedPasteTarget?
     var pollerTimer: Timer?
-    var state: AgentState = .idle
+    var state: AgentState = .daemonDown
     var activeRecordingIsDictation = false
     var daemonDownStreak: Int = 0
     var launcherPids: [Int32] = []
@@ -1602,14 +1783,32 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var ipcServer: IPCServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        do { try startNativeControls() }
+        catch {
+            log("Native recording controls could not start: \(error.localizedDescription)")
+            NSApp.terminate(nil)
+        }
+    }
+
+    func prepareNativeControls() throws {
+        guard ipcServer == nil else { return }
+        // A departed IPC client or helper is a failed request, not a shell crash.
+        signal(SIGPIPE, SIG_IGN)
         for directory in [DURABLE_DATA_DIR, IPC_DIR, LOGS_DIR, loadRecordingDir()] {
-            try? FileManager.default.createDirectory(
+            try FileManager.default.createDirectory(
                 atPath: directory,
                 withIntermediateDirectories: true
             )
         }
+        let ipc = IPCServer(app: self)
+        try ipc.start()
+        ipcServer = ipc
         writePidFile()
         log("🟢 Yulu Status Agent started (pid=\(ProcessInfo.processInfo.processIdentifier))")
+    }
+
+    func startNativeControls() throws {
+        try prepareNativeControls()
         activeAppLanguage = readAppLanguage()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -1618,8 +1817,10 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             btn.toolTip = L("Yulu — 点击开始录制", "Yulu — click to record")
         }
         rebuildMenu()
-        _ = RecordingLauncher.launchWarmDictation()
-        _ = RecordingLauncher.launchWarmDictation(targetLanguage: dictationTargetLanguage(fallback: "English"))
+        if embeddedEnvironment == nil {
+            _ = RecordingLauncher.launchWarmDictation()
+            _ = RecordingLauncher.launchWarmDictation(targetLanguage: dictationTargetLanguage(fallback: "English"))
+        }
         signal(SIGHUP, SIG_IGN)
         sighupSource = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
         sighupSource?.setEventHandler { [weak self] in
@@ -1635,10 +1836,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // hangs and would otherwise prevent IPC from ever coming up. By
         // ordering IPC first we guarantee the agent stays addressable
         // even when audiodaemon is sick.
-        let ipc = IPCServer(app: self)
-        ipc.start()
-        ipcServer = ipc
-
         // Start polling at 1 Hz
         pollerTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.poll()
@@ -1656,9 +1853,20 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func registerHotkeysFromConfig() {
+        configurationGeneration += 1
+        let generation = configurationGeneration
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let specs = readHotkeysFromConfig()
+            DispatchQueue.main.async {
+                guard let self, self.configurationGeneration == generation else { return }
+                self.registerHotkeys(specs)
+            }
+        }
+    }
+
+    private func registerHotkeys(_ specs: [HotkeySpec]) {
         hotkeyRegistrars.forEach { $0.unregister() }
         hotkeyRegistrars = []
-        let specs = readHotkeysFromConfig()
         for (idx, spec) in specs.enumerated() {
             let registrar = HotkeyRegistrar(id: UInt32(idx + 1))
             let ok = registrar.register(keyCode: spec.keyCode, modifierMask: spec.modifierMask) { [weak self] in
@@ -1686,6 +1894,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func onHotkey(_ spec: HotkeySpec) {
+        guard nativeWork.isAccepting else { return }
         log("hotkey → \(spec.action)")
         switch spec.action {
         case "dictate":
@@ -2045,9 +2254,23 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         log("🔴 Yulu Status Agent terminating")
+        pollerTimer?.invalidate()
+        configurationGeneration += 1
+        pollerTimer = nil
+        sighupSource?.cancel()
+        sighupSource = nil
+        processingDetailWorkItem?.cancel()
+        feedbackDismissWorkItem?.cancel()
+        voiceOverlayWindow?.close()
+        voiceChatWindow?.close()
         hotkeyRegistrars.forEach { $0.unregister() }
+        if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
+        statusItem = nil
         ipcServer?.stop()
-        try? FileManager.default.removeItem(atPath: PID_FILE)
+        ipcServer = nil
+        if (try? String(contentsOfFile: PID_FILE, encoding: .utf8)) == "\(getpid())" {
+            try? FileManager.default.removeItem(atPath: PID_FILE)
+        }
     }
 
     // Refresh dynamic items whenever the menu is about to display
@@ -2127,6 +2350,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func onMenuToggle() {
+        guard nativeWork.isAccepting else { return }
         log("toggle (state=\(state.rawValue))")
         switch state {
         case .idle:
@@ -2221,6 +2445,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func onDictateToggle() {
+        guard nativeWork.isAccepting else { return }
         let stopping = (state == .recording && activeRecordingIsDictation)
         if stopping && activeDictationIntent() == "voice_chat" {
             log("voice chat recording active; ignoring dictation")
@@ -2277,6 +2502,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func onDictateTranslate(targetLanguage: String) {
+        guard nativeWork.isAccepting else { return }
         if state == .recording && !activeRecordingIsDictation {
             log("meeting recording active; ignoring translate dictation")
             return
@@ -2334,6 +2560,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func onVoiceChat() {
+        guard nativeWork.isAccepting else { return }
         if state == .recording && !activeRecordingIsDictation {
             log("meeting recording active; ignoring voice chat")
             return
@@ -2367,6 +2594,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func startCurrentMeeting(from sender: NSMenuItem, join: Bool) {
+        guard nativeWork.isAccepting else { return }
         guard let meetingId = sender.representedObject as? String,
               !meetingId.isEmpty else { return }
         _ = RecordingLauncher.launchStartMeeting(meetingId: meetingId, join: join)
@@ -2384,18 +2612,21 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func onOpenInbox() {
+        if let openRoute { openRoute("/inbox"); return }
         if let url = URL(string: "http://127.0.0.1:7777/inbox") {
             NSWorkspace.shared.open(url)
         }
     }
 
     @objc func onOpenAgentConsole() {
+        if let openRoute { openRoute("/agent-console"); return }
         if let url = URL(string: "http://127.0.0.1:7777/agent-console") {
             NSWorkspace.shared.open(url)
         }
     }
 
     @objc func onOpenSettings() {
+        if let openRoute { openRoute("/settings"); return }
         if let url = URL(string: "http://127.0.0.1:7777/settings") {
             NSWorkspace.shared.open(url)
         }
@@ -2787,42 +3018,50 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func onRecentClicked(_ sender: NSMenuItem) {
         guard let stem = sender.representedObject as? String,
               let url = URL(string: "http://127.0.0.1:7777/inbox/\(stem)") else { return }
+        if let openRoute { openRoute(url.path); return }
         NSWorkspace.shared.open(url)
     }
 }
 
-if CommandLine.arguments.contains("--self-test") {
-    let scriptsDir = "/tmp/yulu-scripts"
-    let task = yuluPythonProcess(scriptDir: scriptsDir)
-    guard task.executableURL?.path != "/usr/bin/env",
-          task.currentDirectoryURL?.path == scriptsDir,
-          task.environment?["PYTHONPATH"]?.split(separator: ":").first == Substring(scriptsDir) else {
-        fputs("status_agent self-test failed\n", stderr)
-        exit(1)
-    }
-    let prettyJSON = Data("{\n  \"action\": \"stop\",\n  \"pasted\": true\n}\n".utf8)
-    assert(parseDictationOutput(prettyJSON)?["action"] as? String == "stop")
-    assert(normalizedMicLevel(0) == 0)
-    assert(normalizedMicLevel(0.1) > normalizedMicLevel(0.01))
-    assert(menuKeyEquivalent(for: "⌃⌥Space") == " ")
-    assert(menuKeyEquivalent(for: "⌃⌥T") == "t")
-    assert(menuModifierFlags(for: 0x1800) == [.control, .option])
-    assert(recentRecordingFallbackTitle("AgentKey_Product_Weekly_20260804_160014") == "Agent Key Product Weekly")
-    assert(recentRecordingMenuTitle(time: "Aug 5 09:30", name: "Roadmap").string == "Aug 5 09:30\tRoadmap")
-    activeAppLanguage = .en
-    let menuTarget = StatusAgentApp()
-    let menu = MenuBuilder.build(target: menuTarget)
-    assert(menu.items.first(where: { $0.identifier?.rawValue == "current_meeting_label" })?.isHidden == true)
-    assert(menu.items.first(where: { $0.identifier?.rawValue == "recent_recordings" })?.submenu != nil)
-    assert(menu.items.contains(where: { $0.title == "Settings…" && $0.keyEquivalent == "," }))
-    assert(menu.items.last?.title == "Quit Yulu")
-    withExtendedLifetime(menuTarget) {}
-    print("status_agent self-test ok: \(task.executableURL?.path ?? "missing")")
-    exit(0)
-}
+#if !YULU_NATIVE_RECORDING_LIBRARY
+@main
+struct StatusAgentMain {
+    static func main() {
+        if CommandLine.arguments.contains("--self-test") {
+            let scriptsDir = "/tmp/yulu-scripts"
+            let task = yuluPythonProcess(scriptDir: scriptsDir)
+            guard task.executableURL?.path != "/usr/bin/env",
+                  task.currentDirectoryURL?.path == scriptsDir,
+                  task.environment?["PYTHONPATH"]?.split(separator: ":").first == Substring(scriptsDir) else {
+                fputs("status_agent self-test failed\n", stderr)
+                exit(1)
+            }
+            let prettyJSON = Data("{\n  \"action\": \"stop\",\n  \"pasted\": true\n}\n".utf8)
+            assert(parseDictationOutput(prettyJSON)?["action"] as? String == "stop")
+            assert(normalizedMicLevel(0) == 0)
+            assert(normalizedMicLevel(0.1) > normalizedMicLevel(0.01))
+            assert(menuKeyEquivalent(for: "⌃⌥Space") == " ")
+            assert(menuKeyEquivalent(for: "⌃⌥T") == "t")
+            assert(menuModifierFlags(for: 0x1800) == [.control, .option])
+            assert(recentRecordingFallbackTitle("AgentKey_Product_Weekly_20260804_160014") == "Agent Key Product Weekly")
+            assert(recentRecordingMenuTitle(time: "Aug 5 09:30", name: "Roadmap").string == "Aug 5 09:30\tRoadmap")
+            activeAppLanguage = .en
+            let menuTarget = StatusAgentApp()
+            let menu = MenuBuilder.build(target: menuTarget)
+            assert(menu.items.first(where: { $0.identifier?.rawValue == "current_meeting_label" })?.isHidden == true)
+            assert(menu.items.first(where: { $0.identifier?.rawValue == "recent_recordings" })?.submenu != nil)
+            assert(menu.items.contains(where: { $0.title == "Settings…" && $0.keyEquivalent == "," }))
+            assert(menu.items.last?.title == "Quit Yulu")
+            withExtendedLifetime(menuTarget) {}
+            print("status_agent self-test ok: \(task.executableURL?.path ?? "missing")")
+            exit(0)
+        }
 
-let app = NSApplication.shared
-let delegate = StatusAgentApp()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)  // belt-and-braces: hide from Dock even if LSUIElement somehow missing
-app.run()
+        let app = NSApplication.shared
+        let delegate = StatusAgentApp()
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)  // belt-and-braces: hide from Dock even if LSUIElement somehow missing
+        app.run()
+    }
+}
+#endif

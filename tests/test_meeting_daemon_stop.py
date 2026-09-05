@@ -1,6 +1,7 @@
 import json
 import stat
 import sys
+import pytest
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -356,14 +357,21 @@ def test_auto_stop_without_active_recording_is_a_noop(monkeypatch, capsys):
     assert "没有正在进行的录制" in capsys.readouterr().out
 
 
-def test_status_window_detaches_from_parent_session(monkeypatch, tmp_path):
+@pytest.mark.parametrize("bundled", [False, True])
+def test_status_window_detaches_from_parent_session(monkeypatch, tmp_path, bundled):
     import meeting_daemon
 
     script_dir = tmp_path / "scripts"
     config_dir = tmp_path / "config"
     script_dir.mkdir()
     config_dir.mkdir()
-    status_bin = script_dir / "recorder_status"
+    helper_dir = tmp_path / "Yulu.app/Contents/MacOS" if bundled else script_dir
+    helper_dir.mkdir(parents=True, exist_ok=True)
+    if bundled:
+        monkeypatch.setenv("YULU_NATIVE_HELPER_DIR", str(helper_dir))
+    else:
+        monkeypatch.delenv("YULU_NATIVE_HELPER_DIR", raising=False)
+    status_bin = helper_dir / "recorder_status"
     status_bin.write_text("binary", encoding="utf-8")
     state_path = config_dir / ".state.json"
     state_path.write_text('{"recording":true}', encoding="utf-8")

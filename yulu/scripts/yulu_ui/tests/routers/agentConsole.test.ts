@@ -87,6 +87,12 @@ function restoreEnv(key: string, value: string | undefined) {
 
 describe("agentConsoleRouter", () => {
   const roots: string[] = [];
+  it("does not report idle when native recording controls are unavailable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-console-controls-"));
+    roots.push(root);
+    const result = await createCaller(agentConsoleRouter, makeCtx(root, {})).overview();
+    expect(result.recording.state).toBe("unknown");
+  });
   const oldEnv = {
     path: process.env.PATH,
     codexRoots: process.env.YULU_CODEX_PLUGIN_ROOTS,

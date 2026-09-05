@@ -4,6 +4,7 @@ import { render, screen, act } from "@testing-library/react";
 import { Pill, type PillState } from "../../web/src/components/Pill.js";
 
 const toggleMock = vi.fn();
+let mutationError: Error | null = null;
 const stateQueryMock = vi.fn(() => ({ data: { state: "idle", hotkey: "⌘⇧V" }, dataUpdatedAt: 0 }));
 let queryOptions: { refetchInterval?: number; refetchIntervalInBackground?: boolean } | undefined;
 
@@ -14,7 +15,7 @@ vi.mock("../../web/src/trpc.js", () => ({
         queryOptions = options;
         return stateQueryMock();
       } },
-      toggle: { useMutation: () => ({ mutate: toggleMock, isPending: false }) },
+      toggle: { useMutation: () => ({ mutate: toggleMock, isPending: false, error: mutationError }) },
     },
   },
 }));
@@ -28,6 +29,7 @@ vi.mock("../../web/src/ws.js", () => ({
 
 beforeEach(() => {
   toggleMock.mockReset();
+  mutationError = null;
   wsHandlers.clear();
   queryOptions = undefined;
   stateQueryMock.mockReturnValue({ data: { state: "idle", hotkey: "⌘⇧V" }, dataUpdatedAt: 0 });
@@ -81,14 +83,22 @@ describe("Pill state machine", () => {
     expect(screen.getByRole("button", { name: /录制/ })).toBeInTheDocument();
   });
 
-  it("keeps the last live state when status polling is unavailable", () => {
+  it("shows unavailable controls instead of offering a toggle against stale state", () => {
     const { rerender } = render(<Pill />);
     act(() => wsHandlers.get("recording")?.({ state: "recording" }));
     expect(screen.getByText("0:00")).toBeInTheDocument();
 
     stateQueryMock.mockReturnValue({ data: { state: "unknown", hotkey: "?" }, dataUpdatedAt: 1 });
     rerender(<Pill />);
-    expect(screen.getByText("0:00")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("录音状态不可用");
+    expect(screen.queryByRole("button", { name: /停止/ })).not.toBeInTheDocument();
+  });
+
+  it("explains a rejected update-time command without replaying it", () => {
+    mutationError = new Error("controls_quiescing");
+    render(<Pill />);
+    expect(screen.getByRole("alert")).toHaveTextContent("更新期间暂停录音控制");
+    expect(toggleMock).not.toHaveBeenCalled();
   });
 
   it("does not offer a recording action before status is known", () => {
