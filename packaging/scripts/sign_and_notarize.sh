@@ -226,41 +226,10 @@ PY
     rm -rf "$APPCAST_WORK"
     exit 1
   }
-  SIGNATURE_FILE="$APPCAST_WORK/enclosure-signature.txt"
-  python3 - "$APPCAST_WORK/appcast.xml" "$TAG" "$DOWNLOAD_URL_PREFIX" \
-    "$SIGNATURE_FILE" "$DMG" <<'PY'
-import sys
-import xml.etree.ElementTree as ET
-from pathlib import Path
-
-appcast = Path(sys.argv[1])
-tag = sys.argv[2]
-download_prefix = sys.argv[3]
-signature_file = Path(sys.argv[4])
-dmg = Path(sys.argv[5])
-sparkle = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
-root = ET.parse(appcast).getroot()
-enclosures = list(root.iter("enclosure"))
-expected_name = f"yulu-macos-arm64-{tag}.dmg"
-if len(enclosures) != 1:
-    raise SystemExit("Sparkle feed must contain exactly one full DMG enclosure")
-enclosure = enclosures[0]
-if enclosure.get("url") != download_prefix + expected_name:
-    raise SystemExit("Sparkle feed does not reference the public release DMG")
-length = enclosure.get("length")
-expected_length = dmg.stat().st_size
-if length is None or not length.isdecimal() or int(length) != expected_length:
-    raise SystemExit("Sparkle feed enclosure length does not match the public release DMG")
-signature = enclosure.get(f"{sparkle}edSignature")
-if not signature:
-    raise SystemExit("Sparkle feed DMG enclosure is not EdDSA-signed")
-if list(root.iter(f"{sparkle}deltas")):
-    raise SystemExit("Yulu does not publish Sparkle delta payloads")
-if any(path.suffix == ".delta" for path in appcast.parent.iterdir()):
-    raise SystemExit("Yulu does not publish Sparkle delta artifacts")
-signature_file.write_text(signature + "\n", encoding="utf-8")
-PY
-  ENCLOSURE_SIGNATURE="$(tr -d '[:space:]' < "$SIGNATURE_FILE")"
+  ENCLOSURE_SIGNATURE="$(
+    python3 "$SCRIPT_DIR/validate_sparkle_appcast.py" \
+      "$APPCAST_WORK/appcast.xml" "$TAG" "$DOWNLOAD_URL_PREFIX" "$DMG"
+  )"
   printf '%s\n' "$SPARKLE_PRIVATE_ED_KEY" | \
     "$SPARKLE_TOOLS/sign_update" \
       --ed-key-file - --verify "$DMG" "$ENCLOSURE_SIGNATURE"

@@ -161,6 +161,7 @@ plist_set_or_add "$INFO" CFBundleName string Yulu
 plist_set_or_add "$INFO" CFBundleDisplayName string Yulu
 plist_set_or_add "$INFO" CFBundleShortVersionString string "$YULU_BUNDLE_SHORT_VERSION"
 plist_set_or_add "$INFO" CFBundleVersion string "$YULU_BUILD_NUMBER"
+plist_set_or_add "$INFO" LSMinimumSystemVersion string "13.0.0"
 plist_set_or_add "$INFO" YuluVersion string "$YULU_RELEASE_VERSION"
 plist_set_or_add "$INFO" YuluReleaseVersion string "$YULU_RELEASE_VERSION"
 plist_set_or_add "$INFO" CFBundleIconFile string Yulu
@@ -208,6 +209,7 @@ plist_set_or_add "$CAPTURE_INFO" CFBundleName string "Yulu Capture"
 plist_set_or_add "$CAPTURE_INFO" CFBundleDisplayName string "Yulu Capture"
 plist_set_or_add "$CAPTURE_INFO" CFBundleShortVersionString string "$YULU_BUNDLE_SHORT_VERSION"
 plist_set_or_add "$CAPTURE_INFO" CFBundleVersion string "$YULU_BUILD_NUMBER"
+plist_set_or_add "$CAPTURE_INFO" LSMinimumSystemVersion string "13.0.0"
 plist_set_or_add "$CAPTURE_INFO" YuluVersion string "$YULU_RELEASE_VERSION"
 plist_set_or_add "$CAPTURE_INFO" YuluReleaseVersion string "$YULU_RELEASE_VERSION"
 plist_set_or_add "$CAPTURE_INFO" LSUIElement bool true

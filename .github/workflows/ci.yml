@@ -80,6 +80,7 @@ jobs:
             python3 -m py_compile "$f"
           done
           python3 -m py_compile packaging/scripts/runtime_node_version.py
+          python3 -m py_compile packaging/scripts/validate_sparkle_appcast.py
 
       - name: Python unit tests
         run: |

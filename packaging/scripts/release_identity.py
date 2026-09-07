@@ -18,7 +18,7 @@ SEMVER = re.compile(
     rf"(?:-{PRERELEASE_IDENTIFIER}(?:\.{PRERELEASE_IDENTIFIER})*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
-ACCEPTED_RC_VERSION = "0.23.0-rc.12"
+ACCEPTED_RC_VERSION = "0.23.0-rc.13"
 STABLE_PROMOTION_VERSION = "0.23.0"
 
 

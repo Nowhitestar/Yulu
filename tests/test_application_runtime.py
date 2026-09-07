@@ -57,6 +57,7 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
                 "CFBundleShortVersionString": "0.23.0",
                 "CFBundleVersion": "731",
                 "YuluReleaseVersion": "0.23.0-rc.4",
+                "LSMinimumSystemVersion": "13.0.0",
                 "SUVerifyUpdateBeforeExtraction": True,
                 "SURequireSignedFeed": True,
                 "SUSignedFeedFailureExpirationInterval": 0,
@@ -73,6 +74,7 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
                 "CFBundleShortVersionString": "0.23.0",
                 "CFBundleVersion": "731",
                 "YuluReleaseVersion": "0.23.0-rc.4",
+                "LSMinimumSystemVersion": "13.0.0",
             }
         ),
     )
@@ -328,6 +330,49 @@ def test_sparkle_runtime_is_exactly_pinned_embedded_arm64_and_release_configured
     configured["SUFeedURL"] = "https://updates.yulu.app/appcast.xml"
     configured["SUPublicEDKey"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     info_path.write_bytes(plistlib.dumps(configured))
+    accepted = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env=verify_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert accepted.returncode == 0, accepted.stderr + accepted.stdout
+
+
+def test_runtime_verifier_requires_the_macos_13_floor_for_app_and_capture(tmp_path: Path):
+    app, overrides = runtime_fixture(tmp_path)
+    prepared = subprocess.run(
+        ["bash", str(PREPARE), str(app)],
+        env={**os.environ, **overrides},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr + prepared.stdout
+    verify_env = {**os.environ, **fake_verification_tools(tmp_path)}
+
+    for relative in ("Info.plist", "Helpers/YuluCapture.app/Contents/Info.plist"):
+        info_path = app / "Contents" / relative
+        baseline = plistlib.loads(info_path.read_bytes())
+        for minimum in (None, "10.13", "12.6", "14.0.0", 13):
+            changed = dict(baseline)
+            if minimum is None:
+                changed.pop("LSMinimumSystemVersion")
+            else:
+                changed["LSMinimumSystemVersion"] = minimum
+            info_path.write_bytes(plistlib.dumps(changed))
+            rejected = subprocess.run(
+                ["bash", str(VERIFY), "--write-inventory", str(app)],
+                env=verify_env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert rejected.returncode != 0
+            assert "minimum macOS version must be 13.0.0" in rejected.stderr
+        info_path.write_bytes(plistlib.dumps(baseline))
+
     accepted = subprocess.run(
         ["bash", str(VERIFY), "--write-inventory", str(app)],
         env=verify_env,
