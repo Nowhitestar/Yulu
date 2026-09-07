@@ -137,6 +137,8 @@ def running_controls(native_controls_binary, request):
                 'if [ "$1" = status_agent_config.py ]; then printf "[]\\n"; exit 0; fi\n'
                 'if [ "$1" = meeting_daemon.py ]; then '
                 'printf \'%s\\n\' "$1" "$2" > "$YULU_IPC_DIR/stop-observed"; exit 0; fi\n'
+                # Match search.ipc_helper: consume the request through EOF before replying.
+                '/bin/cat >/dev/null\n'
                 'printf \'{"ok":true,"runtime":"bundled","bytecode":"%s","pythonpath":"%s","cwd":"%s"}\\n\' '
                 '"$PYTHONDONTWRITEBYTECODE" "$PYTHONPATH" "$PWD"\n',
                 encoding="utf-8",
@@ -170,6 +172,8 @@ def running_controls(native_controls_binary, request):
             while not socket_path.exists() and process.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.02)
             assert socket_path.exists(), process.communicate(timeout=1)
+            # Socket publication precedes activation; wait for the main-loop handshake.
+            assert lifecycle(process, "readiness") == "ready"
             yield process, socket_path, config, started
         finally:
             if process.poll() is None:
@@ -291,9 +295,10 @@ def test_owned_native_work_defers_update_until_it_exits(running_controls):
 
 
 @pytest.mark.parametrize("running_controls", ["bundled-python"], indirect=True)
-def test_commands_use_only_the_supplied_application_runtime(running_controls):
+@pytest.mark.parametrize("query", ["runtime", "q" * (256 * 1024)], ids=["small", "pipe-backpressure"])
+def test_commands_use_only_the_supplied_application_runtime(running_controls, query):
     _, socket_path, _, _ = running_controls
-    assert ipc(socket_path, "search") == {
+    assert ipc(socket_path, "search", query=query) == {
         "ok": True, "runtime": "bundled", "bytecode": "1",
         "pythonpath": str(SCRIPTS), "cwd": str(SCRIPTS),
     }
