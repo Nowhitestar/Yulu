@@ -94,6 +94,8 @@ with open(sys.argv[1], "rb") as source:
     info = plistlib.load(source)
 with open(sys.argv[2], "rb") as source:
     capture_info = plistlib.load(source)
+if any(bundle.get("LSMinimumSystemVersion") != "13.0.0" for bundle in (info, capture_info)):
+    raise SystemExit("verify_application_runtime.sh: App and Capture minimum macOS version must be 13.0.0")
 required = {
     "SUVerifyUpdateBeforeExtraction": True,
     "SURequireSignedFeed": True,

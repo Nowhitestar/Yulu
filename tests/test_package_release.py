@@ -815,6 +815,9 @@ def test_sparkle_feed_signs_the_exact_public_dmg_without_delta_payloads():
     sparkle = (ROOT / "packaging" / "scripts" / "prepare_sparkle_framework.sh").read_text(
         encoding="utf-8"
     )
+    validator = (ROOT / "packaging/scripts/validate_sparkle_appcast.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "YULU_SPARKLE_PRIVATE_ED_KEY" in signing
     assert 'SPARKLE_PRIVATE_ED_KEY="${YULU_SPARKLE_PRIVATE_ED_KEY:-}"' in signing
@@ -830,13 +833,12 @@ def test_sparkle_feed_signs_the_exact_public_dmg_without_delta_payloads():
     assert "--ed-key-file -" in signing
     assert "--download-url-prefix" in signing
     assert "--maximum-deltas 0" in signing
-    assert 'expected_name = f"yulu-macos-arm64-{tag}.dmg"' in signing
-    assert 'expected_length = dmg.stat().st_size' in signing
-    assert 'int(length) != expected_length' in signing
-    assert "edSignature" in signing
-    assert 'if list(root.iter(f"{sparkle}deltas")):' in signing
-    assert 'SIGNATURE_FILE="$APPCAST_WORK/enclosure-signature.txt"' in signing
-    assert 'signature_file.write_text(signature + "\\n", encoding="utf-8")' in signing
+    assert 'expected_name = f"yulu-macos-arm64-{tag}.dmg"' in validator
+    assert 'expected_length = dmg.stat().st_size' in validator
+    assert 'int(length) != expected_length' in validator
+    assert "edSignature" in validator
+    assert 'if list(root.iter(f"{SPARKLE}deltas")):' in validator
+    assert 'python3 "$SCRIPT_DIR/validate_sparkle_appcast.py"' in signing
     assert '--ed-key-file - --verify "$DMG" "$ENCLOSURE_SIGNATURE"' in signing
     assert '--ed-key-file - --verify "$APPCAST_WORK/appcast.xml"' in signing
     assert 'cp "$APPCAST_WORK/appcast.xml" "$REPO_DIR/dist/appcast.xml"' in signing

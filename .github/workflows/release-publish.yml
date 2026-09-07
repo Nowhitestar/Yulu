@@ -92,6 +92,7 @@ jobs:
           python3 -m py_compile packaging/scripts/validate_runtime_archive.py
           python3 -m py_compile packaging/scripts/runtime_node_version.py
           python3 -m py_compile packaging/scripts/validate_sparkle_feed_promotion.py
+          python3 -m py_compile packaging/scripts/validate_sparkle_appcast.py
 
       - name: Python unit tests
         run: |
