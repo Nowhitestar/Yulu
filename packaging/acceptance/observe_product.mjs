@@ -22,6 +22,8 @@ const FIXED_INVENTORY_FILES = [
   "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist",
   "Contents/MacOS/xai_keychain",
   "Contents/MacOS/calendar_probe",
+  "Contents/MacOS/recorder_status",
+  "Contents/MacOS/meeting_prompt",
   "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
   "Contents/Resources/Sparkle-LICENSE.txt",
 ];
