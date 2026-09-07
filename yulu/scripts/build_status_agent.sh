@@ -19,7 +19,7 @@ SWIFT_TARGET=(-target arm64-apple-macosx13.0)
 
 cd "$SCRIPT_DIR"
 
-swiftc "${SWIFT_TARGET[@]}" -o "$BIN" status_agent.swift \
+swiftc "${SWIFT_TARGET[@]}" -o "$BIN" -parse-as-library status_agent.swift \
   -framework Cocoa -framework Carbon -framework WebKit
 swiftc "${SWIFT_TARGET[@]}" -o "$RECORDER_BIN" recorder_status.swift \
   -framework Cocoa

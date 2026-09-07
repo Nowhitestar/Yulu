@@ -68,8 +68,18 @@ describe("recordingRouter", () => {
     } as unknown as AppContext;
     const caller = createCaller(recordingRouter, ctx);
 
-    expect(await caller.toggle()).toEqual({ stateBefore: "recording", stateAfter: "unknown" });
+    await expect(caller.toggle()).rejects.toThrow("Recording controls rejected the command");
     expect(published).toEqual([]);
+  });
+
+  it("reports update quiescence as a rejected command, not a successful toggle", async () => {
+    fake = await startFakeSocket(() => ({ ok: false, error: "controls_quiescing" }));
+    const ctx = {
+      paths: { statusAgentSock: fake.path },
+      pubsub: { publish: () => { throw new Error("must not publish"); } },
+    } as unknown as AppContext;
+    const caller = createCaller(recordingRouter, ctx);
+    await expect(caller.toggle()).rejects.toThrow("controls_quiescing");
   });
 
   it("dictate() dispatches the dictation IPC action", async () => {

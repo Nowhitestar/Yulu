@@ -20,6 +20,8 @@ for helper in \
   "$APP/Contents/MacOS/yulu_app" \
   "$APP/Contents/MacOS/xai_keychain" \
   "$APP/Contents/MacOS/calendar_probe" \
+  "$APP/Contents/MacOS/recorder_status" \
+  "$APP/Contents/MacOS/meeting_prompt" \
   "$APP/Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"; do
   [[ -x "$helper" ]] || fail "required Swift helper missing or not executable: $helper"
 done

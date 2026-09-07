@@ -572,6 +572,7 @@ def exact_update_health() -> dict[str, object]:
             "uid": os.geteuid(),
             "generation": "100:1",
             "executable": "/Applications/Yulu.app/Contents/MacOS/yulu_app",
+            "nativeControlsReady": True,
         },
         "host": {
             "identifier": "node",
@@ -662,6 +663,9 @@ def test_health_gate_commits_only_exact_app_helper_database_service_and_ipc_vers
 @pytest.mark.parametrize(
     ("path", "wrong"),
     [
+        (("application", "nativeControlsReady"), False),
+        (("application", "nativeControlsReady"), None),
+        (("application", "nativeControlsReady"), "true"),
         (("application", "identifier"), "com.attacker.app"),
         (("application", "teamIdentifier"), "ATTACKER00"),
         (("application", "cdHash"), "not-a-cdhash"),

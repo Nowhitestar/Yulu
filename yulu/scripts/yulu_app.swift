@@ -3,6 +3,9 @@ import Darwin
 import Security
 import ServiceManagement
 import WebKit
+#if canImport(YuluNativeRecording)
+import YuluNativeRecording
+#endif
 #if canImport(Sparkle)
 import Sparkle
 #endif
@@ -833,6 +836,11 @@ struct ShellContract: Encodable {
 
 struct BuildContract: Encodable {
     let developmentSmoke: Bool
+    #if canImport(YuluNativeRecording)
+    let nativeRecordingControls = true
+    #else
+    let nativeRecordingControls = false
+    #endif
 
     static var current: BuildContract {
         #if YULU_DEVELOPMENT_SMOKE
@@ -1210,6 +1218,18 @@ struct ApplicationDataPaths: Encodable {
     ]
 }
 
+func bundledProcessEnvironment(layout: BundleLayout, applicationPaths: ApplicationDataPaths) -> [String: String] {
+    var environment = sanitizedRuntimeEnvironment()
+    environment.merge(applicationPaths.environment) { _, contract in contract }
+    environment["YULU_SCRIPT_DIR"] = layout.bundledScriptDir.path
+    environment["YULU_NATIVE_HELPER_DIR"] = layout.executableDir.path
+    environment["YULU_PYTHON"] = layout.bundledPython.path
+    environment["YULU_FFMPEG"] = layout.bundledFFmpeg.path
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment["PATH"] = "\(layout.bundledBin.path):\(layout.bundledPythonBin.path):/usr/bin:/bin:/usr/sbin:/sbin"
+    return environment
+}
+
 struct HostServiceExecution: Encodable {
     static let declaredPort = 7777
     static let owner = "com.yulu.ui"
@@ -1223,8 +1243,7 @@ struct HostServiceExecution: Encodable {
         applicationPaths: ApplicationDataPaths,
         hostNonce: String = UUID().uuidString
     ) -> HostServiceExecution {
-        var environment = sanitizedRuntimeEnvironment()
-        environment.merge(applicationPaths.environment) { _, contract in contract }
+        var environment = bundledProcessEnvironment(layout: layout, applicationPaths: applicationPaths)
         environment["YULU_UI_PORT"] = String(declaredPort)
         environment["YULU_UI_DIST_WEB"] = layout.hostWeb.path
         environment["YULU_HOST_NONCE"] = hostNonce
@@ -1235,12 +1254,6 @@ struct HostServiceExecution: Encodable {
         environment["YULU_BUNDLE_VERSION"] = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleVersion"
         ) as? String ?? ""
-        environment["YULU_SCRIPT_DIR"] = layout.bundledScriptDir.path
-        environment["YULU_NATIVE_HELPER_DIR"] = layout.executableDir.path
-        environment["YULU_PYTHON"] = layout.bundledPython.path
-        environment["YULU_FFMPEG"] = layout.bundledFFmpeg.path
-        environment["PYTHONDONTWRITEBYTECODE"] = "1"
-        environment["PATH"] = "\(layout.bundledBin.path):\(layout.bundledPythonBin.path):/usr/bin:/bin:/usr/sbin:/sbin"
         return HostServiceExecution(
             executableURL: layout.hostNode,
             arguments: [layout.hostEntry.path],
@@ -2014,6 +2027,7 @@ func applicationUpdateHealthPayload(
     applicationGeneration: String,
     applicationExecutable: String,
     applicationIdentity: CodeIdentityEvidence,
+    nativeControlsReady: Bool,
     host: RuntimeOwnerEvidence,
     capture: RuntimeOwnerEvidence,
     serviceStatuses: [String: String]
@@ -2064,6 +2078,7 @@ func applicationUpdateHealthPayload(
             "uid": applicationUID,
             "generation": applicationGeneration,
             "executable": applicationExecutable,
+            "nativeControlsReady": nativeControlsReady,
         ],
         "host": [
             "identifier": hostIdentity.identifier,
@@ -2122,6 +2137,8 @@ final class ApplicationUpdateCoordinator {
     private var sessionGeneration = 0
     private var startMigrationAfterTermination = false
 
+    private var awaitingHealth = false
+
     private(set) var updatePending = false
     private(set) var installAuthorized = false
     private(set) var rollbackHelperLaunched = false
@@ -2131,6 +2148,8 @@ final class ApplicationUpdateCoordinator {
     var onNeedsHealth: (() -> Void)?
     var currentHealth: (() -> (host: RuntimeOwnerEvidence, capture: RuntimeOwnerEvidence))?
     var onRollbackHelperLaunched: (() -> Void)?
+    var observeNativeRecording: ((Bool?) -> Bool?)?
+    var nativeControlsReadiness: (() -> Bool)?
 
     init(
         policy: LaunchPolicy,
@@ -2175,7 +2194,8 @@ final class ApplicationUpdateCoordinator {
     }
 
     func submitHealth() {
-        guard let health = healthPayload() else { return }
+        guard awaitingHealth, let health = healthPayload() else { return }
+        awaitingHealth = false
         send(["health": health])
     }
 
@@ -2198,6 +2218,7 @@ final class ApplicationUpdateCoordinator {
             return
         }
         sessionGeneration += 1
+        awaitingHealth = false
         let generation = sessionGeneration
         terminalSeen = false
         binding = nil
@@ -2334,6 +2355,12 @@ final class ApplicationUpdateCoordinator {
                 onStateChange?("blocked", "Application update service action was rejected.")
                 return
             }
+            if let observeNativeRecording, observeNativeRecording(false) != false {
+                onStateChange?("blocked", "Native recording work has not finished.")
+                input?.closeFile()
+                input = nil
+                return
+            }
             BackgroundServiceDescriptor.bundledOwners.forEach { services.unregister($0) }
             observeQuiescence(attempt: 0)
         case "install_update":
@@ -2363,6 +2390,7 @@ final class ApplicationUpdateCoordinator {
                 self?.observeRegistration(attempt: 0)
             }
         case "verify_update_health", "verify_previous_health":
+            awaitingHealth = true
             onStateChange?("verifying", nil)
             onNeedsHealth?()
             submitHealth()
@@ -2392,8 +2420,12 @@ final class ApplicationUpdateCoordinator {
                 expectedExecutable: self.layout.captureExecutable
             )
             DispatchQueue.main.async {
+                var recording = status.recording
+                if let observeNativeRecording = self.observeNativeRecording {
+                    recording = observeNativeRecording(recording)
+                }
                 self.send(
-                    ["recording": status.recording ?? NSNull()],
+                    ["recording": recording ?? NSNull()],
                     requiresBinding: requiresBinding
                 )
             }
@@ -2417,7 +2449,11 @@ final class ApplicationUpdateCoordinator {
                 DispatchQueue.main.async {
                     guard self.process == nil,
                           self.retainedInstallHandler != nil else { return }
-                    if status.recording == false {
+                    var recording = status.recording
+                    if let observeNativeRecording = self.observeNativeRecording {
+                        recording = observeNativeRecording(recording)
+                    }
+                    if recording == false {
                         self.startSession(
                             targetVersion: target.version,
                             targetBuild: target.build,
@@ -2494,6 +2530,7 @@ final class ApplicationUpdateCoordinator {
                 .appendingPathComponent("Contents/MacOS/yulu_app")
                 .standardizedFileURL.resolvingSymlinksInPath().path,
             applicationIdentity: appIdentity,
+            nativeControlsReady: nativeControlsReadiness?() ?? false,
             host: health.host,
             capture: health.capture,
             serviceStatuses: services.statuses()
@@ -2929,7 +2966,7 @@ if CommandLine.arguments.count == 6,
     exit(0)
 }
 
-if CommandLine.arguments.count == 3,
+if (3...4).contains(CommandLine.arguments.count),
    CommandLine.arguments[1] == "--inspect-update-health-payload" {
     let layout = BundleLayout(
         bundleURL: URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
@@ -2992,6 +3029,8 @@ if CommandLine.arguments.count == 3,
             identifier: ProductSigningPolicy.applicationIdentifier,
             hash: String(repeating: "a", count: 40)
         ),
+        nativeControlsReady: CommandLine.arguments.count == 3
+            || CommandLine.arguments[3] == "ready",
         host: host,
         capture: capture,
         serviceStatuses: [
@@ -3920,10 +3959,14 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     private weak var cancelMigrationMenuItem: NSMenuItem?
     private weak var retryMigrationMenuItem: NSMenuItem?
     private var updateCoordinator: ApplicationUpdateCoordinator?
+    #if canImport(YuluNativeRecording)
+    private var nativeRecording: NativeRecordingControls?
+    #endif
     #if canImport(Sparkle)
     private var sparkleAdapter: SparkleUpdateAdapter?
     #endif
     private var migrationCommitted = false
+    private var nativeRecordingReady = false
     private var migrationStarted = false
     private var migrationRetryAvailable = false
     private var hostPollAttempts = 0
@@ -3985,6 +4028,19 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
                 return (self.hostEvidence, self.captureEvidence)
             }
             coordinator.onRollbackHelperLaunched = { NSApp.terminate(nil) }
+            coordinator.observeNativeRecording = { [weak self] recording in
+                #if canImport(YuluNativeRecording)
+                guard let controls = self?.nativeRecording else { return recording }
+                return controls.quiesce(captureRecording: recording)
+                #else
+                return recording
+                #endif
+            }
+            coordinator.nativeControlsReadiness = { [weak self] in
+                guard let self else { return false }
+                do { try self.prepareNativeRecording(); return true }
+                catch { return false }
+            }
             updateCoordinator = coordinator
             coordinator.resume()
         }
@@ -3997,6 +4053,12 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         false
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        #if canImport(YuluNativeRecording)
+        nativeRecording?.stop()
+        #endif
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let updateCoordinator else { return .terminateNow }
         let allowTermination = UpdateTerminationGate.allowTermination(
@@ -4004,7 +4066,27 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             installAuthorized: updateCoordinator.installAuthorized,
             rollbackHelperLaunched: updateCoordinator.rollbackHelperLaunched
         )
-        return allowTermination ? .terminateNow : .terminateCancel
+        guard allowTermination else { return .terminateCancel }
+        #if canImport(YuluNativeRecording)
+        if let controls = nativeRecording, controls.quiesce(captureRecording: false) != false {
+            finishNativeWorkBeforeTermination(sender)
+            return .terminateLater
+        }
+        #endif
+        return .terminateNow
+    }
+
+    private func finishNativeWorkBeforeTermination(_ application: NSApplication) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            #if canImport(YuluNativeRecording)
+            if let controls = self.nativeRecording, controls.quiesce(captureRecording: false) != false {
+                self.finishNativeWorkBeforeTermination(application)
+                return
+            }
+            #endif
+            application.reply(toApplicationShouldTerminate: true)
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -4170,6 +4252,8 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
 
     private func updateStateChanged(_ state: String, detail: String?) {
         switch state {
+        case "idle", "committed", "aborted", "rolled_back":
+            if migrationCommitted { _ = activateNativeRecording() }
         case "deferred":
             window?.contentView = centeredMessage(
                 "Update deferred",
@@ -4264,6 +4348,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             retryMigrationMenuItem?.isEnabled = false
             window?.contentView = centeredMessage("Starting Yulu…", detail: "Waiting for the bundled Host.")
             configureUpdater()
+            guard activateNativeRecording() else { return }
             beginServicePolling()
         case "rolled_back":
             migrationRetryAvailable = true
@@ -4418,6 +4503,46 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         if show { serviceWindow.makeKeyAndOrderFront(nil) }
     }
 
+    private func prepareNativeRecording() throws {
+        guard let applicationPaths else {
+            throw NSError(domain: "YuluNativeRecording", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Application data paths are unavailable."
+            ])
+        }
+        #if canImport(YuluNativeRecording)
+        if nativeRecording == nil {
+            nativeRecording = NativeRecordingControls(
+                environment: bundledProcessEnvironment(layout: layout, applicationPaths: applicationPaths),
+                openRoute: { [weak self] route in self?.open(route: route) }
+            )
+        }
+        try nativeRecording?.prepare()
+        #else
+        throw NSError(domain: "YuluNativeRecording", code: 2, userInfo: [
+            NSLocalizedDescriptionKey: "Reinstall the complete Yulu application from the signed DMG."
+        ])
+        #endif
+    }
+
+    private func activateNativeRecording() -> Bool {
+        guard migrationCommitted else { return false }
+        do {
+            try prepareNativeRecording()
+            #if canImport(YuluNativeRecording)
+            try nativeRecording?.activate()
+            #endif
+            nativeRecordingReady = true
+            return true
+        } catch {
+            nativeRecordingReady = false
+            window?.contentView = centeredMessage(
+                "Recording controls could not start",
+                detail: "\(error.localizedDescription) Quit any older Yulu instance, then reopen Yulu."
+            )
+            return false
+        }
+    }
+
     private func beginServicePolling() {
         pollGeneration += 1
         hostPollAttempts = 0
@@ -4465,7 +4590,9 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
                 self.refreshServiceWindow()
                 if responseHealthy {
                     self.hostPollAttempts = 0
-                    if self.migrationCommitted && self.webView == nil { self.open(route: "/") }
+                    if self.migrationCommitted && self.nativeRecordingReady && self.webView == nil {
+                        self.open(route: "/")
+                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         self.pollHost(generation: generation)
                     }

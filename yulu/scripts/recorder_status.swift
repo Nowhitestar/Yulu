@@ -122,15 +122,45 @@ extension NSColor {
     }
 }
 
-func yuluPythonExecutable() -> URL {
-    let candidates = [
-        "/opt/homebrew/bin/python3",
-        "/usr/local/bin/python3",
-        "/usr/bin/python3",
-    ]
-    let path = candidates.first(where: FileManager.default.isExecutableFile(atPath:))
-        ?? "/usr/bin/python3"
-    return URL(fileURLWithPath: path)
+func nativeIPCRequest(socketPath: String, payload: Data, timeoutSeconds: Int = 1) -> [String: Any]? {
+    guard socketPath.utf8.count < 104 else { return nil }
+    let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { return nil }
+    defer { Darwin.close(fd) }
+    var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    var noSigpipe: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigpipe, socklen_t(MemoryLayout<Int32>.size))
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    _ = socketPath.withCString { strncpy(&address.sun_path.0, $0, 103) }
+    let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    guard connected == 0 else { return nil }
+    let wrote = payload.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, payload.count) }
+    guard wrote == payload.count else { return nil }
+    shutdown(fd, SHUT_WR)
+    var output = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while output.count < 64 * 1024 {
+        let count = Darwin.read(fd, &buffer, buffer.count)
+        if count <= 0 { break }
+        output.append(buffer, count: count)
+        if output.contains(0x0A) { break }
+    }
+    return try? JSONSerialization.jsonObject(with: output) as? [String: Any]
+}
+
+func requestRecordingStop() -> [String: Any] {
+    nativeIPCRequest(
+        socketPath: "\(IPC_DIR)/status_agent.sock",
+        payload: Data("{\"action\":\"stop\"}\n".utf8),
+        timeoutSeconds: 4
+    ) ?? ["ok": false, "error": "controls_unavailable"]
 }
 
 final class HoverRootView: NSView {
@@ -494,7 +524,6 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var captionTimer: Timer?
     var toolbarHideWorkItem: DispatchWorkItem?
     var reconnectWorkItem: DispatchWorkItem?
-    var stopProcess: Process?
     let webSocketSession = URLSession(configuration: .default)
     var webSocketTask: URLSessionWebSocketTask?
 
@@ -1243,36 +1272,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func audioDaemonStatus() -> [String: Any]? {
         let socketPath = "\(IPC_DIR)/audio_daemon.sock"
-        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        if fd < 0 { return nil }
-        defer { Darwin.close(fd) }
-        var timeout = timeval(tv_sec: 1, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        _ = socketPath.withCString { pointer in
-            strncpy(&address.sun_path.0, pointer, min(strlen(pointer), 103))
-        }
-        let connected = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        if connected != 0 { return nil }
-        let payload = Data("{\"action\":\"status\"}".utf8)
-        let wrote = payload.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, payload.count) }
-        if wrote <= 0 { return nil }
-        shutdown(fd, SHUT_WR)
-        var output = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let count = Darwin.read(fd, &buffer, buffer.count)
-            if count <= 0 { break }
-            output.append(buffer, count: count)
-        }
-        guard !output.isEmpty else { return nil }
-        return try? JSONSerialization.jsonObject(with: output) as? [String: Any]
+        return nativeIPCRequest(socketPath: socketPath, payload: Data("{\"action\":\"status\"}\n".utf8))
     }
 
     @objc func doStop() {
@@ -1281,35 +1281,57 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         recordingButton.stoppingState = true
         recordingButton.isEnabled = false
         showToolbar()
-        let directory = (CommandLine.arguments[0] as NSString).deletingLastPathComponent
-        let process = Process()
-        process.executableURL = yuluPythonExecutable()
-        process.arguments = ["\(directory)/meeting_daemon.py", "stop"]
-        process.terminationHandler = { [weak self] process in
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let response = requestRecordingStop()
             DispatchQueue.main.async {
                 guard let self, !self.closing else { return }
-                if process.terminationStatus == 0 {
+                if response["ok"] as? Bool == true, let pid = response["launcher_pid"] as? Int {
                     self.checkState()
+                    self.observeStopCompletion(pid: pid)
                 } else {
-                    self.stopping = false
-                    self.recordingButton.stoppingState = false
-                    self.recordingButton.isEnabled = true
-                    self.warningText = L("停止录制失败，请重试", "Could not stop recording — try again")
-                    self.lastCaptionAt = Date()
+                    self.applyStopCompletion(response)
                     self.renderCaptions(animated: true, warning: true)
                     self.showToolbar()
                 }
             }
         }
-        do {
-            try process.run()
-            stopProcess = process
-        } catch {
-            stopping = false
-            recordingButton.stoppingState = false
-            recordingButton.isEnabled = true
+    }
+
+    func applyStopCompletion(_ response: [String: Any]) {
+        stopping = false
+        recordingButton.stoppingState = false
+        recordingButton.isEnabled = true
+        if response["ok"] as? Bool == true, response["state"] as? String == "completed" {
+            warningText = ""
+        } else if response["state"] as? String == "failed" {
             warningText = L("停止录制失败，请重试", "Could not stop recording — try again")
-            renderCaptions(animated: true, warning: true)
+        } else {
+            warningText = L("无法确认停止状态，请检查录音后重试", "Stop could not be confirmed — check recording and retry")
+        }
+        lastCaptionAt = Date()
+    }
+
+    private func observeStopCompletion(pid: Int) {
+        guard stopping, !closing else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let request = try! JSONSerialization.data(withJSONObject: ["action": "stop_status", "launcher_pid": pid])
+            let response = nativeIPCRequest(socketPath: "\(IPC_DIR)/status_agent.sock", payload: request)
+                ?? ["ok": false, "error": "controls_unavailable"]
+            DispatchQueue.main.async {
+                guard let self, self.stopping, !self.closing else { return }
+                if response["ok"] as? Bool == true, response["state"] as? String == "running" {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                        self?.observeStopCompletion(pid: pid)
+                    }
+                    return
+                }
+                self.applyStopCompletion(response)
+                self.checkState()
+                if !self.warningText.isEmpty {
+                    self.renderCaptions(animated: true, warning: true)
+                    self.showToolbar()
+                }
+            }
         }
     }
 
@@ -1341,8 +1363,25 @@ extension ArraySlice {
 }
 
 let arguments = CommandLine.arguments
+if arguments.contains("--stop") {
+    let response = requestRecordingStop()
+    let data = try JSONSerialization.data(withJSONObject: response)
+    print(String(decoding: data, as: UTF8.self))
+    exit(response["ok"] as? Bool == true ? 0 : 1)
+}
 if arguments.contains("--self-test") {
     let app = AppDel(title: "test", path: "")
+    app.recordingButton = RecordingButton(frame: .zero)
+    app.stopping = true
+    app.recordingButton.stoppingState = true
+    app.recordingButton.isEnabled = false
+    app.applyStopCompletion(["ok": true, "state": "failed", "exit_status": 1])
+    assert(!app.stopping && !app.recordingButton.stoppingState && app.recordingButton.isEnabled)
+    assert(!app.warningText.isEmpty)
+    app.applyStopCompletion(["ok": false, "error": "controls_unavailable"])
+    assert(!app.stopping && app.recordingButton.isEnabled && !app.warningText.isEmpty)
+    app.applyStopCompletion(["ok": true, "state": "completed", "exit_status": 0])
+    assert(app.warningText.isEmpty)
     assert(app.realtimeTranscriptPath(audioPath: "/tmp/Memo_20260630_120000.wav") == "/tmp/Memo_20260630_120000.realtime.transcript.txt")
     assert(app.captionLines("[Me] hello\n\n[Them] world\nplain\n") == [L("你  hello", "You  hello"), L("对方  world", "Them  world"), "plain"])
     assert(app.formatElapsed(12 * 60 + 48) == "12:48")

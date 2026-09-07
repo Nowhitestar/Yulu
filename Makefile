@@ -42,7 +42,7 @@ swift-build:
 				audio_daemon) \
 					FW="-framework Cocoa -framework ScreenCaptureKit -framework AVFoundation -framework CoreMedia -framework CoreAudio -framework AudioToolbox" ;; \
 				yulu_app) \
-					FW="-framework Cocoa -framework WebKit" ;; \
+					bash yulu/scripts/build_yulu_shell.sh "$(SWIFT_BUILD_DIR)/$$stem"; continue ;; \
 				xai_keychain) \
 					FW="-framework Security" ;; \
 				calendar_probe) \

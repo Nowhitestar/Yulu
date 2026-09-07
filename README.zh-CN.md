@@ -125,6 +125,10 @@ Codex 会在临时项目中加载仅属于 Yulu 的调用前守卫，同时继�
 | `Yulu.app` | 屏幕与系统音频录制 | 通过 ScreenCaptureKit 捕获会议声音 |
 | `window_scanner` | 辅助功能 | 检测受支持的会议窗口与标题 |
 
+菜单栏、全局快捷键与录音控制由 `Yulu.app` 自身提供，无需另装 StatusAgent。
+关闭主窗口后这些控制仍可用；退出 Yulu 后需重新打开 App。使用自动粘贴或模拟
+按键时，macOS 还可能要求为 `Yulu.app` 授予辅助功能权限。
+
 打开本地工作台：
 [`http://127.0.0.1:7777/agent-console`](http://127.0.0.1:7777/agent-console)。
 也可以直接从菜单栏或 CLI 开始第一次录音：

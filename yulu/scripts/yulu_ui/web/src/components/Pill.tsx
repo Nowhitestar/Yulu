@@ -35,7 +35,7 @@ export function Pill() {
   useEffect(() => {
     const confirmedState = (initial.data as { state?: PillState } | undefined)?.state;
     if (confirmedState) {
-      setState((current) => confirmedState === "unknown" && current !== "unknown" ? current : confirmedState);
+      setState(confirmedState);
       if (confirmedState === "idle") {
         setElapsed(0);
         setLevel(0);
@@ -69,65 +69,74 @@ export function Pill() {
     setRealtime(msg);
   });
 
-  switch (state) {
-    case "idle":
-      return (
-        <button className="pill pill-idle" onClick={() => toggle.mutate()} aria-label={t("pill.recordAria")}>
-          <span className="pill-mic"><Mic size={12} strokeWidth={1.75} /></span>
-          <span className="pill-label">{t("pill.record")}</span>
-          <span className="pill-hotkey">{hotkey}</span>
-        </button>
-      );
+  return <>
+    {renderState()}
+    {toggle.error && <div className="pill-command-error" role="alert">
+      {t(toggle.error.message.includes("controls_quiescing") ? "pill.updatePaused" : "pill.commandFailed")}
+    </div>}
+  </>;
 
-    case "recording":
-      return (
-        <div className="pill-live-stack">
-          {realtime?.text && (
-            <div className="pill-live-transcript" role="log" aria-live="polite">
-              <div className="pill-live-heading">{t("pill.realtime")}</div>
-              <div className="pill-live-copy">{tailLines(realtime.text, 6)}</div>
+  function renderState() {
+    switch (state) {
+      case "idle":
+        return (
+          <button className="pill pill-idle" disabled={toggle.isPending} onClick={() => toggle.mutate()} aria-label={t("pill.recordAria")}>
+            <span className="pill-mic"><Mic size={12} strokeWidth={1.75} /></span>
+            <span className="pill-label">{t("pill.record")}</span>
+            <span className="pill-hotkey">{hotkey}</span>
+          </button>
+        );
+
+      case "recording":
+        return (
+          <div className="pill-live-stack">
+            {realtime?.text && (
+              <div className="pill-live-transcript" role="log" aria-live="polite">
+                <div className="pill-live-heading">{t("pill.realtime")}</div>
+                <div className="pill-live-copy">{tailLines(realtime.text, 6)}</div>
+              </div>
+            )}
+            <div className="pill pill-recording" role="status" aria-label={t("pill.recordingAria")}>
+              <span className="pill-dot pulse" />
+              <span className="pill-time">{formatElapsed(elapsed)}</span>
+              <Meter level={level} />
+              <button className="pill-stop" disabled={toggle.isPending} onClick={() => toggle.mutate()} aria-label={t("pill.stopAria")}>■</button>
             </div>
-          )}
-          <div className="pill pill-recording" role="status" aria-label={t("pill.recordingAria")}>
-            <span className="pill-dot pulse" />
-            <span className="pill-time">{formatElapsed(elapsed)}</span>
-            <Meter level={level} />
-            <button className="pill-stop" onClick={() => toggle.mutate()} aria-label={t("pill.stopAria")}>■</button>
           </div>
-        </div>
-      );
+        );
 
-    case "processing":
-      return (
-        <div className="pill pill-processing" role="status">
-          <span className="pill-spinner" />
-          <span>{t("pill.transcribing", { time: formatElapsed(elapsed) })}</span>
-        </div>
-      );
+      case "processing":
+        return (
+          <div className="pill pill-processing" role="status">
+            <span className="pill-spinner" />
+            <span>{t("pill.transcribing", { time: formatElapsed(elapsed) })}</span>
+          </div>
+        );
 
-    case "meetingBusy":
-      return (
-        <div className="pill pill-meeting" role="status" title={t("pill.meeting")}>
-          <span className="pill-dot" />
-          <span>{t("pill.meeting")}</span>
-        </div>
-      );
+      case "meetingBusy":
+        return (
+          <div className="pill pill-meeting" role="status" title={t("pill.meeting")}>
+            <span className="pill-dot" />
+            <span>{t("pill.meeting")}</span>
+          </div>
+        );
 
-    case "daemonDown":
-      return (
-        <a className="pill pill-down" href="/health/daemons" role="alert">
-          <span className="pill-warn">⚠</span>
-          <span>{t("pill.daemonDown")}</span>
-        </a>
-      );
+      case "daemonDown":
+        return (
+          <a className="pill pill-down" href="/health/daemons" role="alert">
+            <span className="pill-warn">⚠</span>
+            <span>{t("pill.daemonDown")}</span>
+          </a>
+        );
 
-    case "unknown":
-      return (
-        <div className="pill pill-down" role="alert">
-          <span className="pill-warn">⚠</span>
-          <span>{t("pill.statusUnavailable")}</span>
-        </div>
-      );
+      case "unknown":
+        return (
+          <div className="pill pill-down" role="alert">
+            <span className="pill-warn">⚠</span>
+            <span>{t("pill.statusUnavailable")}</span>
+          </div>
+        );
+    }
   }
 }
 

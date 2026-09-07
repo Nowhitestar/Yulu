@@ -139,9 +139,9 @@ jobs:
             -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist \
             -Xlinker yulu/scripts/calendar_probe-Info.plist
           printf 'swiftc status_agent.swift (Cocoa + Carbon)\n'
-          swiftc -target arm64-apple-macosx13.0 -o ".ci-build/status_agent" yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon
+          swiftc -target arm64-apple-macosx13.0 -parse-as-library -o ".ci-build/status_agent" yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon
           printf 'swiftc yulu_app.swift (Cocoa + WebKit)\n'
-          swiftc -target arm64-apple-macosx13.0 -o ".ci-build/yulu_app" yulu/scripts/yulu_app.swift -framework Cocoa -framework WebKit
+          bash yulu/scripts/build_yulu_shell.sh ".ci-build/yulu_app"
           bash packaging/scripts/check_macos_deployment_target.sh \
             .ci-build/audio_daemon \
             .ci-build/xai_keychain \
