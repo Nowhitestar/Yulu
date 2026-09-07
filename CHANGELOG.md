@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.13](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.12...v0.23.0-rc.13) (2026-09-07)
+
+
+### Bug Fixes
+
+* **release:** align minimum macOS metadata for RC13 ([#187](https://github.com/Nowhitestar/Yulu/issues/187)) ([95e7f97](https://github.com/Nowhitestar/Yulu/commit/95e7f976f4719afa3d9918049cfd96bd8f544854))
+
 ## [0.23.0-rc.12](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.11...v0.23.0-rc.12) (2026-09-07)
 
 
