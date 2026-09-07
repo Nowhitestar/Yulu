@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "packaging" / "acceptance" / "public_dmg_target.sh"
-TAG = "v0.23.0-rc.11"
+TAG = "v0.23.0-rc.12"
 NAME = f"yulu-macos-arm64-{TAG}.dmg"
 PUBLIC_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/{NAME}"
 CHECKSUMS_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/checksums.txt"
@@ -230,11 +230,11 @@ def _assert_failed(result: subprocess.CompletedProcess[str], message: str) -> No
     assert message.lower() in result.stderr.lower(), result.stderr
 
 
-def test_fresh_and_upgrade_preflight_are_pinned_to_rc11(tmp_path: Path) -> None:
+def test_fresh_and_upgrade_preflight_are_pinned_to_rc12(tmp_path: Path) -> None:
     for scenario in ("fresh", "upgrade"):
-        for tag in ("v0.23.0-rc.9", "v0.23.0-rc.10"):
+        for tag in ("v0.23.0-rc.9", "v0.23.0-rc.10", "v0.23.0-rc.11"):
             result = _run(tmp_path / scenario / tag, scenario=scenario, tag=tag)
-            _assert_failed(result, "acceptance is pinned to v0.23.0-rc.11")
+            _assert_failed(result, "acceptance is pinned to v0.23.0-rc.12")
 
 
 def test_clean_public_preflight_is_green_but_never_formal_evidence(tmp_path: Path) -> None:
@@ -548,6 +548,8 @@ def _make_fixture_app(app: Path, *, large_file_bytes: int = 0) -> None:
         "Contents/Library/LaunchAgents/com.yulu.audiodaemon.plist",
         "Contents/MacOS/xai_keychain",
         "Contents/MacOS/calendar_probe",
+        "Contents/MacOS/recorder_status",
+        "Contents/MacOS/meeting_prompt",
         "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
         "Contents/Resources/Sparkle-LICENSE.txt",
     )
@@ -566,7 +568,7 @@ def _make_fixture_app(app: Path, *, large_file_bytes: int = 0) -> None:
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.yulu.app</string>
 <key>CFBundleShortVersionString</key><string>0.23.0</string>
-<key>YuluReleaseVersion</key><string>0.23.0-rc.11</string>
+<key>YuluReleaseVersion</key><string>0.23.0-rc.12</string>
 <key>CFBundleVersion</key><string>2304</string>
 </dict></plist>
 """)
@@ -890,6 +892,32 @@ def test_observer_uses_bounded_hashing_and_rejects_extra_inventory_files(tmp_pat
     source = observer.read_text()
     assert "readFileSync(candidate)" not in source
     assert "Buffer.compare" in source
+
+
+def test_product_observer_rejects_changed_or_missing_recording_presenters(tmp_path: Path) -> None:
+    observer = ROOT / "packaging" / "acceptance" / "observe_product.mjs"
+    for presenter in ("recorder_status", "meeting_prompt"):
+        for change in ("changed", "missing"):
+            case = tmp_path / presenter / change
+            mounted = case / "mounted" / "Yulu.app"
+            installed = case / "installed" / "Yulu.app"
+            _make_fixture_app(mounted)
+            shutil.copytree(mounted, installed)
+            args = [
+                str(installed / "Contents" / "Resources" / "runtime" / "bin" / "node"),
+                str(observer), "--policy-test", "--mounted", str(mounted),
+                "--installed", str(installed),
+            ]
+            intact = subprocess.run(args, text=True, capture_output=True, check=False)
+            assert intact.returncode == 0, intact.stderr
+            helper = installed / "Contents" / "MacOS" / presenter
+            if change == "changed":
+                helper.write_text("changed recording presenter")
+            else:
+                helper.unlink()
+            rejected = subprocess.run(args, text=True, capture_output=True, check=False)
+            _assert_failed(rejected, presenter)
+            assert not rejected.stdout
 
 
 def test_product_observer_binds_team_and_cdhash_across_checkpoints(tmp_path: Path) -> None:
