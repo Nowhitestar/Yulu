@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.14](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.13...v0.23.0-rc.14) (2026-09-08)
+
+
+### Bug Fixes
+
+* **onboarding:** unblock installed Settings and OAuth browser handoff ([#190](https://github.com/Nowhitestar/Yulu/issues/190)) ([6f4a71d](https://github.com/Nowhitestar/Yulu/commit/6f4a71dfec3731576d1e9737a8f51eb2c12b0ece))
+
 ## [0.23.0-rc.13](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.12...v0.23.0-rc.13) (2026-09-07)
 
 
