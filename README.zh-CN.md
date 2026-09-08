@@ -111,6 +111,8 @@ Codex 会在临时项目中加载仅属于 Yulu 的调用前守卫，同时继�
 - Agent Console 可选使用 Codex CLI、Claude Code、OpenClaw、Hermes 或自定义命令。
 
 官方 App 已内含兼容的 Application Runtime 与必要音频工具。
+Grok OAuth 会在系统默认浏览器中打开。在浏览器中完成账号登录后，回到 Yulu 分别测试
+已选择的能力；登录成功本身不代表转写、摘要或对话已就绪。
 
 ### 安装
 

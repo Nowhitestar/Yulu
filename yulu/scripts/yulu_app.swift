@@ -3946,13 +3946,163 @@ final class SparkleUpdateAdapter: NSObject, SPUUpdaterDelegate {
 }
 #endif
 
+final class ApplicationWebContent: NSObject, WKUIDelegate {
+    let webView: WKWebView
+    private let port: Int
+    private let openExternalURL: (URL) -> Bool
+
+    init(
+        port: Int,
+        configuration: WKWebViewConfiguration = WKWebViewConfiguration(),
+        openExternalURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) {
+        webView = WKWebView(frame: .zero, configuration: configuration)
+        self.port = port
+        self.openExternalURL = openExternalURL
+        super.init()
+        webView.autoresizingMask = [.width, .height]
+        webView.uiDelegate = self
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        createWebViewWith configuration: WKWebViewConfiguration,
+        for navigationAction: WKNavigationAction,
+        windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+        let source = navigationAction.sourceFrame
+        let origin = source.securityOrigin
+        guard webView === self.webView, source.isMainFrame,
+              origin.protocol == "http", origin.host == "127.0.0.1", origin.port == port,
+              navigationAction.targetFrame == nil,
+              let url = navigationAction.request.url,
+              url.scheme?.lowercased() == "https", !(url.host ?? "").isEmpty,
+              url.user == nil, url.password == nil else { return nil }
+        _ = openExternalURL(url)
+        return nil
+    }
+}
+
+#if YULU_DEVELOPMENT_SMOKE
+struct WebNavigationSmokeReport: Encodable {
+    let classification = "development_web_navigation"
+    let browserOpenCount: Int
+    let formalAcceptance = false
+}
+
+func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
+    _ = NSApplication.shared
+    var opened: [String] = []
+    let configuration = WKWebViewConfiguration()
+    configuration.websiteDataStore = .nonPersistent()
+    let content = ApplicationWebContent(port: 17891, configuration: configuration, openExternalURL: {
+        opened.append($0.absoluteString)
+        return true
+    })
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
+        styleMask: [.titled], backing: .buffered, defer: false
+    )
+    window.contentView = content.webView
+    let origin = URL(string: "http://127.0.0.1:17891/")!
+    content.webView.loadHTMLString("<html><body>Yulu web navigation fixture</body></html>", baseURL: origin)
+    let loadDeadline = Date().addingTimeInterval(10)
+    while content.webView.isLoading && Date() < loadDeadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+    guard !content.webView.isLoading else {
+        throw NSError(domain: "WebNavigationSmoke", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "local WebView fixture did not load"])
+    }
+    let authorizationURL = "https://accounts.x.ai/oauth2/device?user_code=YULU-TEST"
+    let manualURL = "https://accounts.x.ai/oauth2/device?user_code=MANUAL-TEST"
+    var scriptCompleted = false
+    var scriptError: Error?
+    content.webView.evaluateJavaScript("""
+        (() => {
+          const pending = window.open('about:blank', '_blank');
+          if (pending) pending.opener = null;
+          Promise.resolve().then(() => {
+            if (pending) pending.location.href = '\(authorizationURL)';
+            else window.open('\(authorizationURL)', '_blank', 'noopener,noreferrer');
+          });
+          const link = document.createElement('a');
+          link.href = '\(manualURL)'; link.target = '_blank'; link.rel = 'noreferrer';
+          document.body.append(link); link.click();
+          return true;
+        })()
+        """) { _, error in
+            scriptError = error
+            scriptCompleted = true
+        }
+    let deadline = Date().addingTimeInterval(5)
+    while (!scriptCompleted || opened.count < 2) && Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+    if let scriptError { throw scriptError }
+    guard scriptCompleted, opened.count == 2,
+          Set(opened) == Set([authorizationURL, manualURL]),
+          content.webView.url == origin else {
+        throw NSError(domain: "WebNavigationSmoke", code: 2,
+                      userInfo: [NSLocalizedDescriptionKey:
+                        "OAuth popup and manual link must each open the system browser once; observed \(opened.count)"])
+    }
+
+    func assertNoBrowserOpen(_ script: String) throws {
+        var completed = false
+        var failure: Error?
+        content.webView.evaluateJavaScript(script) { _, error in
+            failure = error
+            completed = true
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while !completed && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        if let failure { throw failure }
+        guard completed, opened.count == 2 else {
+            throw NSError(domain: "WebNavigationSmoke", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "untrusted navigation opened the browser"])
+        }
+    }
+    try assertNoBrowserOpen("""
+        (() => {
+          for (const url of [
+            'file:///tmp/yulu-navigation-test', 'yulu://navigation-test',
+            'http://example.invalid/', 'https://test:PASSWORD@example.invalid/'
+          ]) window.open(url, '_blank');
+          const frame = document.createElement('iframe');
+          document.body.append(frame);
+          frame.contentWindow.eval("window.open('https://example.invalid/subframe', '_blank')");
+          return true;
+        })()
+        """)
+    for untrustedOrigin in ["http://127.0.0.1:17892/", "https://example.invalid/"] {
+        content.webView.loadHTMLString("<html><body>Untrusted source fixture</body></html>",
+                                       baseURL: URL(string: untrustedOrigin)!)
+        let deadline = Date().addingTimeInterval(10)
+        while content.webView.isLoading && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        guard !content.webView.isLoading, content.webView.url?.absoluteString == untrustedOrigin else {
+            throw NSError(domain: "WebNavigationSmoke", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: "untrusted source fixture did not load"])
+        }
+        try assertNoBrowserOpen("window.open('https://accounts.x.ai/oauth2/device', '_blank'); true")
+    }
+    window.orderOut(nil)
+    return WebNavigationSmokeReport(browserOpenCount: opened.count)
+}
+#endif
+
 final class YuluApplication: NSObject, NSApplicationDelegate {
     private let launchPolicy: LaunchPolicy
     private let layout: BundleLayout
     private let port: Int
     private let applicationPaths: ApplicationDataPaths?
     private var window: NSWindow?
-    private var webView: WKWebView?
+    private var webContent: ApplicationWebContent?
+    private var webView: WKWebView? { webContent?.webView }
     private var serviceWindow: NSWindow?
     private let backgroundServices = BackgroundServiceRegistry()
     private var migrationCoordinator: ApplicationMigrationCoordinator?
@@ -4638,9 +4788,9 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         if let webView {
             web = webView
         } else {
-            web = WKWebView(frame: .zero)
-            web.autoresizingMask = [.width, .height]
-            webView = web
+            let content = ApplicationWebContent(port: port)
+            webContent = content
+            web = content.webView
             window?.contentView = web
         }
         guard let url = URL(string: "http://127.0.0.1:\(port)\(route)") else { return }
@@ -4654,6 +4804,15 @@ let policy = LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path)
 let layout = BundleLayout(bundleURL: Bundle.main.bundleURL)
 #if YULU_DEVELOPMENT_SMOKE
 let port = Int(ProcessInfo.processInfo.environment["YULU_UI_PORT"] ?? "7777") ?? 7777
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--web-navigation-smoke" {
+    do {
+        try writeJSON(runWebNavigationSmoke())
+        exit(0)
+    } catch {
+        fputs("development web navigation smoke failed: \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
+}
 if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--development-smoke" {
     do {
         try writeJSON(runDevelopmentSmoke(layout: layout, port: port))

@@ -145,6 +145,8 @@ center of the currently active display.
   Agent Console conversation.
 
 The official App contains its compatible Application Runtime and audio tools.
+Grok OAuth opens in your default browser. Complete the account login there, then
+return to Yulu to test each selected capability; login alone does not prove readiness.
 
 ### Install
 

@@ -234,6 +234,61 @@ test("Settings — Agent Connection Center is authoritative and honors exact rem
   expect(probes).toBe(0);
 });
 
+test("Settings — capabilities remain readable at the native default window size", async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 680 });
+  await page.route("**/trpc/onboarding.status*", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.result.data.entry.shouldAutoEnter = false;
+    await route.fulfill({ response, json: body });
+  });
+  await page.goto("/settings/llm?connection=direct-xai&capability=transcription");
+  const target = page.locator("#agent-connection-direct-xai-transcription");
+  await expect(target).toBeFocused();
+
+  for (const width of [960, 1280, 1440, 760, 390]) {
+    await page.setViewportSize({ width, height: 680 });
+    for (const capability of ["transcription", "summary", "conversation"]) {
+      const card = page.locator(`#agent-connection-direct-xai-${capability}`);
+      const bounds = await card.boundingBox();
+      expect(bounds, `${capability} must be rendered at ${width}px`).not.toBeNull();
+      expect.soft(bounds!.width, `${capability} must fit readable controls at ${width}px`).toBeGreaterThanOrEqual(180);
+    }
+    const detail = page.locator(".masterdetail-detail");
+    const overflow = await detail.evaluate((element) => element.scrollWidth - element.clientWidth);
+    expect.soft(overflow, `connection controls must not need horizontal scrolling at ${width}px`).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: test.info().outputPath(`settings-${width}.png`) });
+  }
+
+  await page.setViewportSize({ width: 1440, height: 680 });
+  const settings = page.locator(".settings-masterdetail");
+  const pane = settings.locator(".rs-pane");
+  const separator = settings.getByRole("separator");
+  await expect(pane).toHaveCSS("width", "360px");
+  const handle = await separator.boundingBox();
+  expect(handle).not.toBeNull();
+  await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle!.x + handle!.width / 2 + 80, handle!.y + handle!.height / 2);
+  await page.mouse.up();
+  await expect(pane).toHaveCSS("width", "440px");
+
+  for (const width of [960, 390]) {
+    await page.setViewportSize({ width, height: 680 });
+    await expect(separator).toBeHidden();
+    await settings.locator('a[href="/settings/audio"]').click();
+    await expect(page.getByRole("heading", { name: "Audio", exact: true })).toBeVisible();
+    await settings.locator('a[href="/settings/llm"]').click();
+    await expect(page.getByRole("heading", { name: "Agent Connection Center", exact: true })).toBeVisible();
+  }
+
+  await page.setViewportSize({ width: 1440, height: 680 });
+  await expect(separator).toBeVisible();
+  await expect(pane).toHaveCSS("width", "440px");
+  await page.reload();
+  await expect(pane).toHaveCSS("width", "440px");
+});
+
 test("Agent Console preserves a pinned pause and only retries after an explicit action", async ({ page }) => {
   await page.route("**/trpc/config.get*", (route) => fulfill(route, {
     ui: { language: "en" },
