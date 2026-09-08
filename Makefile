@@ -1,4 +1,4 @@
-.PHONY: doctor doctor-json test py-compile pytest swift-build dev-install-dry-run sync-skill sync-skill-dry-run public-dmg-acceptance-policy package checksums
+.PHONY: doctor doctor-json test py-compile pytest swift-build web-navigation-smoke dev-install-dry-run sync-skill sync-skill-dry-run public-dmg-acceptance-policy package checksums
 
 PYTHON ?= python3
 SWIFT_BUILD_DIR ?= .ci-build
@@ -58,7 +58,17 @@ swift-build:
 	fi
 
 
-test: py-compile pytest swift-build
+web-navigation-smoke:
+	@if command -v swiftc >/dev/null 2>&1; then \
+		mkdir -p "$(SWIFT_BUILD_DIR)"; \
+		bash yulu/scripts/build_yulu_shell.sh "$(SWIFT_BUILD_DIR)/yulu-web-navigation-smoke" -D YULU_DEVELOPMENT_SMOKE && \
+		"$(SWIFT_BUILD_DIR)/yulu-web-navigation-smoke" --web-navigation-smoke; \
+	else \
+		echo "swiftc missing; skipping native WebView smoke"; \
+	fi
+
+
+test: py-compile pytest swift-build web-navigation-smoke
 
 
 # Policy-only: deterministic harness construction plus controller fail-closed

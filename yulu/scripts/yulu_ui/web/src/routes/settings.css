@@ -101,10 +101,41 @@
   flex: 1;
   min-height: 0;
   display: flex;
+  container: settings / inline-size;
 }
 .settings-masterdetail .masterdetail {
   flex: 1;
   min-width: 0;
+}
+
+@container settings (max-width: 900px) {
+  .masterdetail--settings-mobile-tabs {
+    flex-direction: column;
+    min-height: 0;
+  }
+  .masterdetail--settings-mobile-tabs > .rs-root {
+    width: 100%;
+    height: auto;
+    flex: 0 0 auto;
+  }
+  .masterdetail--settings-mobile-tabs > .rs-root > .rs-pane {
+    width: 100% !important;
+    height: auto;
+    flex: none !important;
+  }
+  .masterdetail--settings-mobile-tabs > .rs-root > .rs-handle { display: none; }
+  .masterdetail--settings-mobile-tabs .masterdetail-list {
+    height: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .masterdetail--settings-mobile-tabs .masterdetail-detail {
+    height: auto;
+    min-height: 0;
+  }
+  .settings-category-list { flex-direction: row; min-width: max-content; }
+  .settings-category-row { flex: 0 0 auto; min-height: 0; white-space: nowrap; }
+  .settings-category-desc { display: none; }
 }
 
 /* Detail pane (category content). Mirrors the inbox reader's calm aesthetic —
