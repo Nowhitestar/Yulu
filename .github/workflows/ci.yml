@@ -244,5 +244,5 @@ jobs:
       - name: Rendered Settings regression (not formal acceptance)
         run: |
           set -euo pipefail
-          npm exec -- playwright install chrome
+          npm exec -- playwright install chromium
           npm exec -- playwright test e2e/critical.spec.ts --grep "Settings — capabilities remain readable"
