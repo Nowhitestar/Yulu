@@ -4069,7 +4069,7 @@ func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
         (() => {
           for (const url of [
             'file:///tmp/yulu-navigation-test', 'yulu://navigation-test',
-            'http://example.invalid/', 'https://test:secret@example.invalid/'
+            'http://example.invalid/', 'https://test:PASSWORD@example.invalid/'
           ]) window.open(url, '_blank');
           const frame = document.createElement('iframe');
           document.body.append(frame);
