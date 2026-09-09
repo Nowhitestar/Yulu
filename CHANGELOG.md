@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.16](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.15...v0.23.0-rc.16) (2026-09-09)
+
+
+### Bug Fixes
+
+* declare containing-App capture permissions and prepare RC16 ([#196](https://github.com/Nowhitestar/Yulu/issues/196)) ([a43b209](https://github.com/Nowhitestar/Yulu/commit/a43b209a6402155a1fe7cc4be0b0361130c490bc)), closes [#195](https://github.com/Nowhitestar/Yulu/issues/195)
+
 ## [0.23.0-rc.15](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.14...v0.23.0-rc.15) (2026-09-09)
 
 
