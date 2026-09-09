@@ -12,7 +12,7 @@ import {
 import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const CURRENT_TAG = "v0.23.0-rc.14";
+const CURRENT_TAG = "v0.23.0-rc.15";
 const CURRENT_VERSION = CURRENT_TAG.slice(1);
 const CURRENT_SHORT_VERSION = CURRENT_VERSION.split("-", 1)[0];
 const LEGACY_TAG = "v0.22.2";
@@ -109,7 +109,7 @@ for (let index = 2; index < process.argv.length; index += 1) {
 }
 
 if (!MODES.has(options.mode)) fail("mode is invalid");
-if (options.releaseTag !== CURRENT_TAG) fail("upgrade acceptance is pinned to v0.23.0-rc.14");
+if (options.releaseTag !== CURRENT_TAG) fail("upgrade acceptance is pinned to v0.23.0-rc.15");
 if (!isSha256(options.snapshotWitnessSha256)) fail("operator snapshot witness hash is invalid");
 const needsPrior = new Set(["committed", "committed_stable", "rolled_back_stable", "retry_awaiting_approval"]);
 if (needsPrior.has(options.mode) !== Boolean(options.priorEvidence)) {

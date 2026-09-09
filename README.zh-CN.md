@@ -117,7 +117,7 @@ Grok OAuth 会在系统默认浏览器中打开。在浏览器中完成账号登
 ### 安装
 
 RC14 已知限制：全新安装后，打开录音可能报 `unable to open database file`。
-初始化修复目前尚未发布，详见[首次安装数据库准备](docs/operations.md#fresh-install-database-preparation-unreleased-repair)。
+RC15 候选版包含初始化修复，详见[首次安装数据库准备](docs/operations.md#fresh-install-database-preparation)。
 请保留现有数据，不要手动创建空数据库来绕过错误。
 
 打开 [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases)，选择当前公告的

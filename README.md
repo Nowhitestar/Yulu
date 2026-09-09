@@ -151,8 +151,8 @@ return to Yulu to test each selected capability; login alone does not prove read
 ### Install
 
 Known RC14 limitation: on a fresh install, opening a recording can fail with
-`unable to open database file`. The initialization repair is currently unreleased;
-see [fresh-install database preparation](docs/operations.md#fresh-install-database-preparation-unreleased-repair).
+`unable to open database file`. The RC15 candidate includes the initialization repair;
+see [fresh-install database preparation](docs/operations.md#fresh-install-database-preparation).
 Keep your data and do not create empty databases as a workaround.
 
 Open [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases), choose the
