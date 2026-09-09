@@ -5,6 +5,7 @@ import io
 import json
 import os
 import plistlib
+import signal
 import socket
 import sqlite3
 import stat
@@ -2691,8 +2692,13 @@ def test_python_queue_publish_fails_closed_when_archive_directory_is_swapped(
     assert (legacy / "agent-queue.json").read_bytes() == queue_raw
 
 
+@pytest.mark.parametrize(
+    ("leaf_startup_delay", "descendant_startup_delay"),
+    [(0, 0), (0.4, 0), (0, 0.4)],
+    ids=["immediate-start", "delayed-leaf", "delayed-descendant"],
+)
 def test_node_leaf_timeout_kills_its_process_group_and_reaps_the_child(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, leaf_startup_delay, descendant_startup_delay
 ):
     monkeypatch.syspath_prepend(str(SCRIPTS))
     from application_migration import MigrationBlocked, _run_node_leaf_bounded
@@ -2701,17 +2707,46 @@ def test_node_leaf_timeout_kills_its_process_group_and_reaps_the_child(
     descendant_pid_file = tmp_path / "leaf-descendant.pid"
     descendant_program = (
         "import os,signal,time,pathlib;"
-        f"pathlib.Path({str(descendant_pid_file)!r}).write_text(str(os.getpid()));"
+        f"time.sleep({descendant_startup_delay!r});"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+        f"pathlib.Path({str(descendant_pid_file)!r}).write_text(str(os.getpid()));"
         "time.sleep(60)"
     )
     program = (
         "import os,signal,time,pathlib,subprocess,sys;"
+        f"time.sleep({leaf_startup_delay!r});"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
         f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()));"
         f"subprocess.Popen([sys.executable,'-c',{descendant_program!r}]);"
-        "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
         "time.sleep(60)"
     )
+    real_popen = subprocess.Popen
+    started = []
+
+    def start_ready_leaf(*arguments, **options):
+        process = real_popen(*arguments, **options)
+        started.append(process)
+        # Test process-group cleanup, not interpreter startup speed. Both real
+        # processes publish their PIDs only after installing the SIGTERM handler.
+        deadline = time.monotonic() + 5
+        try:
+            while not all(
+                path.exists() and path.read_text().isdigit()
+                for path in (pid_file, descendant_pid_file)
+            ):
+                assert process.poll() is None, "test leaf exited before readiness"
+                assert time.monotonic() < deadline, "test leaf did not become ready"
+                time.sleep(0.01)
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=3)
+            raise
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", start_ready_leaf)
     with pytest.raises(MigrationBlocked, match="timed out"):
         _run_node_leaf_bounded(
             [sys.executable, "-c", program],
@@ -2722,6 +2757,7 @@ def test_node_leaf_timeout_kills_its_process_group_and_reaps_the_child(
             termination_grace_seconds=0.05,
         )
 
+    assert started[0].returncode == -signal.SIGKILL
     pids = [int(pid_file.read_text()), int(descendant_pid_file.read_text())]
     deadline = time.monotonic() + 3
     for pid in pids:

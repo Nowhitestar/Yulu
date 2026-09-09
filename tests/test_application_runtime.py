@@ -137,6 +137,7 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     write(scripts / "record_audio.py", b"print('record')\n")
     write(scripts / "application_migration.py", b"print('migrate')\n")
     write(scripts / "application_update.py", b"print('update')\n")
+    write(scripts / "initialize_host_databases.py", b"print('initialize')\n")
     write(scripts / "search/cli.py", b"print('search')\n")
     write(scripts / "config.example.json", b"{}\n")
     write(
@@ -1274,6 +1275,24 @@ def test_runtime_verifier_requires_bundled_recording_presenters(tmp_path: Path):
         write(helper, executable=True)
         assert result.returncode != 0
         assert f"required Application Runtime file missing: Contents/MacOS/{name}" in result.stderr
+
+
+def test_runtime_verifier_requires_fresh_host_database_initializer(tmp_path: Path):
+    app, overrides = runtime_fixture(tmp_path)
+    prepared = subprocess.run(
+        ["bash", str(PREPARE), str(app)], env={**os.environ, **overrides},
+        capture_output=True, text=True, check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    relative = "Contents/Resources/runtime/yulu/scripts/initialize_host_databases.py"
+    (app / relative).unlink()
+    result = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env={**os.environ, **fake_verification_tools(tmp_path)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode != 0
+    assert f"required Application Runtime file missing: {relative}" in result.stderr
 
 
 def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(tmp_path: Path):

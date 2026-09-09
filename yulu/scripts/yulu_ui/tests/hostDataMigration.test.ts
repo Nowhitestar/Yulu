@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -38,6 +40,7 @@ afterEach(() => {
   else process.env.YULU_DEV_SMOKE = originalDevelopmentSmoke;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("Host durable-data migration", () => {
@@ -94,6 +97,153 @@ describe("Host durable-data migration", () => {
       const restarted = await fetch(`http://127.0.0.1:${server.address.port}/healthz`);
       expect(restarted.status).toBe(200);
     } finally {
+      await server?.close();
+    }
+  });
+
+  it("opens the first recording with bundled summary templates without setup.sh or precreated databases", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-host-fresh-recording-"));
+    roots.push(root);
+    const paths = resolveHostPaths({ homeDir: root, environment: {} });
+    process.env.YULU_UI_PORT = "0";
+    process.env.YULU_DEV_SMOKE = "1";
+    const server = await startServer(paths);
+    try {
+      const stem = "FirstRecording_20260909_110000";
+      const wav = Buffer.alloc(46);
+      wav.write("RIFF", 0);
+      wav.writeUInt32LE(38, 4);
+      wav.write("WAVEfmt ", 8);
+      wav.writeUInt32LE(16, 16);
+      wav.writeUInt16LE(1, 20);
+      wav.writeUInt16LE(1, 22);
+      wav.writeUInt32LE(16_000, 24);
+      wav.writeUInt32LE(32_000, 28);
+      wav.writeUInt16LE(2, 32);
+      wav.writeUInt16LE(16, 34);
+      wav.write("data", 36);
+      wav.writeUInt32LE(2, 40);
+      wav.writeInt16LE(1, 44);
+      mkdirSync(paths.moviesDir, { recursive: true });
+      writeFileSync(join(paths.moviesDir, `${stem}.wav`), wav);
+      const input = encodeURIComponent(JSON.stringify({ stem }));
+      const response = await fetch(`http://127.0.0.1:${server.address.port}/trpc/recordings.get?input=${input}`);
+      expect(response.status).toBe(200);
+      const { result: { data } } = await response.json();
+      expect(data).toMatchObject({
+        stem,
+        transcript: null,
+        summary: null,
+        summaryTemplateOptions: expect.arrayContaining([
+          expect.objectContaining({ slug: "summary", name: "Standard Summary", isAutoRun: true }),
+        ]),
+        defaultSummaryTemplateId: expect.any(String),
+      });
+      expect(existsSync(paths.legacyReadOnlyDataDir)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps user-edited templates on restart and initializes the other fresh database surfaces", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-host-database-restart-"));
+    roots.push(root);
+    const paths = resolveHostPaths({ homeDir: root, environment: {} });
+    process.env.YULU_UI_PORT = "0";
+    process.env.YULU_DEV_SMOKE = "1";
+    let server: RunningServer | null = await startServer(paths);
+    try {
+      let baseUrl = `http://127.0.0.1:${server.address.port}`;
+      const templates = await fetch(`${baseUrl}/trpc/prompts.list?input=%7B%7D`).then((r) => r.json());
+      const original = templates.result.data.find((row: { slug: string }) => row.slug === "summary");
+      const edited = await fetch(`${baseUrl}/trpc/prompts.update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: original.id, content: "My own summary instructions", name: "My summary" }),
+      });
+      expect(edited.status).toBe(200);
+      await server.close();
+      server = await startServer(paths);
+      baseUrl = `http://127.0.0.1:${server.address.port}`;
+      const input = encodeURIComponent(JSON.stringify({ id: original.id }));
+      const preserved = await fetch(`${baseUrl}/trpc/prompts.get?input=${input}`).then((r) => r.json());
+      expect(preserved.result.data).toMatchObject({
+        id: original.id, name: "My summary", content: "My own summary instructions", source: "manual",
+      });
+      const glossary = await fetch(`${baseUrl}/trpc/glossary.list`);
+      expect(glossary.status).toBe(200);
+      expect((await glossary.json()).result.data).toEqual(expect.arrayContaining([
+        expect.objectContaining({ term: "Yulu", source: "seed" }),
+      ]));
+      const databases = await fetch(`${baseUrl}/trpc/system.dbStats`).then((r) => r.json());
+      expect(databases.result.data).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "search", rows: 0, size: expect.any(Number) }),
+      ]));
+      for (const path of [paths.promptsDb, paths.vocabDb, paths.searchDb]) {
+        expect(statSync(path).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      await server?.close();
+    }
+  });
+
+  it("fails before Host readiness and cleans staging when initialization fails, then allows a clean retry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-host-database-failure-"));
+    roots.push(root);
+    const paths = resolveHostPaths({ homeDir: root, environment: {} });
+    process.env.YULU_UI_PORT = "0";
+    process.env.YULU_DEV_SMOKE = "1";
+    vi.stubEnv("YULU_PYTHON", join(root, "missing-python"));
+
+    await expect(startServer(paths)).rejects.toThrow("Host database initialization failed");
+    expect(readdirSync(paths.durableDataDir).filter((name) => name.startsWith(".host-databases-"))).toEqual([]);
+    for (const path of [paths.promptsDb, paths.vocabDb, paths.searchDb, paths.hostDb]) {
+      expect(existsSync(path)).toBe(false);
+    }
+
+    vi.unstubAllEnvs();
+    const server = await startServer(paths);
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.address.port}/healthz`);
+      expect(response.status).toBe(200);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("preserves a concurrently published database instead of replacing it with defaults", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-host-database-race-"));
+    roots.push(root);
+    const paths = resolveHostPaths({ homeDir: root, environment: {} });
+    process.env.YULU_UI_PORT = "0";
+    process.env.YULU_DEV_SMOKE = "1";
+    const originalLinkSync = mutableFs.linkSync;
+    let server: RunningServer | null = null;
+    try {
+      mutableFs.linkSync = ((source, destination) => {
+        if (String(destination) !== "prompts.sqlite") return originalLinkSync(source, destination);
+        cpSync(String(source), String(destination));
+        const writer = new Database(String(destination));
+        try {
+          writer.prepare("UPDATE prompts SET name = ?, source = 'manual' WHERE slug = 'summary'")
+            .run("Concurrent user template");
+        } finally {
+          writer.close();
+        }
+        throw Object.assign(new Error("destination exists"), { code: "EEXIST" });
+      }) as typeof mutableFs.linkSync;
+      syncBuiltinESMExports();
+
+      server = await startServer(paths);
+      const response = await fetch(`http://127.0.0.1:${server.address.port}/trpc/prompts.list?input=%7B%7D`);
+      expect(response.status).toBe(200);
+      expect((await response.json()).result.data).toEqual(expect.arrayContaining([
+        expect.objectContaining({ slug: "summary", name: "Concurrent user template", source: "manual" }),
+      ]));
+      expect(readdirSync(paths.durableDataDir).filter((name) => name.startsWith(".host-databases-"))).toEqual([]);
+    } finally {
+      mutableFs.linkSync = originalLinkSync;
+      syncBuiltinESMExports();
       await server?.close();
     }
   });

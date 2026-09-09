@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import Database, { type Database as SqliteDatabase } from "better-sqlite3";
 import {
   closeSync,
@@ -8,6 +9,7 @@ import {
   linkSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -620,12 +622,54 @@ async function backupSqliteIfMissing(
   }
 }
 
+function initializeMissingDatabases(paths: HostDataPaths, scriptDir: string, root: AuthorityRoot): void {
+  const databases = [
+    { kind: "prompts" as const, path: paths.promptsDb },
+    { kind: "vocab" as const, path: paths.vocabDb },
+    { kind: "search" as const, path: paths.searchDb },
+  ].filter(({ kind, path }) => !validateSqliteFile(path, kind, root, `standard ${kind}`, true));
+  if (databases.length === 0) return;
+
+  assertRootStable(root);
+  const staging = join(root.path, mkdtempSync(".host-databases-"));
+  try {
+    assertEntry(staging, root, "directory", "staged Host databases");
+    try {
+      execFileSync(process.env.YULU_PYTHON || "python3", [
+        "-B", join(scriptDir, "initialize_host_databases.py"),
+        ioPath(root, staging), ...databases.map(({ kind }) => kind),
+      ], { cwd: ".", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] });
+    } catch {
+      throw new Error("Host database initialization failed");
+    }
+    assertRootStable(root);
+    for (const { kind, path } of databases) {
+      const seeded = join(staging, `${kind}.sqlite`);
+      validateSqliteFile(seeded, kind, root, `initialized ${kind}`, true, true);
+      try {
+        // Publish exclusively: another writer's database must never be replaced.
+        linkSync(ioPath(root, seeded), ioPath(root, path));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      if (!validateSqliteFile(path, kind, root, `standard ${kind}`, true)) {
+        throw new Error(`standard ${kind} database disappeared during initialization`);
+      }
+    }
+  } finally {
+    rmSync(ioPath(root, staging), { recursive: true, force: true });
+  }
+}
+
 /**
  * Prepare only the Host-owned durable subset. Capture/media/IPC/log ownership
  * remains on the explicit legacy paths until #163; the global transaction and
  * service takeover remain owned by ADR-0021 follow-up work.
  */
-export async function prepareHostDurableData(paths: HostDataPaths): Promise<void> {
+export async function prepareHostDurableData(
+  paths: HostDataPaths,
+  options: { initializeMissingDatabasesFrom?: string } = {},
+): Promise<void> {
   if (resolve(paths.durableDataDir) === resolve(paths.legacyReadOnlyDataDir)) return;
   const authority = establishAuthorities(paths);
   const originalCwd = process.cwd();
@@ -722,6 +766,9 @@ export async function prepareHostDurableData(paths: HostDataPaths): Promise<void
       "local caption runtime",
     );
     createDefaultConfigIfMissing(paths.configFile, authority.durable);
+    if (options.initializeMissingDatabasesFrom) {
+      initializeMissingDatabases(paths, options.initializeMissingDatabasesFrom, authority.durable);
+    }
   } finally {
     try {
       process.chdir(originalCwd);
