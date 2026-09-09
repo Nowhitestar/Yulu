@@ -120,6 +120,11 @@ RC14 已知限制：全新安装后，打开录音可能报 `unable to open data
 RC15 候选版包含初始化修复，详见[首次安装数据库准备](docs/operations.md#fresh-install-database-preparation)。
 请保留现有数据，不要手动创建空数据库来绕过错误。
 
+RC15 已知限制：全新安装验收发现录音全为零采样，原因是 macOS 拒绝了归属到主 App 的
+采集权限。RC16 候选版包含打包修复，但安装态验收尚未完成；详见
+[无声录音排查](docs/operations.md#wav-exists-but-capture-is-silent)。
+xAI 连接测试成功不代表实际录音包含声音。
+
 打开 [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases)，选择当前公告的
 稳定版或公开候选版，下载对应的 `yulu-macos-arm64-vX.Y.Z.dmg`，打开后把
 `Yulu.app` 拖到 `/Applications` 别名。启动 `/Applications/Yulu.app`；自包含 App

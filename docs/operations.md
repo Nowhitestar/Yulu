@@ -400,7 +400,23 @@ stable delivery key.
 
 ### WAV exists but capture is silent
 
-Check native readiness:
+RC15 fresh-install acceptance found a packaging defect: macOS attributed the
+bundled Capture service's permissions to `com.yulu.app`, whose signature lacked
+the audio-input entitlement and whose Info.plist lacked capture usage descriptions.
+TCC refused microphone and system-audio access, yet native readiness reported
+success and the saved WAV contained only zero samples. xAI capability probes
+passed separately; retrying OAuth or transcription cannot recover missing audio.
+
+The RC16 source repair adds these declarations to the containing App and makes
+Application Runtime verification reject missing descriptions or signed audio-input
+entitlements on either the product or Capture. Valid package metadata does not
+prove granted permission or captured signal. Use the corrected, signed whole-App
+candidate; do not
+edit or re-sign an installed release, reset TCC to compensate for missing bundle
+metadata, or replace the failed recording with a fixture. #170 remains open until
+new installed-App permission and production-recording evidence passes.
+
+For ordinary permission diagnosis, check native status:
 
 ```bash
 echo '{"action":"status"}' | nc -w 2 -U "$HOME/Library/Caches/Yulu/audio_daemon.sock"
@@ -412,8 +428,9 @@ In System Settings → Privacy & Security, enable `Yulu.app` for:
 - Microphone;
 - Screen & System Audio Recording.
 
-Then restart Yulu. Recent capture code refuses to begin when required native
-inputs are not ready instead of producing a fake-success silent file.
+Then restart Yulu and verify actual captured signal and saved transcription.
+Readiness flags and successful audio-engine initialization alone do not prove
+that macOS granted access or that a recording contains sound.
 
 ## Logs and local state
 
@@ -484,7 +501,7 @@ preserved source/audit evidence, correct the blocking condition, then use
 back transaction. Do not manually edit the journal or databases, and do not
 remove the old runtime until the committed state is stable after relaunch.
 
-For the `v0.23.0-rc.15` public-DMG acceptance harness, keep the target ledger
+For the `v0.23.0-rc.16` public-DMG acceptance harness, keep the target ledger
 private (`0700` directory, exact `0600` files) and outside any snapshot rollback
 boundary. The harness is resumable after logout/login and records only bounded,
 secret-safe machine evidence; the operator performs the actual App/UI actions.

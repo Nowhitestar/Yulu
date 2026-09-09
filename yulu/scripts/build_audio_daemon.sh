@@ -219,6 +219,11 @@ plist_set_or_add "$CAPTURE_INFO" NSScreenCaptureUsageDescription string "Yulu ca
 # prompt ("System Audio Recording Only" scope). Required for the tap arm
 # (Pitfall 4); the SCK arm uses NSScreenCaptureUsageDescription above.
 plist_set_or_add "$CAPTURE_INFO" NSAudioCaptureUsageDescription string "Yulu captures system audio for meeting notes."
+# TCC attributes the bundled Capture service to the containing product App.
+# Its usage descriptions and shell signature must also permit audio capture.
+plist_set_or_add "$INFO" NSMicrophoneUsageDescription string "Yulu records microphone audio for meeting notes."
+plist_set_or_add "$INFO" NSScreenCaptureUsageDescription string "Yulu captures system audio for meeting notes."
+plist_set_or_add "$INFO" NSAudioCaptureUsageDescription string "Yulu captures system audio for meeting notes."
 plist_set_or_add "$INFO" NSCalendarsUsageDescription string "Yulu reads your calendars to offer recording reminders for scheduled meetings."
 plist_set_or_add "$INFO" NSCalendarsFullAccessUsageDescription string "Yulu reads your calendars to offer recording reminders for scheduled meetings."
 
