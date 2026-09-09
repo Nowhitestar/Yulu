@@ -3,10 +3,13 @@ import io
 import json
 import os
 import plistlib
+import shlex
 import shutil
 import subprocess
 import tarfile
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +61,9 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
                 "CFBundleVersion": "731",
                 "YuluReleaseVersion": "0.23.0-rc.4",
                 "LSMinimumSystemVersion": "13.0.0",
+                "NSMicrophoneUsageDescription": "Record microphone audio for meeting notes.",
+                "NSAudioCaptureUsageDescription": "Capture system audio for meeting notes.",
+                "NSScreenCaptureUsageDescription": "Capture system audio for meeting notes.",
                 "SUVerifyUpdateBeforeExtraction": True,
                 "SURequireSignedFeed": True,
                 "SUSignedFeedFailureExpirationInterval": 0,
@@ -75,6 +81,9 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
                 "CFBundleVersion": "731",
                 "YuluReleaseVersion": "0.23.0-rc.4",
                 "LSMinimumSystemVersion": "13.0.0",
+                "NSMicrophoneUsageDescription": "Record microphone audio for meeting notes.",
+                "NSAudioCaptureUsageDescription": "Capture system audio for meeting notes.",
+                "NSScreenCaptureUsageDescription": "Capture system audio for meeting notes.",
             }
         ),
     )
@@ -209,7 +218,7 @@ def fake_verification_tools(tmp_path: Path) -> dict[str, str]:
         tmp_path / "tools/codesign",
         b"#!/usr/bin/env bash\n"
         b"if [[ $* == *'--entitlements'* ]]; then\n"
-        b"  echo '<plist><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.disable-library-validation</key><true/></dict></plist>'\n"
+        b"  echo '<plist><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.disable-library-validation</key><true/><key>com.apple.security.device.audio-input</key><true/></dict></plist>'\n"
         b"  exit 0\n"
         b"elif [[ $* == *'--verbose=2'* ]]; then\n"
         b"  echo 'Signature=adhoc'\n"
@@ -259,6 +268,77 @@ def test_prepare_application_runtime_stages_only_core_runtime_and_production_hos
     assert (resources / "runtime/yulu/scripts/local_caption_runtime_pack.json").is_file()
     assert not (resources / "runtime/yulu/scripts/local-caption-model.bin").exists()
     assert not any(path.name.endswith(".onnx") for path in resources.rglob("*"))
+
+
+@pytest.mark.parametrize("bundle", ["Contents", "Contents/Helpers/YuluCapture.app/Contents"])
+@pytest.mark.parametrize("key", [
+    "NSMicrophoneUsageDescription",
+    "NSAudioCaptureUsageDescription",
+    "NSScreenCaptureUsageDescription",
+])
+@pytest.mark.parametrize("value", [None, "", "   ", True])
+def test_application_runtime_verifier_rejects_missing_capture_usage_description(
+    tmp_path: Path, bundle: str, key: str, value: object,
+):
+    app, overrides = runtime_fixture(tmp_path)
+    prepared = subprocess.run(
+        ["bash", str(PREPARE), str(app)],
+        env={**os.environ, **overrides}, capture_output=True, text=True, check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr + prepared.stdout
+    info_path = app / bundle / "Info.plist"
+    info = plistlib.loads(info_path.read_bytes())
+    if value is None:
+        info.pop(key)
+    else:
+        info[key] = value
+    info_path.write_bytes(plistlib.dumps(info))
+
+    result = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env={**os.environ, **fake_verification_tools(tmp_path)},
+        capture_output=True, text=True, check=False,
+    )
+
+    assert result.returncode != 0
+    assert f"missing capture usage description {key}" in result.stderr
+    assert str(info_path) in result.stderr
+
+
+@pytest.mark.parametrize("relative", [
+    "Contents/MacOS/yulu_app",
+    "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
+])
+@pytest.mark.parametrize("value", [None, False, 1, "true"])
+def test_application_runtime_verifier_requires_capture_audio_input_entitlement(
+    tmp_path: Path, relative: str, value: object,
+):
+    app, overrides = runtime_fixture(tmp_path)
+    prepared = subprocess.run(
+        ["bash", str(PREPARE), str(app)],
+        env={**os.environ, **overrides}, capture_output=True, text=True, check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr + prepared.stdout
+    tools = fake_verification_tools(tmp_path)
+    codesign_tool = Path(tools["YULU_VERIFY_CODESIGN"])
+    original = codesign_tool.read_text(encoding="utf-8")
+    entitlements = {} if value is None else {"com.apple.security.device.audio-input": value}
+    codesign_tool.write_text(
+        "#!/usr/bin/env bash\n"
+        f"if [[ $* == *'--entitlements'* && ${{@: -1}} == {shlex.quote(str(app / relative))} ]]; then\n"
+        f"  printf '%s\\n' {shlex.quote(plistlib.dumps(entitlements).decode())}\n"
+        "  exit 0\n"
+        "fi\n" + original.partition("\n")[2],
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env={**os.environ, **tools}, capture_output=True, text=True, check=False,
+    )
+
+    assert result.returncode != 0
+    assert f"missing required audio-input entitlement: {relative}" in result.stderr
 
 
 def test_sparkle_runtime_is_exactly_pinned_embedded_arm64_and_release_configured(

@@ -400,7 +400,22 @@ stable delivery key.
 
 ### WAV exists but capture is silent
 
-Check native readiness:
+RC15 fresh-install acceptance found a packaging defect: macOS attributed the
+bundled Capture service's permissions to `com.yulu.app`, whose signature lacked
+the audio-input entitlement and whose Info.plist lacked capture usage descriptions.
+TCC refused microphone and system-audio access, yet native readiness reported
+success and the saved WAV contained only zero samples. xAI capability probes
+passed separately; retrying OAuth or transcription cannot recover missing audio.
+
+The source repair adds these declarations to the containing App and makes
+Application Runtime verification reject missing descriptions or signed audio-input
+entitlements on either the product or Capture. It is not yet a released or
+accepted fix. Use a corrected, signed whole-App release once available; do not
+edit or re-sign an installed release, reset TCC to compensate for missing bundle
+metadata, or replace the failed recording with a fixture. #170 remains open until
+new installed-App permission and production-recording evidence passes.
+
+For ordinary permission diagnosis, check native status:
 
 ```bash
 echo '{"action":"status"}' | nc -w 2 -U "$HOME/Library/Caches/Yulu/audio_daemon.sock"
@@ -412,8 +427,9 @@ In System Settings → Privacy & Security, enable `Yulu.app` for:
 - Microphone;
 - Screen & System Audio Recording.
 
-Then restart Yulu. Recent capture code refuses to begin when required native
-inputs are not ready instead of producing a fake-success silent file.
+Then restart Yulu and verify actual captured signal and saved transcription.
+Readiness flags and successful audio-engine initialization alone do not prove
+that macOS granted access or that a recording contains sound.
 
 ## Logs and local state
 

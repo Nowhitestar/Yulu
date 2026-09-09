@@ -1,7 +1,7 @@
 """Static assertions on the committed code-signing entitlements (BUILD-02).
 
 These guard the least-privilege contract for the hardened-runtime signing:
-- Yulu.app (audio daemon) must declare the microphone entitlement AVFoundation
+- The product App and Capture must declare the microphone entitlement AVFoundation
   needs under the hardened runtime, and must NOT declare any screen/system-audio
   capture entitlement (ScreenCaptureKit is purely TCC-gated, no entitlement).
 - StatusAgent.app must declare only the Apple Events automation entitlement it
@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "yulu" / "scripts"
 YULU_ENTITLEMENTS = SCRIPTS / "Yulu.app.entitlements"
 STATUS_ENTITLEMENTS = SCRIPTS / "StatusAgent.app.entitlements"
+SHELL_ENTITLEMENTS = SCRIPTS / "YuluShell.app.entitlements"
 
 AUDIO_INPUT = "com.apple.security.device.audio-input"
 APPLE_EVENTS = "com.apple.security.automation.apple-events"
@@ -53,6 +54,20 @@ def test_yulu_entitlements_are_least_privilege():
     """Only the microphone entitlement — nothing broader."""
     keys = _load(YULU_ENTITLEMENTS)
     assert set(keys) == {AUDIO_INPUT}, f"unexpected keys: {sorted(keys)}"
+
+
+def test_product_bundle_can_request_capture_permissions_as_tcc_subject():
+    """TCC attributes the bundled Capture service to the containing product App."""
+    assert _load(SHELL_ENTITLEMENTS) == {AUDIO_INPUT: True}
+    info = _load(SCRIPTS / "Yulu.app/Contents/Info.plist")
+    for key in (
+        "NSMicrophoneUsageDescription",
+        "NSAudioCaptureUsageDescription",
+        "NSScreenCaptureUsageDescription",
+    ):
+        assert isinstance(info.get(key), str) and info[key].strip(), (
+            f"the product App must declare {key} for attributed Capture requests"
+        )
 
 
 def test_status_agent_entitlements_grant_apple_events():

@@ -155,6 +155,11 @@ Known RC14 limitation: on a fresh install, opening a recording can fail with
 see [fresh-install database preparation](docs/operations.md#fresh-install-database-preparation).
 Keep your data and do not create empty databases as a workaround.
 
+Known RC15 limitation: fresh-install acceptance found all-zero recorded audio
+because macOS rejected permissions attributed to the containing App. The source
+repair is not yet released or accepted; see [silent capture](docs/operations.md#wav-exists-but-capture-is-silent).
+Successful xAI connection tests do not prove the recording contains sound.
+
 Open [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases), choose the
 currently advertised stable release or public release candidate, download its
 `yulu-macos-arm64-vX.Y.Z.dmg`, and drag `Yulu.app` onto the `/Applications`

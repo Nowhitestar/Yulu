@@ -95,6 +95,17 @@ with open(sys.argv[1], "rb") as source:
     info = plistlib.load(source)
 with open(sys.argv[2], "rb") as source:
     capture_info = plistlib.load(source)
+for path, bundle in zip(sys.argv[1:3], (info, capture_info)):
+    for key in (
+        "NSMicrophoneUsageDescription",
+        "NSAudioCaptureUsageDescription",
+        "NSScreenCaptureUsageDescription",
+    ):
+        value = bundle.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise SystemExit(
+                f"verify_application_runtime.sh: missing capture usage description {key}: {path}"
+            )
 if any(bundle.get("LSMinimumSystemVersion") != "13.0.0" for bundle in (info, capture_info)):
     raise SystemExit("verify_application_runtime.sh: App and Capture minimum macOS version must be 13.0.0")
 required = {
@@ -249,7 +260,7 @@ NODE_ENTITLEMENTS="$($CODESIGN_TOOL --display --entitlements :- "$RUNTIME/bin/no
   fail "could not read bundled Node entitlements"
 NODE_SIGNATURE="$($CODESIGN_TOOL --display --verbose=2 "$RUNTIME/bin/node" 2>&1)" || \
   fail "could not read bundled Node signature metadata"
-node_entitlement_is_true() {
+entitlement_is_true() {
   python3 -c '
 import plistlib
 import sys
@@ -262,18 +273,28 @@ if start < 0 or end < 0:
 entitlements = plistlib.loads(output[start:end + len(b"</plist>")])
 if entitlements.get(sys.argv[2]) is not True:
     raise SystemExit(1)
-' "$NODE_ENTITLEMENTS" "$1"
+' "$1" "$2"
 }
-if ! node_entitlement_is_true "com.apple.security.cs.allow-jit"; then
+if ! entitlement_is_true "$NODE_ENTITLEMENTS" "com.apple.security.cs.allow-jit"; then
   fail "bundled Node is missing its required JIT entitlement"
 fi
 if [[ "$NODE_SIGNATURE" == *"Signature=adhoc"* || "$NODE_SIGNATURE" == *"TeamIdentifier=not set"* ]]; then
-  if ! node_entitlement_is_true "com.apple.security.cs.disable-library-validation"; then
+  if ! entitlement_is_true "$NODE_ENTITLEMENTS" "com.apple.security.cs.disable-library-validation"; then
     fail "bundled Node cannot load signed native addons"
   fi
-elif node_entitlement_is_true "com.apple.security.cs.disable-library-validation"; then
+elif entitlement_is_true "$NODE_ENTITLEMENTS" "com.apple.security.cs.disable-library-validation"; then
   fail "team-signed Node must enforce library validation"
 fi
+
+for relative in \
+  "Contents/MacOS/yulu_app" \
+  "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"; do
+  AUDIO_ENTITLEMENTS="$($CODESIGN_TOOL --display --entitlements :- "$APP/$relative" 2>&1)" || \
+    fail "could not read audio-input entitlements: $relative"
+  if ! entitlement_is_true "$AUDIO_ENTITLEMENTS" "com.apple.security.device.audio-input"; then
+    fail "missing required audio-input entitlement: $relative"
+  fi
+done
 
 if [[ "${YULU_SKIP_RUNTIME_EXECUTION:-0}" != "1" ]]; then
   NATIVE_CONTROLS="$("$APP/Contents/MacOS/yulu_app" --inspect-build)" || \
