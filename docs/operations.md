@@ -407,10 +407,11 @@ TCC refused microphone and system-audio access, yet native readiness reported
 success and the saved WAV contained only zero samples. xAI capability probes
 passed separately; retrying OAuth or transcription cannot recover missing audio.
 
-The source repair adds these declarations to the containing App and makes
+The RC16 source repair adds these declarations to the containing App and makes
 Application Runtime verification reject missing descriptions or signed audio-input
-entitlements on either the product or Capture. It is not yet a released or
-accepted fix. Use a corrected, signed whole-App release once available; do not
+entitlements on either the product or Capture. Valid package metadata does not
+prove granted permission or captured signal. Use the corrected, signed whole-App
+candidate; do not
 edit or re-sign an installed release, reset TCC to compensate for missing bundle
 metadata, or replace the failed recording with a fixture. #170 remains open until
 new installed-App permission and production-recording evidence passes.
@@ -500,7 +501,7 @@ preserved source/audit evidence, correct the blocking condition, then use
 back transaction. Do not manually edit the journal or databases, and do not
 remove the old runtime until the committed state is stable after relaunch.
 
-For the `v0.23.0-rc.15` public-DMG acceptance harness, keep the target ledger
+For the `v0.23.0-rc.16` public-DMG acceptance harness, keep the target ledger
 private (`0700` directory, exact `0600` files) and outside any snapshot rollback
 boundary. The harness is resumable after logout/login and records only bounded,
 secret-safe machine evidence; the operator performs the actual App/UI actions.

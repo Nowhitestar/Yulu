@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "packaging" / "acceptance" / "public_dmg_target.sh"
-TAG = "v0.23.0-rc.15"
+TAG = "v0.23.0-rc.16"
 NAME = f"yulu-macos-arm64-{TAG}.dmg"
 PUBLIC_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/{NAME}"
 CHECKSUMS_URL = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/checksums.txt"
@@ -230,11 +230,11 @@ def _assert_failed(result: subprocess.CompletedProcess[str], message: str) -> No
     assert message.lower() in result.stderr.lower(), result.stderr
 
 
-def test_fresh_and_upgrade_preflight_are_pinned_to_rc15(tmp_path: Path) -> None:
+def test_fresh_and_upgrade_preflight_are_pinned_to_rc16(tmp_path: Path) -> None:
     for scenario in ("fresh", "upgrade"):
-        for tag in ("v0.23.0-rc.9", "v0.23.0-rc.10", "v0.23.0-rc.11", "v0.23.0-rc.12", "v0.23.0-rc.13", "v0.23.0-rc.14"):
+        for tag in ("v0.23.0-rc.9", "v0.23.0-rc.10", "v0.23.0-rc.11", "v0.23.0-rc.12", "v0.23.0-rc.13", "v0.23.0-rc.14", "v0.23.0-rc.15"):
             result = _run(tmp_path / scenario / tag, scenario=scenario, tag=tag)
-            _assert_failed(result, "acceptance is pinned to v0.23.0-rc.15")
+            _assert_failed(result, "acceptance is pinned to v0.23.0-rc.16")
 
 
 def test_clean_public_preflight_is_green_but_never_formal_evidence(tmp_path: Path) -> None:
@@ -568,7 +568,7 @@ def _make_fixture_app(app: Path, *, large_file_bytes: int = 0) -> None:
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>com.yulu.app</string>
 <key>CFBundleShortVersionString</key><string>0.23.0</string>
-<key>YuluReleaseVersion</key><string>0.23.0-rc.15</string>
+<key>YuluReleaseVersion</key><string>0.23.0-rc.16</string>
 <key>CFBundleVersion</key><string>2304</string>
 </dict></plist>
 """)

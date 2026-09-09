@@ -156,8 +156,9 @@ see [fresh-install database preparation](docs/operations.md#fresh-install-databa
 Keep your data and do not create empty databases as a workaround.
 
 Known RC15 limitation: fresh-install acceptance found all-zero recorded audio
-because macOS rejected permissions attributed to the containing App. The source
-repair is not yet released or accepted; see [silent capture](docs/operations.md#wav-exists-but-capture-is-silent).
+because macOS rejected permissions attributed to the containing App. The RC16
+candidate includes the package repair, but installed acceptance remains incomplete;
+see [silent capture](docs/operations.md#wav-exists-but-capture-is-silent).
 Successful xAI connection tests do not prove the recording contains sound.
 
 Open [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases), choose the
