@@ -177,7 +177,18 @@ def running_controls(native_controls_binary, request):
             yield process, socket_path, config, started
         finally:
             if process.poll() is None:
-                process.communicate("stop\n", timeout=10)
+                try:
+                    process.communicate("stop\n", timeout=10)
+                except subprocess.TimeoutExpired:
+                    try:
+                        subprocess.run(
+                            ["/usr/bin/sample", str(process.pid), "1"],
+                            timeout=5, check=False,
+                        )
+                    finally:
+                        process.kill()
+                        process.communicate(timeout=5)
+                    raise
             assert process.returncode == 0
         assert not socket_path.exists()
         assert not (data_root / "ipc/status_agent.pid").exists()
