@@ -116,6 +116,10 @@ Grok OAuth 会在系统默认浏览器中打开。在浏览器中完成账号登
 
 ### 安装
 
+RC14 已知限制：全新安装后，打开录音可能报 `unable to open database file`。
+初始化修复目前尚未发布，详见[首次安装数据库准备](docs/operations.md#fresh-install-database-preparation-unreleased-repair)。
+请保留现有数据，不要手动创建空数据库来绕过错误。
+
 打开 [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases)，选择当前公告的
 稳定版或公开候选版，下载对应的 `yulu-macos-arm64-vX.Y.Z.dmg`，打开后把
 `Yulu.app` 拖到 `/Applications` 别名。启动 `/Applications/Yulu.app`；自包含 App

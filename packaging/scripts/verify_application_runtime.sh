@@ -45,6 +45,7 @@ REQUIRED_FILES=(
   "Contents/Resources/runtime/yulu/scripts/record_audio.py"
   "Contents/Resources/runtime/yulu/scripts/application_migration.py"
   "Contents/Resources/runtime/yulu/scripts/application_update.py"
+  "Contents/Resources/runtime/yulu/scripts/initialize_host_databases.py"
   "Contents/Resources/runtime/yulu/scripts/local_caption_runtime_pack.json"
   "Contents/Resources/Sparkle-LICENSE.txt"
   "Contents/Frameworks/Sparkle.framework/Versions/Current/Sparkle"

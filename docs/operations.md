@@ -80,6 +80,21 @@ Hermes is installed or that a recording task can finish. Do not use
 environment fields. The plist, listening socket, logs, health endpoint, and doctor
 provide the required secret-safe read-back.
 
+### Fresh-install database preparation (unreleased repair)
+
+The source Host now initializes missing `prompts.sqlite`, `vocab.sqlite`, and
+`search.sqlite` before accepting requests in the standard application-data
+location. It uses the bundled Python schemas and seeds in private staging,
+validates them, and publishes without replacing an existing database. User-edited
+templates and migrated data are preserved. `setup.sh`, package managers and
+external Agents are not part of this first-start path.
+
+This repair is not included in public RC14. On that candidate, a first recording
+detail may fail with `unable to open database file` even though `/healthz` is
+healthy. Preserve the data and report the candidate version; do not create empty
+SQLite files or edit the signed App to make an acceptance checkpoint pass.
+The repaired candidate still requires separate installed acceptance.
+
 ### 3. Authenticated MCP
 
 ```bash

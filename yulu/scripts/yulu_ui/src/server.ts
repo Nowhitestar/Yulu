@@ -192,9 +192,9 @@ async function startLockedServer(
   const { port, host, launchAgents, instanceLock } = options;
   const uiToken = randomBytes(32).toString("base64url");
 
-  await prepareHostDurableData(runtimePaths);
+  await prepareHostDurableData(runtimePaths, { initializeMissingDatabasesFrom: runtimePaths.scriptDir });
 
-  // Lazy DB getters so /healthz works even when the SQLite files aren't present yet
+  // Standard-location databases are prepared above; open connections lazily.
   let _prompts: ReturnType<typeof openDb> | null = null;
   let _vocab: ReturnType<typeof openDb> | null = null;
   let _search: ReturnType<typeof openDb> | null = null;
