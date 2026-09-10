@@ -3056,6 +3056,97 @@ def test_registration_observation_is_transaction_and_nonce_bound(tmp_path, monke
     assert json.loads(paths.journal_path.read_text())["phase"] == "services_enabled"
 
 
+def test_registration_failure_survives_rollback_and_reopen(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationPaths
+
+    paths = MigrationPaths(durable_root=tmp_path / "durable", cache_root=tmp_path / "cache")
+    with ApplicationMigration(paths) as authority:
+        authority.begin()
+        authority.transition("data_published", intent={"action": "test-ready"})
+        registration = authority.request_registration()
+        action = authority.observe_service_statuses(
+            transaction_id=registration["transactionId"],
+            nonce=registration["nonce"],
+            statuses={
+                "com.yulu.ui.plist": "notRegistered",
+                "com.yulu.audiodaemon.plist": "notRegistered",
+            },
+        )
+        assert action["action"] == "unregister_services"
+        authority.transition("rolled_back", intent={"action": "rollback-complete"})
+
+    with ApplicationMigration(paths) as reopened:
+        action = reopened._service_action("rolled_back")
+        assert reopened._journal["lastFailure"]["code"] == "registration_failed"
+        assert "Background Services" in action["detail"]
+        assert "register" in action["detail"]
+
+
+def test_session_timeout_preserves_failure_without_reporting_user_cancel(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationPaths, run_migration_session
+
+    paths = MigrationPaths(durable_root=tmp_path / "durable", cache_root=tmp_path / "cache")
+    with ApplicationMigration(paths) as authority:
+        authority.begin()
+        authority.transition("data_published", intent={"action": "test-ready"})
+        action = authority.request_registration()
+        authority.observe_service_statuses(
+            transaction_id=action["transactionId"], nonce=action["nonce"],
+            statuses={"com.yulu.ui.plist": "enabled", "com.yulu.audiodaemon.plist": "enabled"},
+        )
+
+    def step(**arguments):
+        authority = arguments["authority"]
+        if arguments.get("event") == "cancel":
+            return authority.request_rollback("user_cancelled")
+        if arguments.get("observation") is not None:
+            authority.transition("rolled_back", intent={"action": "rollback-complete"})
+            return authority._service_action("rolled_back")
+        return authority._service_action("verify_health")
+
+    read_fd, write_fd = os.pipe()
+    output = io.BytesIO()
+    with os.fdopen(read_fd, "rb", buffering=0) as input_stream:
+        try:
+            result = run_migration_session(
+                paths=paths, step=step, input_stream=input_stream, output_stream=output,
+                response_timeout_seconds=0.01,
+                service_adapter=lambda _action: {
+                    "com.yulu.ui.plist": "notRegistered", "com.yulu.audiodaemon.plist": "notRegistered",
+                },
+            )
+        finally:
+            os.close(write_fd)
+    assert result == 0
+    journal = json.loads(paths.journal_path.read_text())
+    assert journal["phase"] == "rolled_back"
+    assert journal["lastFailure"]["code"] == "health_timeout"
+    terminal = json.loads(output.getvalue().splitlines()[-1])
+    assert "Host and Capture" in terminal["detail"]
+    assert "cancel" not in terminal["detail"].lower()
+
+
+def test_migration_failure_details_never_echo_untrusted_diagnostics(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationBlocked, MigrationPaths
+
+    paths = MigrationPaths(durable_root=tmp_path / "durable", cache_root=tmp_path / "cache")
+    with ApplicationMigration(paths) as authority:
+        authority.begin()
+        authority.transition("data_published", intent={"action": "test-ready"})
+        authority.request_registration()
+        before = paths.journal_path.read_bytes()
+        with pytest.raises(MigrationBlocked, match="unknown migration failure code"):
+            authority.record_failure("test-private-diagnostic-do-not-echo")
+        assert paths.journal_path.read_bytes() == before
+        authority._journal["lastFailure"] = {
+            "code": "unrecognized", "detail": "test-private-diagnostic-do-not-echo",
+        }
+        assert authority.failure_detail_fields() == {}
+
+
 def test_user_cancel_requires_confirmed_unregistration_before_legacy_restore(
     tmp_path, monkeypatch
 ):

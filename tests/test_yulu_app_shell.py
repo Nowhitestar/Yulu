@@ -83,6 +83,27 @@ def compile_audio_daemon_inspector(tmp_path: Path) -> Path:
     return binary
 
 
+def test_migration_focus_resume_only_consumes_pending_approval(tmp_path: Path):
+    source = (SCRIPTS / "yulu_app.swift").read_text()
+    assert "struct MigrationResumeGate" in source
+    binary = compile_yulu_app_inspector(tmp_path)
+    events = [
+        "register_services", "resume", "verify_health", "resume",
+        "await_approval", "resume", "resume", "observe_services", "resume",
+        "await_approval", "resume", "rolled_back", "resume", "committed", "resume",
+    ]
+    result = subprocess.run(
+        [str(binary), "--inspect-migration-resume-gate", json.dumps(events)],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [False, False, True, False, False, True, False, False]
+    advance = source.split("func advance(event:", 1)[1].split("func retry()", 1)[0]
+    assert 'event == "resume" && !resumeGate.consumeResume()' in advance
+    handle = source.split("private func handle(_ action: ApplicationMigrationAction)", 1)[1]
+    assert "resumeGate.observe(action: action.action)" in handle.split('case "register_services"', 1)[0]
+
+
 def test_application_shell_delivers_native_recording_controls(tmp_path: Path):
     binary = compile_yulu_app_inspector(tmp_path)
     result = subprocess.run(
@@ -1695,7 +1716,7 @@ def test_production_application_routes_smappservice_through_the_migration_coordi
     assert "generation == pollGeneration" in polling
 
 
-def test_registration_decision_registers_missing_or_not_registered_installed_services(
+def test_registration_decision_does_not_skip_enabled_legacy_status_after_quiescence(
     tmp_path: Path,
 ):
     binary = tmp_path / "yulu_app"
@@ -1739,15 +1760,22 @@ def test_registration_decision_registers_missing_or_not_registered_installed_ser
         "register": True,
         "unregister": False,
     }
-    for status in ("enabled", "requiresApproval"):
-        assert inspect("/Applications/Yulu.app", status) == {
-            "register": False,
-            "unregister": False,
-        }
+    assert inspect("/Applications/Yulu.app", "enabled") == {
+        "register": True,
+        "unregister": False,
+    }
+    assert inspect("/Applications/Yulu.app", "requiresApproval") == {
+        "register": False,
+        "unregister": False,
+    }
     assert inspect("/Users/test/Downloads/Yulu.app", "notRegistered") == {
         "register": False,
         "unregister": False,
     }
+    source = (SCRIPTS / "yulu_app.swift").read_text()
+    registry = source.split("final class BackgroundServiceRegistry", 1)[1].split("struct BundleLayout", 1)[0]
+    registration = registry.split("func register(_ descriptor:", 1)[1].split("func unregister", 1)[0]
+    assert "ServiceRegistrationDecision.make(" in registration
 
 
 def test_fresh_install_registration_requires_runtime_health_and_has_a_retryable_blocker(

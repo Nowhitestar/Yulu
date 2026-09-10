@@ -120,7 +120,7 @@ struct ServiceRegistrationDecision: Encodable {
         }
         return ServiceRegistrationDecision(
             register: policy.persistentRegistrationAllowed
-                && (status == "notRegistered" || status == "notFound")
+                && status != "requiresApproval"
         )
     }
 }
@@ -725,7 +725,13 @@ final class BackgroundServiceRegistry: PersistentServiceMutating {
 
     func register(_ descriptor: BackgroundServiceDescriptor) {
         let service = SMAppService.agent(plistName: descriptor.plistName)
-        guard service.status == .notRegistered || service.status == .notFound else { return }
+        // A quiesced legacy LaunchAgent can still report enabled. A bound
+        // migration/update registration must actually submit the bundled job;
+        // status alone cannot establish which executable owns that label.
+        guard ServiceRegistrationDecision.make(
+            policy: LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path),
+            status: appServiceStatusName(service.status)
+        )?.register == true else { return }
         do {
             try service.register()
             registrationErrors.removeValue(forKey: descriptor.plistName)
@@ -1492,6 +1498,20 @@ final class BoundedRedactedStderrDrain {
     }
 }
 
+struct MigrationResumeGate {
+    private var pendingAction: String?
+
+    mutating func observe(action: String) {
+        pendingAction = action
+    }
+
+    mutating func consumeResume() -> Bool {
+        guard pendingAction == "await_approval" else { return false }
+        pendingAction = nil
+        return true
+    }
+}
+
 final class ApplicationMigrationCoordinator {
     private enum FreshInstallPhase {
         case inactive
@@ -1512,6 +1532,7 @@ final class ApplicationMigrationCoordinator {
     private var migrationInput: FileHandle?
     private var migrationOutputBuffer = Data()
     private var migrationTerminalSeen = false
+    private var resumeGate = MigrationResumeGate()
     private var currentBinding: (transactionId: String, nonce: String)?
     private var pendingHealth: (transactionId: String, nonce: String)?
     private var retryAvailable = false
@@ -1546,6 +1567,9 @@ final class ApplicationMigrationCoordinator {
             return
         }
         guard let binding = currentBinding else { return }
+        // App activation is not crash recovery. Only an outstanding approval
+        // request needs a resume, and one request gets at most one response.
+        if event == "resume" && !resumeGate.consumeResume() { return }
         var envelope: [String: Any] = [
             "transactionId": binding.transactionId,
             "nonce": binding.nonce,
@@ -1599,6 +1623,7 @@ final class ApplicationMigrationCoordinator {
               ) else { return }
         retryAfterProcessExit = false
         migrationTerminalSeen = false
+        resumeGate = MigrationResumeGate()
         migrationOutputBuffer.removeAll(keepingCapacity: true)
         currentBinding = nil
         let input = Pipe()
@@ -1783,6 +1808,7 @@ final class ApplicationMigrationCoordinator {
     }
 
     private func handle(_ action: ApplicationMigrationAction) {
+        resumeGate.observe(action: action.action)
         switch action.action {
         case "register_services", "unregister_services":
             guard let transactionId = action.transactionId,
@@ -1822,7 +1848,10 @@ final class ApplicationMigrationCoordinator {
             if let raw = action.deadlineAt,
                let deadline = ISO8601DateFormatter().date(from: raw) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSinceNow)) { [weak self] in
-                    self?.advance(event: "resume")
+                    guard let self,
+                          self.currentBinding?.transactionId == action.transactionId,
+                          self.currentBinding?.nonce == action.nonce else { return }
+                    self.advance(event: "resume")
                 }
             }
         case "verify_health":
@@ -2681,6 +2710,20 @@ if CommandLine.arguments.count == 3,
 
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-launch" {
     try writeJSON(LaunchPolicy.evaluate(bundlePath: CommandLine.arguments[2]))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 3,
+   CommandLine.arguments[1] == "--inspect-migration-resume-gate" {
+    guard let data = CommandLine.arguments[2].data(using: .utf8),
+          let events = try? JSONDecoder().decode([String].self, from: data) else { exit(64) }
+    var gate = MigrationResumeGate()
+    var results: [Bool] = []
+    for event in events {
+        if event == "resume" { results.append(gate.consumeResume()) }
+        else { gate.observe(action: event) }
+    }
+    try writeJSON(results)
     exit(0)
 }
 

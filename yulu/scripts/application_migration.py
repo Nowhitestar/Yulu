@@ -101,6 +101,31 @@ _BUNDLED_SERVICE_PLISTS = (
     "com.yulu.ui.plist",
     "com.yulu.audiodaemon.plist",
 )
+_MIGRATION_FAILURE_DETAILS = {
+    "registration_failed": "macOS could not register the bundled services. Open Components > Background Services for the registration error.",
+    "registration_timeout": "Background service registration did not respond in time. Open Components > Background Services for the current state.",
+    "health_timeout": "The bundled Host and Capture did not become healthy in time. Open Components > Background Services for the current state.",
+    "commit_health_failed": "The bundled Host and Capture did not pass ownership and health verification.",
+    "approval_timeout": "Background service approval timed out. Open Login Items settings before retrying.",
+    "session_timeout": "The migration session did not respond in time.",
+    "session_closed": "The migration session connection closed before completion.",
+    "session_protocol_error": "The migration session received an invalid or stale response.",
+}
+
+
+def _session_failure_code(failure: Exception, action: dict[str, object]) -> str:
+    message = str(failure)
+    if message == "migration session response timed out":
+        return {
+            "verify_health": "health_timeout",
+            "register_services": "registration_timeout",
+            "observe_services": "registration_timeout",
+        }.get(str(action.get("action")), "session_timeout")
+    if isinstance(failure, (BrokenPipeError, OSError)) or message == "migration session input ended":
+        return "session_closed"
+    return "session_protocol_error"
+
+
 _PRODUCT_TEAM_IDENTIFIER = "WMU9678ZQL"
 _PRODUCT_SIGNING_IDENTIFIERS = {
     "app": "com.yulu.app",
@@ -1700,7 +1725,7 @@ def run_migration_step(
         if phase == "committed":
             return authority._service_action("committed")
         if phase == "rolled_back":
-            return {"action": "rolled_back"}
+            return {"action": "rolled_back", **authority.failure_detail_fields()}
         raise MigrationBlocked(f"migration recovery requires rollback from phase: {phase}")
 
 
@@ -1767,7 +1792,11 @@ def _compensate_session(
     step: Callable[..., dict[str, object]],
     service_adapter: Callable[[dict[str, object]], dict[str, str]] | None,
     step_arguments: dict[str, object],
+    failure: Exception | None = None,
 ) -> dict[str, object]:
+    authority = step_arguments.get("authority")
+    if failure is not None and isinstance(authority, ApplicationMigration):
+        authority.record_failure(_session_failure_code(failure, action))
     rollback_action = action
     if rollback_action.get("action") != "unregister_services":
         rollback_action = step(
@@ -2022,6 +2051,7 @@ def run_migration_session(
                         step=step,
                         service_adapter=service_adapter,
                         step_arguments=step_arguments,
+                        failure=failure,
                     )
                 except Exception as compensation_failure:
                     action = _recover_live_session_failure(
@@ -2103,7 +2133,7 @@ def run_migration_session(
                     raise MigrationBlocked("migration session observation is invalid")
                 if (event is None) == (observation is None):
                     raise MigrationBlocked("migration session message must have one payload")
-            except MigrationBlocked:
+            except MigrationBlocked as failure:
                 try:
                     action = _compensate_session(
                         action,
@@ -2111,6 +2141,7 @@ def run_migration_session(
                         step=step,
                         service_adapter=service_adapter,
                         step_arguments=step_arguments,
+                        failure=failure,
                     )
                 except Exception as failure:
                     action = _recover_live_session_failure(
@@ -3164,8 +3195,32 @@ class ApplicationMigration:
             "action": action,
             "transactionId": self._journal["transactionId"],
             "nonce": self._journal["serviceNonce"],
+            **(self.failure_detail_fields() if action == "rolled_back" else {}),
             **fields,
         }
+
+    def record_failure(self, code: str) -> None:
+        # Persist only fixed public codes, never raw stderr, credentials, or
+        # caller-supplied exception text. Retain the original cause of rollback.
+        if code not in _MIGRATION_FAILURE_DETAILS:
+            raise MigrationBlocked("unknown migration failure code")
+        if self._journal is None or "serviceNonce" not in self._journal:
+            return
+        if self._journal.get("phase") in {"committed", "rolled_back"}:
+            return
+        if "lastFailure" in self._journal:
+            return
+        self._journal = {
+            **self._journal,
+            "lastFailure": {"code": code, "phase": self._journal["phase"]},
+        }
+        self._write_journal()
+
+    def failure_detail_fields(self) -> dict[str, str]:
+        failure = self._journal.get("lastFailure") if self._journal is not None else None
+        code = failure.get("code") if isinstance(failure, dict) else None
+        detail = _MIGRATION_FAILURE_DETAILS.get(code) if isinstance(code, str) else None
+        return {"detail": detail} if detail is not None else {}
 
     def request_registration(self) -> dict[str, object]:
         if self._journal is None or self._journal.get("phase") != "data_published":
@@ -3226,6 +3281,8 @@ class ApplicationMigration:
     def request_rollback(self, reason: str) -> dict[str, object]:
         if self._journal is None or not isinstance(self._journal.get("serviceNonce"), str):
             raise MigrationBlocked("service rollback has no bound transaction")
+        if reason in _MIGRATION_FAILURE_DETAILS:
+            self.record_failure(reason)
         self.transition(
             "rollback_requested",
             intent={"action": "unregister-services", "reason": reason},
