@@ -2975,7 +2975,49 @@ class ApplicationMigration:
             or re.fullmatch(r"[0-9a-f]{32}", retry_root) is None
         ):
             raise MigrationBlocked("retry preflight transaction lineage is invalid")
+        retry_journal = {
+            "schemaVersion": 1,
+            "transactionId": uuid.uuid4().hex,
+            "phase": "preflight",
+            "createdAt": self._now().isoformat(),
+            "intent": None,
+            "retryOf": previous_transaction,
+            "retryRoot": retry_root,
+            "attemptNumber": previous_attempt + 1,
+            "retryPreflightOnly": True,
+            "transactionOutputIdentities": {},
+        }
         preflight_only = previous.get("retryPreflightOnly")
+        if (
+            previous.get("intent") == {"action": "crash-recovery-no-mutation"}
+            and "jobSnapshot" not in previous
+            and "archiveDirectory" not in previous
+        ):
+            # No service or data snapshot exists yet. Distinguish the initial
+            # attempt from subsequent retries so lineage cannot be reset.
+            retry_fields = {
+                "retryOf", "retryRoot", "retryPreflightOnly",
+                "transactionOutputIdentities",
+            }
+            required_fields = set(retry_journal)
+            if previous_attempt == 1:
+                required_fields -= retry_fields
+            elif (
+                preflight_only is not True
+                or previous.get("transactionOutputIdentities") != {}
+                or not isinstance(previous.get("retryOf"), str)
+                or re.fullmatch(r"[0-9a-f]{32}", previous["retryOf"]) is None
+            ):
+                raise MigrationBlocked("retry preflight transaction lineage is invalid")
+            allowed_fields = required_fields | {"updatedAt", "bundleManifest"}
+            if (
+                not required_fields <= set(previous)
+                or not set(previous) <= allowed_fields
+            ):
+                raise MigrationBlocked("retry preflight no-mutation recovery metadata is invalid")
+            self._journal = retry_journal
+            self._write_journal()
+            return dict(self._journal)
         if preflight_only is True:
             if (
                 previous.get("intent")
@@ -3048,19 +3090,7 @@ class ApplicationMigration:
                     "retry preflight found a previous transaction output"
                 )
 
-        self._journal = {
-            "schemaVersion": 1,
-            "transactionId": uuid.uuid4().hex,
-            "phase": "preflight",
-            "createdAt": self._now().isoformat(),
-            "intent": None,
-            "retryOf": previous_transaction,
-            "retryRoot": retry_root,
-            "attemptNumber": previous_attempt + 1,
-            "retryPreflightOnly": True,
-            "archiveDirectory": retry_archive_identity,
-            "transactionOutputIdentities": {},
-        }
+        self._journal = {**retry_journal, "archiveDirectory": retry_archive_identity}
         self._write_journal()
         return dict(self._journal)
 

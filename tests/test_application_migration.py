@@ -3774,6 +3774,189 @@ def test_retry_flag_is_rejected_outside_exact_rolled_back_phase(
             authority.begin_retry(archive_dir=tmp_path / "archive")
 
 
+def test_retry_accepts_initial_preflight_rollback_without_a_service_snapshot(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationPaths
+
+    paths = MigrationPaths(
+        durable_root=tmp_path / "durable", cache_root=tmp_path / "cache"
+    )
+    with ApplicationMigration(paths) as authority:
+        first = authority.begin()
+        authority.record_bundle_manifest({
+            name: "a" * 64
+            for name in ("Info.plist", "yulu_app", "node", "server.js", "audio_daemon")
+        })
+        previous = first
+        for attempt in (2, 3):
+            authority.transition(
+                "rolled_back", intent={"action": "crash-recovery-no-mutation"}
+            )
+
+            retried = authority.begin_retry(archive_dir=tmp_path / "archive")
+
+            assert retried["phase"] == "preflight"
+            assert retried["attemptNumber"] == attempt
+            assert retried["retryOf"] == previous["transactionId"]
+            assert retried["retryRoot"] == first["transactionId"]
+            assert retried["transactionId"] != previous["transactionId"]
+            assert "jobSnapshot" not in retried
+            assert "archiveDirectory" not in retried
+            assert not (tmp_path / "archive").exists()
+            previous = retried
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"jobSnapshot": {}},
+        {"archiveDirectory": {}},
+        {"dataManifest": {}},
+        {"transactionOutputIdentities": {"config.json": {"inode": 1}}},
+        {"retryPreflightOnly": False},
+        {"retryPreflightOnly": None},
+        {"retryOf": "a" * 32},
+        {"retryRoot": "a" * 32},
+        {"transactionOutputIdentities": {}},
+        {"attemptNumber": 2},
+    ],
+)
+def test_preflight_only_retry_rejects_inconsistent_mutation_metadata(
+    extra, tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationBlocked, MigrationPaths
+
+    paths = MigrationPaths(
+        durable_root=tmp_path / "durable", cache_root=tmp_path / "cache"
+    )
+    with ApplicationMigration(paths) as authority:
+        authority.begin()
+        authority.transition(
+            "rolled_back", intent={"action": "crash-recovery-no-mutation"}
+        )
+    journal = json.loads(paths.journal_path.read_text())
+    paths.journal_path.write_text(json.dumps({**journal, **extra}))
+    before = paths.journal_path.read_bytes()
+
+    with ApplicationMigration(paths) as authority:
+        with pytest.raises(MigrationBlocked, match="retry preflight"):
+            authority.begin_retry(archive_dir=tmp_path / "archive")
+
+    assert paths.journal_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "field,value,remove",
+    [
+        ("retryOf", None, True),
+        ("retryRoot", None, True),
+        ("retryPreflightOnly", None, True),
+        ("transactionOutputIdentities", None, True),
+        ("retryOf", "invalid", False),
+        ("retryPreflightOnly", None, False),
+        ("retryPreflightOnly", False, False),
+        ("transactionOutputIdentities", None, False),
+        ("attemptNumber", 1, False),
+    ],
+)
+def test_consecutive_preflight_retry_rejects_incomplete_lineage(
+    field, value, remove, tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationBlocked, MigrationPaths
+
+    paths = MigrationPaths(
+        durable_root=tmp_path / "durable", cache_root=tmp_path / "cache"
+    )
+    with ApplicationMigration(paths) as authority:
+        authority.begin()
+        authority.transition(
+            "rolled_back", intent={"action": "crash-recovery-no-mutation"}
+        )
+        authority.begin_retry(archive_dir=tmp_path / "archive")
+        authority.transition(
+            "rolled_back", intent={"action": "crash-recovery-no-mutation"}
+        )
+    journal = json.loads(paths.journal_path.read_text())
+    if remove:
+        journal.pop(field)
+    else:
+        journal[field] = value
+    paths.journal_path.write_text(json.dumps(journal))
+    before = paths.journal_path.read_bytes()
+
+    with ApplicationMigration(paths) as authority:
+        with pytest.raises(MigrationBlocked, match="retry preflight"):
+            authority.begin_retry(archive_dir=tmp_path / "archive")
+
+    assert paths.journal_path.read_bytes() == before
+
+
+def test_session_retries_an_initial_failure_through_service_registration(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import MigrationPaths, run_migration_session, run_migration_step
+
+    legacy = tmp_path / "legacy"
+    agents = tmp_path / "LaunchAgents"
+    legacy.mkdir(mode=0o700)
+    agents.mkdir(mode=0o700)
+    (legacy / "config.json").write_bytes(b"{}\n")
+    node = tmp_path / "node"
+    server = tmp_path / "server.js"
+    node.write_bytes(b"node")
+    server.write_bytes(b"server")
+    paths = MigrationPaths(
+        durable_root=tmp_path / "durable", cache_root=tmp_path / "cache"
+    )
+    snapshot_fails = True
+
+    def launchctl(arguments):
+        if arguments[0] == "print-disabled":
+            return SimpleNamespace(returncode=int(snapshot_fails), stdout="{}", stderr="")
+        return SimpleNamespace(returncode=113 if arguments[0] == "print" else 0, stdout="", stderr="")
+
+    def prepare_data(_arguments, **_options):
+        (paths.durable_root / "config.json").write_bytes(b"{}\n")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    arguments = dict(
+        paths=paths,
+        home_dir=tmp_path,
+        legacy_root=legacy,
+        launch_agents_dir=agents,
+        archive_dir=tmp_path / "archive",
+        legacy_capture_socket=legacy / "audio_daemon.sock",
+        node_executable=node,
+        server_js=server,
+        launchctl=launchctl,
+        run_node=prepare_data,
+    )
+    output = io.BytesIO()
+    assert run_migration_session(
+        **arguments, input_stream=io.BytesIO(), output_stream=output
+    ) == 0
+    assert json.loads(output.getvalue())["action"] == "rolled_back"
+    first = json.loads(paths.journal_path.read_text())
+    assert "jobSnapshot" not in first
+    assert "archiveDirectory" not in first
+
+    snapshot_fails = False
+    action = run_migration_step(**arguments, request_retry=True)
+
+    assert action["action"] == "register_services"
+    retried = json.loads(paths.journal_path.read_text())
+    assert retried["attemptNumber"] == 2
+    assert retried["retryOf"] == first["transactionId"]
+    assert "jobSnapshot" in retried
+    assert "archiveDirectory" in retried
+    assert (legacy / "config.json").read_bytes() == b"{}\n"
+
+
 def test_session_retry_flag_is_explicit_and_only_reaches_the_initial_step(
     tmp_path, monkeypatch
 ):

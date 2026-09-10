@@ -460,6 +460,8 @@ other local-caption data, including an existing Runtime Pack, is preserved. If
 only a legacy virtualenv was installed, set up the verified local Runtime Pack
 from Transcription settings before using local transcription. A failed migration
 reports its cause with the rollback result instead of claiming it was cancelled.
+Explicit Retry also accepts a verified early rollback before snapshots existed;
+it does not require deleting or editing that migration journal.
 
 Stable releases publish `yulu-macos-arm64-<tag>.dmg`, `appcast.xml`, and
 `checksums.txt`. The local-caption Runtime Pack remains a separate optional ZIP;
