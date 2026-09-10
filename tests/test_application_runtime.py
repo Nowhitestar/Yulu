@@ -1375,8 +1375,11 @@ def test_runtime_verifier_requires_fresh_host_database_initializer(tmp_path: Pat
     assert f"required Application Runtime file missing: {relative}" in result.stderr
 
 
-def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(tmp_path: Path):
-    app, overrides = runtime_fixture(tmp_path)
+@pytest.mark.parametrize("mount_name", ["Yulu", "Yulu 1"])
+def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(
+    tmp_path: Path, mount_name: str
+):
+    app, overrides = runtime_fixture(tmp_path / mount_name)
     prepared = subprocess.run(
         ["bash", str(PREPARE), str(app)],
         env={**os.environ, **overrides},

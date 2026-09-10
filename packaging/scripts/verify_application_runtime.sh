@@ -307,7 +307,7 @@ if [[ "${YULU_SKIP_RUNTIME_EXECUTION:-0}" != "1" ]]; then
   NODE_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["node"])' "$VERSIONS")"
   PYTHON_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["python"].split("+", 1)[0])' "$VERSIONS")"
   FFMPEG_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ffmpeg"])' "$VERSIONS")"
-  [[ "$($NODE --version)" == "v$NODE_VERSION" ]] || fail "bundled Node version does not match runtime inventory"
+  [[ "$("$NODE" --version)" == "v$NODE_VERSION" ]] || fail "bundled Node version does not match runtime inventory"
   PYTHON_PROBE="$(PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -B -I -c 'import platform,sys; print(platform.machine()+"|"+platform.python_version()+"|"+sys.prefix)')"
   [[ "$PYTHON_PROBE" == "arm64|$PYTHON_VERSION|$RUNTIME/python" ]] || \
     fail "bundled Python identity does not match runtime inventory: $PYTHON_PROBE"
