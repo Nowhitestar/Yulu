@@ -302,6 +302,48 @@ describe("Host durable-data migration", () => {
     }
   });
 
+  it("migrates runtime-pack data without importing the legacy caption virtualenv", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-host-legacy-caption-"));
+    roots.push(root);
+    const paths = resolveHostPaths({ homeDir: root, environment: {} });
+    const legacyRuntime = join(paths.legacyReadOnlyDataDir, "local-caption");
+    const interpreter = join(root, "python3");
+    const legacyPython = join(legacyRuntime, "venv", "bin", "python");
+    const packPayload = "YuluLocalCaptionRuntime.bundle/Contents/Resources/site-packages/module.py";
+    writeFileSync(interpreter, "legacy interpreter");
+    mkdirSync(dirname(legacyPython), { recursive: true });
+    symlinkSync(interpreter, legacyPython);
+    mkdirSync(dirname(join(legacyRuntime, packPayload)), { recursive: true });
+    writeFileSync(join(legacyRuntime, packPayload), "runtime pack payload");
+
+    await prepareHostDurableData(paths);
+
+    const runtime = join(paths.durableDataDir, "local-caption");
+    expect(existsSync(join(runtime, "venv"))).toBe(false);
+    expect(readFileSync(join(runtime, packPayload), "utf8")).toBe("runtime pack payload");
+    expect(readFileSync(legacyPython, "utf8")).toBe("legacy interpreter");
+    expect(readFileSync(interpreter, "utf8")).toBe("legacy interpreter");
+    await prepareHostDurableData(paths);
+    expect(existsSync(join(runtime, "venv"))).toBe(false);
+  });
+
+  it.each([
+    "models/venv/python",
+    "local-caption/YuluLocalCaptionRuntime.bundle/venv/python",
+  ])("still rejects symlinks outside the retired virtualenv: %s", async (relativePath) => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-host-caption-unsafe-"));
+    roots.push(root);
+    const paths = resolveHostPaths({ homeDir: root, environment: {} });
+    const external = join(root, "external");
+    const link = join(paths.legacyReadOnlyDataDir, relativePath);
+    writeFileSync(external, "must not be imported");
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(external, link);
+
+    await expect(prepareHostDurableData(paths)).rejects.toThrow(/authority is unsafe/);
+    expect(readFileSync(external, "utf8")).toBe("must not be imported");
+  });
+
   it("rejects standard file and directory symlink authorities", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-host-authority-symlinks-"));
     roots.push(root);

@@ -383,9 +383,15 @@ function createDefaultConfigIfMissing(
   }
 }
 
-function validateDirectoryTree(path: string, root: AuthorityRoot, label: string): void {
+function validateDirectoryTree(
+  path: string,
+  root: AuthorityRoot,
+  label: string,
+  excludedRootNames: readonly string[] = [],
+): void {
   assertEntry(path, root, "directory", label);
   for (const name of readdirSync(ioPath(root, path))) {
+    if (excludedRootNames.includes(name)) continue;
     const item = join(path, name);
     const stat = lstatIfPresent(item);
     if (!stat || stat.isSymbolicLink()) throw unsafeAuthority(label);
@@ -404,9 +410,11 @@ function copyDirectoryContents(
   sourceRoot: AuthorityRoot,
   destinationRoot: AuthorityRoot,
   label: string,
+  excludedRootNames: readonly string[] = [],
 ): void {
   ensureDirectory(destination, destinationRoot, label);
   for (const name of readdirSync(ioPath(sourceRoot, source))) {
+    if (excludedRootNames.includes(name)) continue;
     const sourceItem = join(source, name);
     const destinationItem = join(destination, name);
     const stat = lstatIfPresent(sourceItem);
@@ -430,10 +438,11 @@ function copyDirectoryIfMissing(
   sourceRoot: AuthorityRoot,
   destinationOuterRoot: AuthorityRoot,
   label: string,
+  excludedSourceRootNames: readonly string[] = [],
 ): void {
   const sourceStat = assertEntry(source, sourceRoot, "directory", `legacy ${label}`);
   const destinationStat = assertEntry(destination, destinationOuterRoot, "directory", `standard ${label}`);
-  if (sourceStat) validateDirectoryTree(source, sourceRoot, `legacy ${label}`);
+  if (sourceStat) validateDirectoryTree(source, sourceRoot, `legacy ${label}`, excludedSourceRootNames);
   if (destinationStat) {
     const destinationRoot: AuthorityRoot = {
       path: resolve(destination),
@@ -477,8 +486,8 @@ function copyDirectoryIfMissing(
       anchorMissing: destinationOuterRoot.anchorMissing,
       ioBase: destinationOuterRoot.ioBase,
     };
-    copyDirectoryContents(source, staging, sourceRoot, stagingRoot, `staged ${label}`);
-    validateDirectoryTree(source, sourceRoot, `legacy ${label}`);
+    copyDirectoryContents(source, staging, sourceRoot, stagingRoot, `staged ${label}`, excludedSourceRootNames);
+    validateDirectoryTree(source, sourceRoot, `legacy ${label}`, excludedSourceRootNames);
     if (assertEntry(destination, destinationOuterRoot, "directory", `standard ${label}`)) {
       throw unsafeAuthority(`standard ${label}`);
     }
@@ -764,6 +773,9 @@ export async function prepareHostDurableData(
       authority.legacy,
       authority.durable,
       "local caption runtime",
+      // Interpreter-bound virtualenvs stay in the legacy rollback source;
+      // the Application Runtime loads only its separately verified Runtime Pack.
+      ["venv"],
     );
     createDefaultConfigIfMissing(paths.configFile, authority.durable);
     if (options.initializeMissingDatabasesFrom) {

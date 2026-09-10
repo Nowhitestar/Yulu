@@ -1655,6 +1655,8 @@ def test_production_application_routes_smappservice_through_the_migration_coordi
         'case "blocked":', 1
     )[0]
     assert "showMigrationRetry(" in rolled_back
+    assert '"Migration was rolled back"' in rolled_back
+    assert 'detail: [detail, "The previous Yulu background services were restored."]' in rolled_back
     retry_presentation = application.split("private func showMigrationRetry", 1)[1].split(
         "private func configureUpdater", 1
     )[0]
@@ -1664,6 +1666,7 @@ def test_production_application_routes_smappservice_through_the_migration_coordi
     coordinator = source.split("final class ApplicationMigrationCoordinator", 1)[1].split(
         "struct ApplicationUpdateAction", 1
     )[0]
+    assert 'onStateChange?("rolled_back", action.detail)' in coordinator
     assert "func retry()" in coordinator
     assert "retryAfterProcessExit" in coordinator
     assert "startSession(requestRetry: true)" in coordinator
