@@ -1305,8 +1305,11 @@ def test_quiesce_rejects_launchagents_parent_replacement_after_snapshot(
     assert not (archive / "com.yulu.ui.plist").exists()
 
 
+@pytest.mark.parametrize(
+    ("agents_mode", "ui_mode"), [(0o700, 0o640), (0o750, 0o640), (0o755, 0o644)]
+)
 def test_quiesce_archives_allowlisted_plists_and_rollback_restores_exact_state(
-    tmp_path, monkeypatch
+    agents_mode, ui_mode, tmp_path, monkeypatch
 ):
     monkeypatch.syspath_prepend(str(SCRIPTS))
     from application_migration import (
@@ -1317,11 +1320,15 @@ def test_quiesce_archives_allowlisted_plists_and_rollback_restores_exact_state(
 
     agents = tmp_path / "LaunchAgents"
     archive = tmp_path / "Rollback" / "LaunchAgents"
-    agents.mkdir(mode=0o700)
+    agents.mkdir(mode=agents_mode)
+    agents.chmod(agents_mode)
+    unrelated = agents / "com.example.unrelated.plist"
+    unrelated.write_bytes(b"unrelated service\n")
+    unrelated.chmod(0o644)
     ui_bytes = b"ui legacy plist\n"
     calendar_bytes = b"calendar legacy plist\n"
     (agents / "com.yulu.ui.plist").write_bytes(ui_bytes)
-    (agents / "com.yulu.ui.plist").chmod(0o640)
+    (agents / "com.yulu.ui.plist").chmod(ui_mode)
     (agents / "com.yulu.calendar.plist").write_bytes(calendar_bytes)
     (agents / "com.yulu.calendar.plist").chmod(0o600)
 
@@ -1370,7 +1377,10 @@ def test_quiesce_archives_allowlisted_plists_and_rollback_restores_exact_state(
         assert not (agents / "com.yulu.ui.plist").exists()
         assert not (agents / "com.yulu.calendar.plist").exists()
         assert (archive / "com.yulu.ui.plist").read_bytes() == ui_bytes
-        assert (archive / "com.yulu.ui.plist").stat().st_mode & 0o777 == 0o640
+        assert (archive / "com.yulu.ui.plist").stat().st_mode & 0o777 == ui_mode
+        assert stat.S_IMODE(archive.stat().st_mode) == 0o700
+        assert stat.S_IMODE(agents.stat().st_mode) == agents_mode
+        assert unrelated.read_bytes() == b"unrelated service\n"
         assert json.loads(paths.journal_path.read_text())["phase"] == "legacy_quiesced"
 
         # The journaled mode is part of the rollback contract, not incidental
@@ -1386,8 +1396,11 @@ def test_quiesce_archives_allowlisted_plists_and_rollback_restores_exact_state(
 
     assert (agents / "com.yulu.ui.plist").read_bytes() == ui_bytes
     assert (agents / "com.yulu.calendar.plist").read_bytes() == calendar_bytes
-    assert (agents / "com.yulu.ui.plist").stat().st_mode & 0o777 == 0o640
+    assert (agents / "com.yulu.ui.plist").stat().st_mode & 0o777 == ui_mode
     assert (agents / "com.yulu.calendar.plist").stat().st_mode & 0o777 == 0o600
+    assert stat.S_IMODE(agents.stat().st_mode) == agents_mode
+    assert unrelated.read_bytes() == b"unrelated service\n"
+    assert stat.S_IMODE(unrelated.stat().st_mode) == 0o644
     assert loaded == {"com.yulu.ui"}
     assert disabled == {"com.yulu.calendar"}
     assert ["bootout", f"gui/{os.geteuid()}/com.yulu.ui"] in mutations
@@ -1407,6 +1420,103 @@ def test_quiesce_archives_allowlisted_plists_and_rollback_restores_exact_state(
         f"gui/{os.geteuid()}",
     ) in events[disable_index + 1 :]
     assert json.loads(paths.journal_path.read_text())["phase"] == "rolled_back"
+
+
+@pytest.mark.parametrize("agents_mode", [0o770, 0o707, 0o777, 0o500])
+def test_launchagents_rejects_unsafe_modes_without_changing_the_directory(
+    agents_mode, tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import (
+        ApplicationMigration, MigrationBlocked, MigrationPaths, snapshot_legacy_jobs,
+    )
+
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir(mode=0o700)
+    plist = agents / "com.yulu.ui.plist"
+    plist.write_bytes(b"preserved service\n")
+    agents.chmod(agents_mode)
+    paths = MigrationPaths(durable_root=tmp_path / "durable", cache_root=tmp_path / "cache")
+    try:
+        with ApplicationMigration(paths) as authority:
+            with pytest.raises(MigrationBlocked, match="LaunchAgents directory"):
+                authority.launch_agents_fd(agents)
+        with pytest.raises(MigrationBlocked, match="LaunchAgents directory"):
+            snapshot_legacy_jobs(
+                agents,
+                launchctl=lambda _args: SimpleNamespace(returncode=0, stdout="{}"),
+            )
+        assert stat.S_IMODE(agents.stat().st_mode) == agents_mode
+        assert plist.read_bytes() == b"preserved service\n"
+    finally:
+        agents.chmod(0o700)
+
+
+def test_launchagents_revalidation_rejects_permissions_changed_after_anchoring(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationBlocked, MigrationPaths
+
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir(mode=0o755)
+    paths = MigrationPaths(durable_root=tmp_path / "durable", cache_root=tmp_path / "cache")
+    with ApplicationMigration(paths) as authority:
+        os.close(authority.launch_agents_fd(agents))
+        agents.chmod(0o777)
+        with pytest.raises(MigrationBlocked, match="LaunchAgents directory changed"):
+            authority.require_launch_agents_path(agents)
+        assert stat.S_IMODE(agents.stat().st_mode) == 0o777
+
+
+def test_launchagents_rejects_foreign_owner_without_touching_files(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationBlocked, MigrationPaths
+
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir(mode=0o755)
+    identity = agents.stat()
+    paths = MigrationPaths(durable_root=tmp_path / "durable", cache_root=tmp_path / "cache")
+    real_fstat = os.fstat
+
+    def foreign_owner(directory_fd):
+        info = real_fstat(directory_fd)
+        if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
+            fields = list(info)
+            fields[4] = os.geteuid() + 1
+            return os.stat_result(fields)
+        return info
+
+    with ApplicationMigration(paths) as authority:
+        monkeypatch.setattr(os, "fstat", foreign_owner)
+        with pytest.raises(MigrationBlocked, match="LaunchAgents directory"):
+            authority.launch_agents_fd(agents)
+    assert stat.S_IMODE(agents.stat().st_mode) == 0o755
+    assert list(agents.iterdir()) == []
+
+
+@pytest.mark.parametrize("plist_mode", [0o660, 0o602, 0o666])
+def test_readable_launchagents_rejects_plists_writable_by_other_users(
+    plist_mode, tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import MigrationBlocked, snapshot_legacy_jobs
+
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir(mode=0o755)
+    plist = agents / "com.yulu.ui.plist"
+    plist.write_bytes(b"preserved service\n")
+    plist.chmod(plist_mode)
+
+    def launchctl(arguments):
+        return SimpleNamespace(
+            returncode=0 if arguments[0] == "print-disabled" else 113, stdout="{}"
+        )
+
+    with pytest.raises(MigrationBlocked, match="unsafe legacy LaunchAgent plist"):
+        snapshot_legacy_jobs(agents, launchctl=launchctl)
+    assert plist.read_bytes() == b"preserved service\n"
+    assert stat.S_IMODE(plist.stat().st_mode) == plist_mode
 
 
 def test_rollback_fails_closed_when_launchagents_and_archive_paths_are_swapped(
@@ -3895,8 +4005,9 @@ def test_consecutive_preflight_retry_rejects_incomplete_lineage(
     assert paths.journal_path.read_bytes() == before
 
 
+@pytest.mark.parametrize("agents_mode", [0o700, 0o755])
 def test_session_retries_an_initial_failure_through_service_registration(
-    tmp_path, monkeypatch
+    agents_mode, tmp_path, monkeypatch
 ):
     monkeypatch.syspath_prepend(str(SCRIPTS))
     from application_migration import MigrationPaths, run_migration_session, run_migration_step
@@ -3904,7 +4015,8 @@ def test_session_retries_an_initial_failure_through_service_registration(
     legacy = tmp_path / "legacy"
     agents = tmp_path / "LaunchAgents"
     legacy.mkdir(mode=0o700)
-    agents.mkdir(mode=0o700)
+    agents.mkdir(mode=agents_mode)
+    agents.chmod(agents_mode)
     (legacy / "config.json").write_bytes(b"{}\n")
     node = tmp_path / "node"
     server = tmp_path / "server.js"
@@ -3955,6 +4067,7 @@ def test_session_retries_an_initial_failure_through_service_registration(
     assert "jobSnapshot" in retried
     assert "archiveDirectory" in retried
     assert (legacy / "config.json").read_bytes() == b"{}\n"
+    assert stat.S_IMODE(agents.stat().st_mode) == agents_mode
 
 
 def test_session_retry_flag_is_explicit_and_only_reaches_the_initial_step(

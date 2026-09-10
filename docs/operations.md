@@ -463,6 +463,16 @@ reports its cause with the rollback result instead of claiming it was cancelled.
 Explicit Retry also accepts a verified early rollback before snapshots existed;
 it does not require deleting or editing that migration journal.
 
+The legacy `~/Library/LaunchAgents` directory is shared by the user's applications,
+not Yulu-private state. Migration preserves a user-owned `0700`, `0750`, or `0755`
+directory and each allowlisted plist's original mode, while rejecting foreign
+ownership, symlinks, and group/world-writable sources. Journals and rollback
+directories remain private (`0700`). RC17 incorrectly requires this shared source
+directory to be `0700`; that candidate can report `unsafe private migration
+directory owner or mode` for a normal install. Use a signed App containing the
+LaunchAgents permission repair; do not chmod the shared directory or edit the
+migration journal to get past that error.
+
 Stable releases publish `yulu-macos-arm64-<tag>.dmg`, `appcast.xml`, and
 `checksums.txt`. The local-caption Runtime Pack remains a separate optional ZIP;
 it is not an installation path and is never inside the DMG. Release CI verifies
@@ -510,7 +520,7 @@ preserved source/audit evidence, correct the blocking condition, then use
 back transaction. Do not manually edit the journal or databases, and do not
 remove the old runtime until the committed state is stable after relaunch.
 
-For the `v0.23.0-rc.17` public-DMG acceptance harness, keep the target ledger
+For the `v0.23.0-rc.18` public-DMG acceptance harness, keep the target ledger
 private (`0700` directory, exact `0600` files) and outside any snapshot rollback
 boundary. The harness is resumable after logout/login and records only bounded,
 secret-safe machine evidence; the operator performs the actual App/UI actions.

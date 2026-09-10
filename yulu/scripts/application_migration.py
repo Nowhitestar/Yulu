@@ -246,6 +246,7 @@ def _read_plist_at(directory_fd: int, name: str) -> tuple[bytes, int] | None:
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) & 0o022
             or info.st_nlink != 1
             or info.st_size > _MAX_PLIST_BYTES
         ):
@@ -1431,21 +1432,10 @@ def legacy_install_present(
         if returncode != 113:
             return True
 
-    try:
-        directory_fd = os.open(
-            launch_agents_dir,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        )
-    except FileNotFoundError:
+    directory_fd = _open_existing_launch_agents_directory(launch_agents_dir)
+    if directory_fd < 0:
         return False
-    except OSError as exc:
-        raise MigrationBlocked(
-            "cannot safely inspect the legacy LaunchAgents directory"
-        ) from exc
     try:
-        info = os.fstat(directory_fd)
-        if info.st_uid != uid:
-            raise MigrationBlocked("legacy LaunchAgents directory has unsafe ownership")
         return any(
             _read_plist_at(directory_fd, f"{label}.plist") is not None
             for label in LEGACY_JOB_LABELS
@@ -2177,18 +2167,13 @@ def snapshot_legacy_jobs(
     disabled = _disabled_labels(str(getattr(disabled_result, "stdout", "")))
 
     if directory_fd is None:
-        try:
-            opened_directory_fd = os.open(
-                launch_agents_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-            )
-        except OSError as exc:
-            raise MigrationBlocked("cannot safely open the legacy LaunchAgents directory") from exc
+        opened_directory_fd = _open_existing_launch_agents_directory(launch_agents_dir)
+        if opened_directory_fd < 0:
+            raise MigrationBlocked("legacy LaunchAgents directory is missing")
     else:
         opened_directory_fd = os.dup(directory_fd)
     try:
-        directory_info = os.fstat(opened_directory_fd)
-        if directory_info.st_uid != uid:
-            raise MigrationBlocked("legacy LaunchAgents directory has unsafe ownership")
+        directory_info = _validate_launch_agents_directory_fd(opened_directory_fd)
         snapshot: dict[str, dict[str, object]] = {}
         for label in LEGACY_JOB_LABELS:
             result = launchctl(["print", f"gui/{uid}/{label}"])
@@ -2252,6 +2237,33 @@ def _open_existing_private_directory(path: Path) -> int:
     if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
         os.close(directory_fd)
         raise MigrationBlocked("unsafe private migration directory owner or mode")
+    return directory_fd
+
+
+def _validate_launch_agents_directory_fd(directory_fd: int) -> os.stat_result:
+    info = os.fstat(directory_fd)
+    mode = stat.S_IMODE(info.st_mode)
+    # LaunchAgents is shared by the user's applications, not Yulu-private state.
+    # Keep its existing readable/searchable mode, but require sole write authority.
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or mode & 0o700 != 0o700
+        or mode & 0o022
+    ):
+        raise MigrationBlocked("legacy LaunchAgents directory has unsafe ownership or permissions")
+    return info
+
+
+def _open_existing_launch_agents_directory(path: Path) -> int:
+    directory_fd = _open_existing_anchored_directory(path)
+    if directory_fd < 0:
+        return -1
+    try:
+        _validate_launch_agents_directory_fd(directory_fd)
+    except BaseException:
+        os.close(directory_fd)
+        raise
     return directory_fd
 
 
@@ -2880,7 +2892,7 @@ class ApplicationMigration:
 
     def launch_agents_fd(self, path: Path) -> int:
         if self._launch_agents_fd < 0:
-            self._launch_agents_fd = _open_existing_private_directory(path)
+            self._launch_agents_fd = _open_existing_launch_agents_directory(path)
             if self._launch_agents_fd < 0:
                 raise MigrationBlocked("legacy LaunchAgents directory is missing")
         return os.dup(self._launch_agents_fd)
@@ -2889,7 +2901,7 @@ class ApplicationMigration:
         if self._launch_agents_fd < 0:
             raise MigrationBlocked("legacy LaunchAgents directory is not anchored")
         try:
-            observed_fd = _open_existing_private_directory(path)
+            observed_fd = _open_existing_launch_agents_directory(path)
         except MigrationBlocked as exc:
             raise MigrationBlocked("legacy LaunchAgents directory changed") from exc
         if observed_fd < 0:
