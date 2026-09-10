@@ -18,13 +18,13 @@ def git(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def make_release_repository(tmp_path: Path) -> Path:
     repository = tmp_path / "release-repository"
     repository.mkdir()
-    (repository / "VERSION").write_text("0.23.0-rc.18\n", encoding="utf-8")
+    (repository / "VERSION").write_text("0.23.0-rc.19\n", encoding="utf-8")
     assert git(repository, "init", "-q").returncode == 0
     assert git(repository, "config", "user.email", "release-test@example.invalid").returncode == 0
     assert git(repository, "config", "user.name", "Release Test").returncode == 0
     assert git(repository, "add", "VERSION").returncode == 0
-    assert git(repository, "commit", "-qm", "chore: release 0.23.0-rc.18").returncode == 0
-    assert git(repository, "tag", "v0.23.0-rc.18").returncode == 0
+    assert git(repository, "commit", "-qm", "chore: release 0.23.0-rc.19").returncode == 0
+    assert git(repository, "tag", "v0.23.0-rc.19").returncode == 0
     assert git(repository, "tag", "v0.23.0").returncode == 0
     return repository
 
@@ -45,10 +45,10 @@ def resolve(repository: Path, tag: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_release_identity_accepts_rc18_and_reserves_the_next_build_for_stable(tmp_path: Path):
+def test_release_identity_accepts_rc19_and_reserves_the_next_build_for_stable(tmp_path: Path):
     repository = make_release_repository(tmp_path)
 
-    rc = resolve(repository, "v0.23.0-rc.18")
+    rc = resolve(repository, "v0.23.0-rc.19")
     stable = resolve(repository, "v0.23.0")
 
     assert rc.returncode == 0, rc.stderr
@@ -56,7 +56,7 @@ def test_release_identity_accepts_rc18_and_reserves_the_next_build_for_stable(tm
     assert json.loads(rc.stdout) == {
         "buildNumber": "2",
         "bundleShortVersion": "0.23.0",
-        "releaseVersion": "0.23.0-rc.18",
+        "releaseVersion": "0.23.0-rc.19",
         "stablePromotion": False,
     }
     assert json.loads(stable.stdout) == {
@@ -82,19 +82,19 @@ def test_stable_promotion_rejects_a_different_source_commit(tmp_path: Path):
 
 def test_release_identity_rejects_missing_and_mismatched_requested_tags(tmp_path: Path):
     repository = make_release_repository(tmp_path)
-    assert git(repository, "tag", "-d", "v0.23.0-rc.18").returncode == 0
+    assert git(repository, "tag", "-d", "v0.23.0-rc.19").returncode == 0
 
-    missing = resolve(repository, "v0.23.0-rc.18")
+    missing = resolve(repository, "v0.23.0-rc.19")
 
     assert missing.returncode != 0
     assert "unknown revision" in missing.stderr.lower() or "needed a single revision" in missing.stderr.lower()
 
-    assert git(repository, "tag", "v0.23.0-rc.18").returncode == 0
+    assert git(repository, "tag", "v0.23.0-rc.19").returncode == 0
     (repository / "after-tag.txt").write_text("new source\n", encoding="utf-8")
     assert git(repository, "add", "after-tag.txt").returncode == 0
     assert git(repository, "commit", "-qm", "fix: change after tag").returncode == 0
 
-    mismatched = resolve(repository, "v0.23.0-rc.18")
+    mismatched = resolve(repository, "v0.23.0-rc.19")
 
     assert mismatched.returncode != 0
     assert "current release commit" in mismatched.stderr
@@ -140,7 +140,7 @@ def test_stable_promotion_is_limited_to_the_accepted_release_line(tmp_path: Path
     assert "must match VERSION" in result.stderr
 
 
-def test_previous_candidate_cannot_be_promoted_after_acceptance_moves_to_rc18(tmp_path: Path):
+def test_previous_candidate_cannot_be_promoted_after_acceptance_moves_to_rc19(tmp_path: Path):
     repository = make_release_repository(tmp_path)
     (repository / "VERSION").write_text("0.23.0-rc.17\n", encoding="utf-8")
     assert git(repository, "tag", "v0.23.0-rc.17").returncode == 0
@@ -167,8 +167,8 @@ def test_stable_publication_guidance_requires_the_current_accepted_candidate():
     ).read_text(encoding="utf-8")
 
     for guidance in (stable_notes, stable_adr):
-        assert "`v0.23.0-rc.18`" in guidance
-        assert "`v0.23.0-rc.16`" not in guidance
+        assert "`v0.23.0-rc.19`" in guidance
+        assert "`v0.23.0-rc.18`" not in guidance
     assert "only after #170" in stable_notes
 
 
@@ -197,7 +197,7 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
         encoding="utf-8"
     )
     release_notes = (
-        (ROOT / "docs" / "release-notes" / "v0.23.0-rc.18.md").read_text(encoding="utf-8")
+        (ROOT / "docs" / "release-notes" / "v0.23.0-rc.19.md").read_text(encoding="utf-8")
         + (ROOT / "docs" / "release-notes" / "v0.23.0.md").read_text(encoding="utf-8")
     )
 
@@ -214,9 +214,9 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
     assert "Hermes 租约任务规则" not in skill
     assert "手动 Share Action" in skill
     assert "Official GitHub Release DMG" in issue_template
-    assert 'placeholder: "Yulu 0.23.0-rc.18"' in issue_template
+    assert 'placeholder: "Yulu 0.23.0-rc.19"' in issue_template
     operations = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
-    assert "For the `v0.23.0-rc.18` public-DMG acceptance harness" in operations
+    assert "For the `v0.23.0-rc.19` public-DMG acceptance harness" in operations
     assert "one-line installer" not in issue_template
     assert "compatible Hermes Agent" not in issue_template
     for guidance in (readme, readme_zh, skill):

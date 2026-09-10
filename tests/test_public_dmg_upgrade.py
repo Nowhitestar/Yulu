@@ -67,7 +67,7 @@ def test_upgrade_observer_rejects_non_installed_node_outside_policy_mode() -> No
             "--mode",
             "awaiting_approval",
             "--release-tag",
-            "v0.23.0-rc.18",
+            "v0.23.0-rc.19",
             "--snapshot-witness-sha256",
             "a" * 64,
         ],
@@ -104,10 +104,12 @@ def test_retry_pre_begin_and_post_begin_snapshots_remain_two_fresh_reads() -> No
     migration = source.split("def run_migration_step(", 1)[1].split("\ndef ", 1)[0]
     # Deliberate duplication is a TOCTOU defense: Retry preflight and the
     # post-begin transaction must independently re-read the legacy job state.
-    assert migration.count("snapshot_legacy_jobs(") == 2
-    begin = migration.index("authority.begin_retry(")
-    assert migration.index("snapshot_legacy_jobs(") < begin
-    assert migration.rindex("snapshot_legacy_jobs(") > begin
+    # Recovery has a separate current-recording guard after the start branch.
+    transaction_start = migration.split('phase = str(authority._journal["phase"])', 1)[0]
+    assert transaction_start.count("snapshot_legacy_jobs(") == 2
+    begin = transaction_start.index("authority.begin_retry(")
+    assert transaction_start.index("snapshot_legacy_jobs(") < begin
+    assert transaction_start.rindex("snapshot_legacy_jobs(") > begin
 
 
 def _write_command(path: Path, body: str) -> None:
@@ -142,9 +144,9 @@ def test_upgrade_observer_binds_migration_before_and_requires_real_retry_lineage
             "formalAcceptance": False,
             "status": "passed",
             "scenario": "upgrade",
-            "releaseTag": "v0.23.0-rc.18",
-            "dmgUrl": "https://github.com/Nowhitestar/Yulu/releases/download/v0.23.0-rc.18/yulu-macos-arm64-v0.23.0-rc.18.dmg",
-            "checksumsUrl": "https://github.com/Nowhitestar/Yulu/releases/download/v0.23.0-rc.18/checksums.txt",
+            "releaseTag": "v0.23.0-rc.19",
+            "dmgUrl": "https://github.com/Nowhitestar/Yulu/releases/download/v0.23.0-rc.19/yulu-macos-arm64-v0.23.0-rc.19.dmg",
+            "checksumsUrl": "https://github.com/Nowhitestar/Yulu/releases/download/v0.23.0-rc.19/checksums.txt",
             "architecture": "arm64",
             "hostDependenciesAbsent": False,
             "browserProvenanceVerified": True,
@@ -159,7 +161,7 @@ def test_upgrade_observer_binds_migration_before_and_requires_real_retry_lineage
             "classification": "harness_policy_test",
             "formalAcceptance": False,
             "status": "matched",
-            "release": {"shortVersion": "0.23.0", "releaseVersion": "0.23.0-rc.18"},
+            "release": {"shortVersion": "0.23.0", "releaseVersion": "0.23.0-rc.19"},
             "contents": {"sha256": "5" * 64},
             "runtimeInventory": {"sha256": "6" * 64},
         })
@@ -213,7 +215,7 @@ printf 'class: "genp"\nattributes:\n    "acct"<blob>="token:default:operator@exa
 
         base_args = [
             "node", str(OBSERVER), "--policy-test",
-            "--release-tag", "v0.23.0-rc.18",
+            "--release-tag", "v0.23.0-rc.19",
             "--before", str(before_path),
             "--current-preflight", str(current_preflight),
             "--bundle-evidence", str(bundle_evidence),
@@ -335,7 +337,7 @@ printf '{"schema":1,"classification":"policy-fake-observer","formalAcceptance":f
             "--run-upgrade", "--policy-test",
             "--journey", journey,
             "--run-id", f"{journey}-policy",
-            "--release-tag", "v0.23.0-rc.18",
+            "--release-tag", "v0.23.0-rc.19",
             "--migration-before", str(before),
             "--current-preflight", str(preflight),
             "--bundle-evidence", str(bundle),

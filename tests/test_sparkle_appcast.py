@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATE = ROOT / "packaging/scripts/validate_sparkle_appcast.py"
 SPARKLE = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
-TAG = "v0.23.0-rc.18"
+TAG = "v0.23.0-rc.19"
 PREFIX = f"https://github.com/Nowhitestar/Yulu/releases/download/{TAG}/"
 
 
