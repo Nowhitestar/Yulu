@@ -454,6 +454,13 @@ Use `yulu where` to confirm the effective installation and recording paths.
 
 ## Upgrade and migration checks
 
+Legacy `local-caption/venv` interpreters are not relocatable Application Runtime
+Packs. Migration leaves that directory untouched in the legacy rollback source;
+other local-caption data, including an existing Runtime Pack, is preserved. If
+only a legacy virtualenv was installed, set up the verified local Runtime Pack
+from Transcription settings before using local transcription. A failed migration
+reports its cause with the rollback result instead of claiming it was cancelled.
+
 Stable releases publish `yulu-macos-arm64-<tag>.dmg`, `appcast.xml`, and
 `checksums.txt`. The local-caption Runtime Pack remains a separate optional ZIP;
 it is not an installation path and is never inside the DMG. Release CI verifies

@@ -1850,7 +1850,7 @@ final class ApplicationMigrationCoordinator {
             migrationTerminalSeen = true
             retryAvailable = true
             pendingHealth = nil
-            onStateChange?("rolled_back", nil)
+            onStateChange?("rolled_back", action.detail)
         case "blocked":
             migrationTerminalSeen = true
             retryAvailable = false
@@ -4505,8 +4505,9 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             cancelMigrationMenuItem?.isEnabled = false
             retryMigrationMenuItem?.isEnabled = true
             showMigrationRetry(
-                "Migration was cancelled",
-                detail: "The previous Yulu background services were restored."
+                "Migration was rolled back",
+                detail: [detail, "The previous Yulu background services were restored."]
+                    .compactMap { $0 }.joined(separator: " ")
             )
         case "fresh_install_cancelled":
             migrationRetryAvailable = true

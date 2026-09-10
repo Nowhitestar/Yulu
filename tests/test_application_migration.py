@@ -1806,6 +1806,7 @@ def test_live_snapshot_failure_makes_no_legacy_or_service_mutation(
     node.write_bytes(b"node")
     server.write_bytes(b"server")
     paths = MigrationPaths(durable_root=durable, cache_root=tmp_path / "cache")
+    output = io.BytesIO()
     result = run_migration_session(
         paths=paths,
         home_dir=tmp_path,
@@ -1817,10 +1818,14 @@ def test_live_snapshot_failure_makes_no_legacy_or_service_mutation(
         server_js=server,
         launchctl=launchctl,
         input_stream=io.BytesIO(),
-        output_stream=io.BytesIO(),
+        output_stream=output,
     )
 
     assert result == 0
+    assert json.loads(output.getvalue()) == {
+        "action": "rolled_back",
+        "detail": "cannot snapshot launchd disabled state",
+    }
     assert commands == [["print-disabled", f"gui/{os.geteuid()}"]]
     assert (legacy / "config.json").read_bytes() == legacy_bytes
     assert (agents / "com.yulu.ui.plist").read_bytes() == plist_bytes
@@ -1976,6 +1981,48 @@ def test_preexisting_standard_files_must_match_the_legacy_manifest(
     assert manifest["config.json"]["sourceSHA256"] == manifest["config.json"][
         "destinationSHA256"
     ]
+
+
+def test_preflight_accepts_legacy_local_caption_virtualenv(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import preflight_standard_outputs
+
+    legacy = tmp_path / "legacy"
+    durable = tmp_path / "durable"
+    interpreter = tmp_path / "python3"
+    interpreter.write_bytes(b"legacy interpreter")
+    python = legacy / "local-caption" / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True, mode=0o700)
+    python.symlink_to(interpreter)
+    (legacy / "config.json").write_bytes(b"{}\n")
+
+    manifest = preflight_standard_outputs(legacy, durable)
+
+    assert manifest["config.json"]["sourceSHA256"] is not None
+    assert python.is_symlink()
+    assert interpreter.read_bytes() == b"legacy interpreter"
+    assert not durable.exists()
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    ["models/venv/python", "local-caption/YuluLocalCaptionRuntime.bundle/venv/python"],
+)
+def test_preflight_still_rejects_links_outside_the_retired_virtualenv(
+    relative_path, tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import MigrationBlocked, preflight_standard_outputs
+
+    legacy = tmp_path / "legacy"
+    external = tmp_path / "external"
+    external.write_bytes(b"must not be imported")
+    link = legacy / relative_path
+    link.parent.mkdir(parents=True, mode=0o700)
+    link.symlink_to(external)
+
+    with pytest.raises((MigrationBlocked, OSError)):
+        preflight_standard_outputs(legacy, tmp_path / "durable")
 
 
 def test_preexisting_standard_directory_must_match_the_complete_legacy_tree(
@@ -3878,7 +3925,10 @@ def test_session_pre_mutation_retry_failure_rolls_back_and_allows_attempt_three(
     )
 
     assert result == 0
-    assert json.loads(output.getvalue()) == {"action": "rolled_back"}
+    assert json.loads(output.getvalue()) == {
+        "action": "rolled_back",
+        "detail": "injected post-begin retry preflight failure",
+    }
     failed = json.loads(paths.journal_path.read_text())
     assert failed["transactionId"] != first["transactionId"]
     assert failed["retryOf"] == first["transactionId"]

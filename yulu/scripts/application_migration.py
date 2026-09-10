@@ -428,12 +428,21 @@ def _bundled_regular_file_digest(path: Path) -> str:
         os.close(file_fd)
 
 
-def _tree_manifest(root: Path) -> list[dict[str, object]]:
+def _tree_manifest(
+    root: Path, *, excluded_root_names: tuple[str, ...] = ()
+) -> list[dict[str, object]]:
     root_info = root.lstat()
     if root_info.st_uid != os.geteuid() or not stat.S_ISDIR(root_info.st_mode):
         raise MigrationBlocked(f"unsafe migration directory: {root.name}")
     entries: list[dict[str, object]] = []
     for current, directory_names, file_names in os.walk(root, followlinks=False):
+        if Path(current) == root:
+            directory_names[:] = [
+                name for name in directory_names if name not in excluded_root_names
+            ]
+            file_names = [
+                name for name in file_names if name not in excluded_root_names
+            ]
         directory_names.sort()
         file_names.sort()
         current_path = Path(current)
@@ -1153,7 +1162,14 @@ def preflight_standard_outputs(
         destination_kind = _present_kind(destination)
         if source_kind not in (None, "dir") or destination_kind not in (None, "dir"):
             raise MigrationBlocked(f"standard output conflicts: {destination_name}")
-        source_manifest = _tree_manifest(source) if source_kind else None
+        # A legacy virtualenv is tied to its old interpreter and is not an
+        # Application Runtime Pack. Keep it untouched in the rollback source.
+        excluded_root_names = ("venv",) if source_name == "local-caption" else ()
+        source_manifest = (
+            _tree_manifest(source, excluded_root_names=excluded_root_names)
+            if source_kind
+            else None
+        )
         destination_manifest = _tree_manifest(destination) if destination_kind else None
         if source_manifest is not None and destination_manifest not in (
             None,
@@ -1815,6 +1831,8 @@ def _recover_live_session_failure(
             raise MigrationBlocked(
                 f"live migration failure did not reach rollback: {failure}"
             )
+        if action.get("action") == "rolled_back":
+            return {**action, "detail": str(failure)[:512] or "Migration failed"}
         return action
     except Exception as recovery_failure:
         raw_attempt_fd = step_arguments.get("attempt_fd")
