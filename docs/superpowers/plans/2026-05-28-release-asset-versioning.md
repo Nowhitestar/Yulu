@@ -1,6 +1,6 @@
 # Release Asset Versioning Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Ship a release-asset based Yulu installer/update system where stable users install GitHub Release assets by default, can select a version, can roll back with `yulu update --version`, and developers explicitly opt into `--dev`.
 

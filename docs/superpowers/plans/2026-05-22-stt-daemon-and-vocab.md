@@ -1,6 +1,6 @@
 # STT Daemon + Vocab SQLite Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Replace ad-hoc mlx-whisper subprocess invocations and hardcoded glossary/replacements with a resident `stt_daemon` (Python, asyncio) backed by user-editable `~/.config/yulu/vocab.sqlite`, following the design at [docs/superpowers/specs/2026-05-22-stt-daemon-and-vocab-design.md](../specs/2026-05-22-stt-daemon-and-vocab-design.md).
 

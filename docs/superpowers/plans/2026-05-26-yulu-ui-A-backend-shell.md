@@ -1,6 +1,6 @@
 # Yulu UI · Phase A — Backend Daemon Shell
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Stand up the `yulu_ui` Node LaunchAgent with all 11 tRPC routers + WebSocket multiplexer responding correctly to `curl` and integration tests. No React frontend yet — Phase B handles UI.
 

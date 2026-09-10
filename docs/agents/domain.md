@@ -2,13 +2,14 @@
 
 This repository uses a single domain context.
 
-Before changing an area, read the root `CONTEXT.md` when present and the
-relevant records under `docs/adr/`.
+Before changing behavior, read the relevant terms in the root `CONTEXT.md` and
+the relevant records under the existing `yulu/spec/adr/` and `docs/adr/` trees.
+The latter includes the current App, onboarding, and release-acceptance decisions.
 
 `CONTEXT.md` is a glossary of domain language, not an implementation spec.
-Create it only when the first term is resolved. Create `docs/adr/` only when
-a decision is hard to reverse, surprising without context, and involves a
-real trade-off.
+Extend the existing glossary when needed. Add an ADR alongside the related
+existing decisions only when it is hard to reverse, surprising without context,
+and involves a real trade-off; do not create another glossary or ADR tree.
 
 Use canonical glossary terms in issues, specifications, tests, and code.
 Surface conflicts with an existing ADR instead of silently overriding it.

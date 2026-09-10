@@ -11,7 +11,7 @@ Thanks for considering a contribution. Yulu is small enough that the process is 
 
 ## Before you open a PR
 
-1. **Run the existing flow end-to-end** on your own machine: `make dev-install` → `yulu doctor --json` → trigger a manual recording → confirm its durable Host task completes and both `transcript.txt` and `summary.md` are committed. Exercise `meeting_daemon.py`, `audio_daemon.swift`, and the TypeScript recording pipeline when those boundaries change.
+1. **Verify the changed behavior in proportion to its risk.** Run the relevant tests and checks; documentation-only changes do not require a rebuild or reinstall. When capture, scheduling, or the recording pipeline changes, exercise the affected end-to-end path and confirm the durable Host task and committed transcript/summary artifacts. Use `make dev-install` only for intended, authorized development-runtime testing; release acceptance uses the complete signed public App. Keep source-test, installed-runtime, and release-acceptance results distinct, and do not repeat passing checks without a new reason.
 2. **Do not commit secrets or user data.** `.gitignore` blocks common config, token, recording, and transcript paths, but the responsibility is yours. Rotate the Yulu MCP token and revoke any affected Agent/calendar credential after exposure.
 3. **Match the codebase style.**
    - Python: type hints where it helps, no new heavy dependencies, prefer the standard library.

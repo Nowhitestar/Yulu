@@ -2,7 +2,9 @@
 gsd_state_version: 1.0
 milestone: v0.6
 milestone_name: milestone
-status: executing
+status: archived
+historical_status: executing
+archived_at: "2026-09-10"
 stopped_at: Ask Matt Phase 11 spec and issues 126-132 complete — ready for the Phase 12 boundary
 last_updated: "2026-08-25T09:28:09.000Z"
 last_activity: 2026-08-25 -- Phase 11 passed installed Core Activation acceptance at 78fed41
@@ -16,6 +18,12 @@ progress:
 
 # Project State
 
+> Historical snapshot, archived on 2026-09-10. The positions, metrics, and dates
+> below describe the old planning record, not current project status. Follow the
+> [Engineering Workflow](../CLAUDE.md#engineering-workflow), current code, and
+> still-valid requirements; do not resume old phases or regenerate instructions
+> from this file. Historical workflow choices are not current requirements.
+
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-08-23)
@@ -27,7 +35,7 @@ See: .planning/PROJECT.md (updated 2026-08-23)
 
 Phase: 11 (State-Driven Core Activation) — COMPLETE
 Plan: Ask Matt parent #126 and tracer-bullet tickets #127-#132 complete; no Phase 11 implementation frontier remains
-Status: Phase boundary; ready to discuss and specify Phase 12 through Ask Matt
+Historical status: Phase boundary; Phase 12 had not yet been specified at this snapshot
 Last activity: 2026-08-25 -- Installed candidate `78fed41` passed checkout, browser, package, install/restart, authorization, health, production evidence, and dual review
 
 ## Performance Metrics
@@ -100,7 +108,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
 - [Workflow]: Phase 10 implementation truth is GitHub spec #120 and tracer-bullet tickets #121-#125. GSD Phase 10 plans remain reference material and do not drive execution unless explicitly requested.
-- [Workflow]: Phase 11 implementation truth is GitHub spec #126 and tracer-bullet tickets #127-#132. `.planning` remains reference material; Phase 12 must continue through Ask Matt unless the user explicitly requests GSD.
+- [Workflow, historical]: Phase 11 implementation was tracked in GitHub spec #126 and tracer-bullet tickets #127-#132. `.planning` remains reference material. The former Ask Matt default is superseded by the current Engineering Workflow, not a requirement for later work.
 - [Phase 11]: Core Activation Evidence is durable verified fact, not current health; audio, transcript, summary, integrity, and provider provenance establish it, while later source deletion is explained without revocation.
 - [Phase 11]: Provider authorization and capability-specific data disclosure remain separate; retries preserve task provider/model/credential source and explicit replacements create a new attempt without silent fallback.
 - [Init]: Build the cross-platform abstraction layer now (macOS-only impl) — avoid deepening lock-in.

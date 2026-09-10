@@ -1,6 +1,6 @@
 # Yulu UI · Phase C — Inbox Pages Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Replace the Phase B placeholders for `/inbox/voicemails`, `/inbox/meetings`, and `/inbox/search` with production-grade pages. After Phase C the app supports the core daily user flow: browse / play / read voicemails and meetings, jump to any item via full-text search, and have new items appear live without page reload.
 

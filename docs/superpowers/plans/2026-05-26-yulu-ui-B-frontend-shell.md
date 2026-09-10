@@ -1,6 +1,6 @@
 # Yulu UI · Phase B — Frontend Shell Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Stand up the React + Vite shell at `yulu/scripts/yulu_ui/web/` so subsequent phases (C–F) drop page bodies into ready-made route slots. After Phase B, navigating to any of the 13 routes renders the full Liquid Glass chrome (Sidebar + TopBar + Pill) with a placeholder body that confirms the backend wire is live.
 

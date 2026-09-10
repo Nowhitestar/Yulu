@@ -1,6 +1,6 @@
 # Phase I — Reader Audio Fix + Manual Transcribe/Summary Triggers Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Fix the AudioPlayer's A→B→A playback regression, and add backend mutations + UI buttons so users can manually re-run transcription / summary on existing recordings.
 

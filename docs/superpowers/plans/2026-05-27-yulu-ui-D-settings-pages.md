@@ -1,6 +1,6 @@
 # Yulu UI · Phase D — Settings Pages Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Replace the Phase B placeholders for all 6 Settings pages (`/settings/{audio,transcription,llm,hotkey,integrations,storage}`) with real, interactive pages built on a shared inline-edit row + restart banner pattern. After Phase D the user can tune every knob in `~/.config/yulu/config.json` from the browser and trigger required daemon restarts with one click.
 
@@ -2834,7 +2834,7 @@ kill $PROD_PID 2>/dev/null; wait 2>/dev/null
 
 Expected: all 200.
 
-- [ ] **Step 2: Dev mode + browser visual** via `npm run dev` + the gstack `/browse` skill. Verify:
+- [ ] **Step 2: Dev mode + browser visual** via `npm run dev` in a browser. Verify:
 
 1. `/settings/audio` renders 6 rows; clicking mic select shows dropdown of real devices (or "no devices found" fallback)
 2. Editing silence_threshold triggers restart banner; clicking "Restart now" triggers daemons.restart for audiodaemon
