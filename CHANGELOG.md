@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.19](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.18...v0.23.0-rc.19) (2026-09-10)
+
+
+### Bug Fixes
+
+* **migration:** await asynchronous legacy service transitions ([#207](https://github.com/Nowhitestar/Yulu/issues/207)) ([0102382](https://github.com/Nowhitestar/Yulu/commit/0102382e91a57817890c0af1a0d86b95e64ebae0))
+
 ## [0.23.0-rc.18](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.17...v0.23.0-rc.18) (2026-09-10)
 
 
