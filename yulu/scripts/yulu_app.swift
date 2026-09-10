@@ -51,11 +51,17 @@ struct LaunchPolicy: Encodable {
 
 struct BackgroundServiceDescriptor {
     let plistName: String
+    let label: String
 
-    static let bundledOwners = [
-        BackgroundServiceDescriptor(plistName: "com.yulu.ui.plist"),
-        BackgroundServiceDescriptor(plistName: "com.yulu.audiodaemon.plist"),
-    ]
+    // Keep transaction/update plist names stable, but never reuse a legacy
+    // LaunchAgent's BTM identity. The Capture signing/TCC identity is separate.
+    static let host = BackgroundServiceDescriptor(
+        plistName: "com.yulu.ui.plist", label: "com.yulu.app.host"
+    )
+    static let capture = BackgroundServiceDescriptor(
+        plistName: "com.yulu.audiodaemon.plist", label: "com.yulu.app.capture"
+    )
+    static let bundledOwners = [host, capture]
 }
 
 struct ProductionStartupPlan: Encodable {
@@ -346,11 +352,11 @@ struct BundledServicesPresentation: Encodable {
     static func make(host: BackgroundServiceState, capture: BackgroundServiceState) -> BundledServicesPresentation {
         BundledServicesPresentation(services: [
             OwnerServicePresentation(
-                label: "Host — com.yulu.ui",
+                label: "Host — \(BackgroundServiceDescriptor.host.label)",
                 state: BackgroundServicePresentation.make(state: host)
             ),
             OwnerServicePresentation(
-                label: "Capture — com.yulu.audiodaemon",
+                label: "Capture — \(BackgroundServiceDescriptor.capture.label)",
                 state: BackgroundServicePresentation.make(state: capture)
             ),
         ])
@@ -574,8 +580,8 @@ struct RuntimeOwnerEvidence: Encodable {
     ) -> RuntimeOwnerEvidence? {
         let expectedOwner: String
         switch kind {
-        case "host": expectedOwner = "com.yulu.ui"
-        case "capture": expectedOwner = "com.yulu.audiodaemon"
+        case "host": expectedOwner = BackgroundServiceDescriptor.host.label
+        case "capture": expectedOwner = BackgroundServiceDescriptor.capture.label
         default: return nil
         }
         guard payload["serviceOwner"] as? String == expectedOwner,
@@ -1238,7 +1244,7 @@ func bundledProcessEnvironment(layout: BundleLayout, applicationPaths: Applicati
 
 struct HostServiceExecution: Encodable {
     static let declaredPort = 7777
-    static let owner = "com.yulu.ui"
+    static let owner = BackgroundServiceDescriptor.host.label
 
     let executableURL: URL
     let arguments: [String]
@@ -1863,18 +1869,21 @@ final class ApplicationMigrationCoordinator {
             pendingHealth = (transactionId, nonce)
             onStateChange?("verifying", nil)
             onNeedsHealth?()
-        case "fresh_install":
+        case "fresh_install", "committed":
             migrationTerminalSeen = true
             retryAvailable = false
+            pendingHealth = nil
             freshInstallPhase = .registering
             onStateChange?("registering", nil)
             services.registerBundledOwners(policy: policy)
             observeFreshInstallRegistration(attempt: 0)
-        case "committed":
+        case "recording_active":
             migrationTerminalSeen = true
             retryAvailable = false
-            pendingHealth = nil
-            onStateChange?("committed", nil)
+            onStateChange?("recording_active", nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.advance()
+            }
         case "rolled_back":
             migrationTerminalSeen = true
             retryAvailable = true
@@ -2116,7 +2125,7 @@ func applicationUpdateHealthPayload(
             "productVersion": hostProductVersion,
             "bundleVersion": hostBundleVersion,
             "hostIPCVersion": hostIPCVersion,
-            "serviceOwner": "com.yulu.ui",
+            "serviceOwner": BackgroundServiceDescriptor.host.label,
             "pid": hostPID,
             "uid": hostUID,
             "generation": hostGeneration,
@@ -2138,7 +2147,7 @@ func applicationUpdateHealthPayload(
             "productVersion": captureProductVersion,
             "bundleVersion": captureBundleVersion,
             "captureIPCVersion": captureIPCVersion,
-            "serviceOwner": "com.yulu.audiodaemon",
+            "serviceOwner": BackgroundServiceDescriptor.capture.label,
             "pid": capturePID,
             "uid": captureUID,
             "generation": captureGeneration,
@@ -2677,6 +2686,30 @@ if CommandLine.arguments.count == 7,
     exit(0)
 }
 #endif
+
+// Compatibility descriptors are unregister-only; they can never run an owner.
+if CommandLine.arguments.count == 2,
+   CommandLine.arguments[1] == "--retired-bundled-service" { exit(78) }
+
+if CommandLine.arguments.count == 3,
+   CommandLine.arguments[1] == "--retire-bundled-service" {
+    let policy = LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path)
+    let name = CommandLine.arguments[2]
+    guard policy.persistentRegistrationAllowed,
+          ["RetiredHost.plist", "RetiredCapture.plist"].contains(name) else { exit(78) }
+    let service = SMAppService.agent(plistName: name)
+    if service.status != .notRegistered && service.status != .notFound {
+        do { try service.unregister() } catch { exit(75) }
+    }
+    for _ in 0..<40 {
+        if service.status == .notRegistered || service.status == .notFound {
+            try writeJSON(["removed": true])
+            exit(0)
+        }
+        Thread.sleep(forTimeInterval: 0.25)
+    }
+    exit(75)
+}
 
 if CommandLine.arguments.count == 3,
    CommandLine.arguments[1] == "--apply-migration-service-action" {
@@ -4499,6 +4532,11 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
 
     private func migrationStateChanged(_ state: String, detail: String?) {
         switch state {
+        case "recording_active":
+            window?.contentView = centeredMessage(
+                "Waiting for the current recording…",
+                detail: "Yulu will finish updating its background services after recording stops."
+            )
         case "registering":
             migrationRetryAvailable = false
             cancelMigrationMenuItem?.isEnabled = true

@@ -1934,7 +1934,7 @@ def test_live_snapshot_failure_makes_no_legacy_or_service_mutation(
     assert result == 0
     assert json.loads(output.getvalue()) == {
         "action": "rolled_back",
-        "detail": "cannot snapshot launchd disabled state",
+        "detail": "A migration step could not complete safely. The original data is unchanged.",
     }
     assert commands == [["print-disabled", f"gui/{os.geteuid()}"]]
     assert (legacy / "config.json").read_bytes() == legacy_bytes
@@ -2655,12 +2655,138 @@ def test_python_authority_runs_exact_node_leaf_and_journals_verified_publication
         )
 
     assert calls[0][0] == [str(node), str(server_js), "--prepare-application-data"]
+    assert calls[1][0] == [str(node), str(server_js), "--initialize-application-data"]
+    assert calls[1][1]["pass_fds"] == ()
     assert calls[0][1]["cwd"] == server_js.parent
     assert calls[0][1]["env"]["YULU_APPLICATION_SUPPORT_DIR"] == str(durable)
     assert calls[0][1]["env"]["YULU_LEGACY_READ_ONLY_DATA_DIR"] == str(legacy)
     journal = json.loads(paths.journal_path.read_text())
     assert journal["phase"] == "data_published"
     assert journal["dataManifest"]["config.json"]["reused"] is True
+
+
+def test_started_rollback_retains_normal_runtime_writes_and_resumes_safely(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationPaths, preflight_standard_outputs
+
+    legacy = tmp_path / "legacy"
+    durable = tmp_path / "durable"
+    legacy.mkdir(mode=0o700)
+    durable.mkdir(mode=0o700)
+    (legacy / "config.json").write_text('{"old":true}')
+    paths = MigrationPaths(durable_root=durable, cache_root=tmp_path / "cache")
+    with ApplicationMigration(paths) as authority:
+        authority.begin()
+        preflight = preflight_standard_outputs(legacy, durable)
+        (durable / "config.json").write_text('{"old":true}')
+        info = os.fstat(authority._durable_root_fd)
+        authority._journal = {
+            **authority._journal, "preflightDataManifest": preflight,
+            "durableDirectory": {"device": info.st_dev, "inode": info.st_ino},
+            "serviceNonce": "a" * 32,
+        }
+        authority.record_transaction_output_identities(preflight)
+        (durable / "config.json").unlink()
+        (durable / "config.json").write_text('{"upgraded":true}')
+        (durable / "host.sqlite-wal").write_bytes(b"new runtime WAL")
+        events = durable / "recording-events"
+        events.mkdir(mode=0o700)
+        (events / "completed.json").write_bytes(b"uncommitted recording event")
+        archive_name = "config.legacy-automatic-share.20260910T000000000Z.json"
+        (durable / archive_name).write_bytes(b"retired setting archive")
+        authority.transition("rolling_back", intent={"action": "restore-legacy"})
+        authority.retain_started_transaction_outputs()
+        # Re-entry is idempotent, but never deletes or replaces the retained copy.
+        authority.retain_started_transaction_outputs()
+        retained = paths.journal_dir / "retained-runtime-data" / authority._journal["transactionId"]
+        assert (retained / "config.json").read_text() == '{"upgraded":true}'
+        assert (retained / "host.sqlite-wal").read_bytes() == b"new runtime WAL"
+        assert (retained / "recording-events/completed.json").read_bytes() == b"uncommitted recording event"
+        assert (retained / archive_name).read_bytes() == b"retired setting archive"
+        assert not (durable / "config.json").exists()
+        assert (legacy / "config.json").read_text() == '{"old":true}'
+
+
+def test_runtime_retention_preserves_preexisting_data_and_rejects_symlinks(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import ApplicationMigration, MigrationBlocked, MigrationPaths, preflight_standard_outputs
+
+    legacy = tmp_path / "legacy"
+    durable = tmp_path / "durable"
+    legacy.mkdir(mode=0o700)
+    durable.mkdir(mode=0o700)
+    (durable / "config.json").write_text('{}')
+    prior_events = durable / "recording-events"
+    prior_events.mkdir(mode=0o700)
+    (prior_events / "prior.json").write_bytes(b"preexisting event")
+    paths = MigrationPaths(durable_root=durable, cache_root=tmp_path / "cache")
+    with ApplicationMigration(paths) as authority:
+        authority.begin()
+        preflight = preflight_standard_outputs(legacy, durable)
+        info = os.fstat(authority._durable_root_fd)
+        authority._journal = {
+            **authority._journal, "preflightDataManifest": preflight,
+            "durableDirectory": {"device": info.st_dev, "inode": info.st_ino},
+            "serviceNonce": "a" * 32,
+            "preexistingRuntimeEntries": ["config.json", "recording-events", "application-migration"],
+        }
+        outside = tmp_path / "outside"
+        outside.write_bytes(b"preserve me")
+        (durable / "mcp-token.json").symlink_to(outside)
+        authority.transition("rolling_back", intent={"action": "restore-legacy"})
+        with pytest.raises(MigrationBlocked, match="unsafe migration file"):
+            authority.retain_started_transaction_outputs()
+        assert outside.read_bytes() == b"preserve me"
+        assert (durable / "config.json").read_text() == '{}'
+        (durable / "mcp-token.json").unlink()
+        authority.retain_started_transaction_outputs()
+        assert (prior_events / "prior.json").read_bytes() == b"preexisting event"
+
+
+@pytest.mark.parametrize("scenario", ["bundled", "repository", "recording", "mixed"])
+def test_manual_app_replacement_retires_only_idle_previous_bundled_owners(scenario, tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import application_migration as migration
+
+    app = tmp_path / "Yulu.app"
+    previous = {
+        "com.yulu.ui": f"program = {app}/Contents/MacOS/yulu_app\npid = 100\nmanaged_by = com.apple.xpc.ServiceManagement\n",
+        "com.yulu.audiodaemon": f"program = {app}/Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon\npid = 200\nmanaged_by = com.apple.xpc.ServiceManagement\n",
+    }
+    if scenario in {"repository", "mixed"}:
+        previous["com.yulu.ui"] = "program = /original/node\npid = 100\n"
+    if scenario == "repository":
+        previous["com.yulu.audiodaemon"] = "program = /original/audio_daemon\npid = 200\n"
+    calls = []
+
+    def launchctl(arguments):
+        assert arguments[0] == "print"
+        label = arguments[1].rsplit("/", 1)[-1]
+        return SimpleNamespace(returncode=0 if label in previous else 113, stdout=previous.get(label, ""))
+
+    def idle(snapshot, socket_path):
+        assert snapshot.executable == app / "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"
+        calls.append("idle")
+        if scenario == "recording":
+            raise migration.MigrationBlocked("legacy Capture recording is active")
+
+    def retire(arguments, **options):
+        assert options["timeout"] == 15
+        assert arguments[:2] == [str(app / "Contents/MacOS/yulu_app"), "--retire-bundled-service"]
+        name = arguments[-1]
+        calls.append(name)
+        previous.pop({"RetiredHost.plist": "com.yulu.ui", "RetiredCapture.plist": "com.yulu.audiodaemon"}[name])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(migration, "assert_legacy_capture_idle", idle)
+    if scenario in {"recording", "mixed"}:
+        with pytest.raises(migration.MigrationBlocked, match="recording is active|services are mixed"):
+            migration.retire_previous_bundled_owners(app, tmp_path / "capture.sock", launchctl=launchctl, run=retire)
+        assert len(previous) == 2
+        assert not any(call.endswith(".plist") for call in calls)
+    else:
+        assert migration.retire_previous_bundled_owners(app, tmp_path / "capture.sock", launchctl=launchctl, run=retire) is (scenario == "bundled")
+        assert calls == (["idle", "RetiredHost.plist", "idle", "RetiredCapture.plist"] if scenario == "bundled" else [])
 
 
 @pytest.mark.parametrize("unsafe", ["root_symlink", "queue_symlink"])
@@ -2737,6 +2863,10 @@ def test_python_authority_publishes_queue_outputs_from_inherited_fds_only(
 
     def run(_arguments, **options):
         environment = options["env"]
+        if _arguments[-1] == "--initialize-application-data":
+            assert options["pass_fds"] == ()
+            assert not any(name.startswith("YULU_LEGACY_AGENT_QUEUE_") for name in environment)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
         observed["pass_fds"] = options["pass_fds"]
         assert "YULU_LEGACY_AGENT_QUEUE_ARCHIVE_PATH" not in environment
         assert "YULU_LEGACY_AGENT_QUEUE_AUDIT_PATH" not in environment
@@ -3353,6 +3483,13 @@ def test_final_commit_reopens_all_standard_sqlite_and_validates_installed_app(
         "codeIdentity": development_code_identity("com.yulu.app"),
     }
     bundle_manifest = _application_bundle_manifest(app)
+
+    if corrupt_name == "host.sqlite":
+        with sqlite3.connect(durable / "host.sqlite") as database:
+            database.execute("ALTER TABLE agent_tasks ADD COLUMN model TEXT")
+        prepared = _sqlite_identity(durable / "host.sqlite", "host")["schemaSHA256"]
+        assert prepared != manifest["host.sqlite"]["sourceSchemaSHA256"]
+        manifest["host.sqlite"]["preparedSchemaSHA256"] = prepared
 
     verify_final_commit_inputs(
         legacy_root=legacy,
@@ -4314,7 +4451,7 @@ def test_session_pre_mutation_retry_failure_rolls_back_and_allows_attempt_three(
     assert result == 0
     assert json.loads(output.getvalue()) == {
         "action": "rolled_back",
-        "detail": "injected post-begin retry preflight failure",
+        "detail": "A migration step could not complete safely. The original data is unchanged.",
     }
     failed = json.loads(paths.journal_path.read_text())
     assert failed["transactionId"] != first["transactionId"]

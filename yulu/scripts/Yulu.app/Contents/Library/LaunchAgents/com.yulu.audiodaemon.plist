@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.yulu.audiodaemon</string>
+	<string>com.yulu.app.capture</string>
 	<key>BundleProgram</key>
 	<string>Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon</string>
 	<key>ProgramArguments</key>
@@ -13,7 +13,7 @@
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>YULU_SERVICE_OWNER</key>
-		<string>com.yulu.audiodaemon</string>
+		<string>com.yulu.app.capture</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>

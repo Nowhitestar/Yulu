@@ -106,6 +106,9 @@ _MIGRATION_FAILURE_DETAILS = {
     "registration_timeout": "Background service registration did not respond in time. Open Components > Background Services for the current state.",
     "health_timeout": "The bundled Host and Capture did not become healthy in time. Open Components > Background Services for the current state.",
     "commit_health_failed": "The bundled Host and Capture did not pass ownership and health verification.",
+    "data_initialization_failed": "The copied data could not be upgraded for this Yulu version. The original data is unchanged.",
+    "commit_data_failed": "The prepared application data did not pass final integrity and schema verification.",
+    "migration_step_failed": "A migration step could not complete safely. The original data is unchanged.",
     "approval_timeout": "Background service approval timed out. Open Login Items settings before retrying.",
     "session_timeout": "The migration session did not respond in time.",
     "session_closed": "The migration session connection closed before completion.",
@@ -115,6 +118,10 @@ _MIGRATION_FAILURE_DETAILS = {
 
 def _session_failure_code(failure: Exception, action: dict[str, object]) -> str:
     message = str(failure)
+    if message == "Host data initialization leaf failed":
+        return "data_initialization_failed"
+    if message.startswith(("invalid SQLite", "published SQLite", "published data")):
+        return "commit_data_failed"
     if message == "migration session response timed out":
         return {
             "verify_health": "health_timeout",
@@ -123,6 +130,8 @@ def _session_failure_code(failure: Exception, action: dict[str, object]) -> str:
         }.get(str(action.get("action")), "session_timeout")
     if isinstance(failure, (BrokenPipeError, OSError)) or message == "migration session input ended":
         return "session_closed"
+    if action.get("action") == "step":
+        return "migration_step_failed"
     return "session_protocol_error"
 
 
@@ -810,9 +819,14 @@ def _sqlite_connection_identity(
         ).fetchall()
         schema_encoded = json.dumps(schema_rows, separators=(",", ":")).encode()
         dump = "\n".join(snapshot.iterdump()).encode()
+        schema_observation = "\n".join(
+            f"{kind_}|{name}|{sql}" for kind_, name, _table, sql in schema_rows
+            if not name.startswith("sqlite_")
+        ).strip().encode()
         return {
             "schemaSHA256": hashlib.sha256(schema_encoded).hexdigest(),
             "contentSHA256": hashlib.sha256(dump).hexdigest(),
+            "schemaObservationSHA256": hashlib.sha256(schema_observation).hexdigest(),
         }
     except MigrationBlocked:
         raise
@@ -1353,7 +1367,7 @@ def verify_final_commit_inputs(
             raise MigrationBlocked("published SQLite manifest is invalid")
         expected_schema = None
         if isinstance(manifest_entry, dict):
-            expected_schema = manifest_entry.get("destinationSchemaSHA256") or manifest_entry.get(
+            expected_schema = manifest_entry.get("preparedSchemaSHA256") or manifest_entry.get("destinationSchemaSHA256") or manifest_entry.get(
                 "sourceSchemaSHA256"
             )
         database = durable_root / name
@@ -1493,6 +1507,66 @@ def legacy_install_present(
         )
     finally:
         os.close(directory_fd)
+
+
+def retire_previous_bundled_owners(
+    app_bundle: Path,
+    socket_path: Path,
+    *,
+    launchctl: Callable[[list[str]], object] = _run_launchctl,
+    run: Callable[..., object] = subprocess.run,
+) -> bool:
+    """Retire only observed old App jobs, never repository LaunchAgents."""
+    expected = {
+        "com.yulu.ui": ("RetiredHost.plist", app_bundle / "Contents/MacOS/yulu_app"),
+        "com.yulu.audiodaemon": ("RetiredCapture.plist", app_bundle / "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"),
+    }
+    previous: list[tuple[str, str, str]] = []
+    repository_job = False
+    for label, (plist, program) in expected.items():
+        observed = launchctl(["print", f"gui/{os.geteuid()}/{label}"])
+        if getattr(observed, "returncode", 1) == 113:
+            continue
+        if getattr(observed, "returncode", 1) != 0:
+            raise MigrationBlocked("cannot inspect previous application services")
+        output = str(getattr(observed, "stdout", ""))
+        job_program = re.search(r"^\s*program = (.+?)\s*$", output, re.MULTILINE)
+        managed = re.search(r"^\s*managed_by = com\.apple\.xpc\.ServiceManagement\s*$", output, re.MULTILINE)
+        if not managed or job_program is None or job_program.group(1) != str(program):
+            repository_job = True
+            continue
+        previous.append((label, plist, output))
+    if not previous:
+        return False
+    if repository_job:
+        raise MigrationBlocked("previous application and repository services are mixed")
+    capture = app_bundle / "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"
+    for label, plist, output in previous:
+        # Recheck immediately before each removal. A Host-only replacement can
+        # still have a recording on the current Capture's standard socket.
+        capture_loaded = any(name == "com.yulu.audiodaemon" for name, _, _ in previous)
+        assert_legacy_capture_idle(
+            CaptureJobSnapshot(loaded=capture_loaded or socket_path.exists(), executable=capture),
+            socket_path,
+        )
+        current = launchctl(["print", f"gui/{os.geteuid()}/{label}"])
+        if getattr(current, "returncode", 1) != 0 or str(getattr(current, "stdout", "")) != output:
+            # launchctl statistics can vary, so bind the stable program and PID.
+            current_text = str(getattr(current, "stdout", ""))
+            for field in ("program", "pid", "managed_by"):
+                pattern = rf"^\s*{field} = (.+?)\s*$"
+                before = re.search(pattern, output, re.MULTILINE)
+                after = re.search(pattern, current_text, re.MULTILINE)
+                if getattr(current, "returncode", 1) != 0 or (before.group(1) if before else None) != (after.group(1) if after else None):
+                    raise MigrationBlocked("previous application service identity changed")
+        result = run(
+            [str(app_bundle / "Contents/MacOS/yulu_app"), "--retire-bundled-service", plist],
+            text=True, capture_output=True, check=False, timeout=15,
+        )
+        if getattr(result, "returncode", 1) != 0:
+            raise MigrationBlocked("previous application service could not be retired")
+        _wait_for_legacy_job_state(label, loaded=False, launchctl=launchctl)
+    return True
 
 
 def run_migration_step(
@@ -1863,6 +1937,9 @@ def _recover_live_session_failure(
     service_adapter: Callable[[dict[str, object]], dict[str, str]] | None,
     step_arguments: dict[str, object],
 ) -> dict[str, object]:
+    authority = step_arguments.get("authority")
+    if isinstance(authority, ApplicationMigration):
+        authority.record_failure(_session_failure_code(failure, {"action": "step"}))
     try:
         action = step(
             paths=paths,
@@ -1892,7 +1969,7 @@ def _recover_live_session_failure(
                 f"live migration failure did not reach rollback: {failure}"
             )
         if action.get("action") == "rolled_back":
-            return {**action, "detail": str(failure)[:512] or "Migration failed"}
+            return {**action, "detail": _MIGRATION_FAILURE_DETAILS[_session_failure_code(failure, {"action": "step"})]}
         return action
     except Exception as recovery_failure:
         raw_attempt_fd = step_arguments.get("attempt_fd")
@@ -1992,6 +2069,24 @@ def run_migration_session(
                 output_stream.write(b'{"action":"busy"}\n')
                 output_stream.flush()
                 return 75
+
+        app_bundle = step_arguments.get("app_bundle")
+        if step is run_migration_step and isinstance(app_bundle, Path):
+            try:
+                retired = retire_previous_bundled_owners(
+                    app_bundle, paths.cache_root / "audio_daemon.sock", launchctl=launchctl,
+                )
+            except MigrationBlocked as failure:
+                action = "recording_active" if str(failure) == "legacy Capture recording is active" else "blocked"
+                output_stream.write((json.dumps({"action": action, "detail": str(failure)}) + "\n").encode())
+                output_stream.flush()
+                return 75
+            if retired and not _migration_journal_entry_present(paths.journal_path) and not legacy_install_present(
+                legacy_root=legacy_root, launch_agents_dir=launch_agents_dir, launchctl=launchctl,
+            ):
+                output_stream.write(b'{"action":"fresh_install"}\n')
+                output_stream.flush()
+                return 0
 
         if step is run_migration_step or _migration_journal_entry_present(
             paths.journal_path
@@ -3204,7 +3299,9 @@ class ApplicationMigration:
         # caller-supplied exception text. Retain the original cause of rollback.
         if code not in _MIGRATION_FAILURE_DETAILS:
             raise MigrationBlocked("unknown migration failure code")
-        if self._journal is None or "serviceNonce" not in self._journal:
+        if self._journal is None or not (
+            "serviceNonce" in self._journal or self._journal.get("runtimeInitializationStarted") is True
+        ):
             return
         if self._journal.get("phase") in {"committed", "rolled_back"}:
             return
@@ -3650,6 +3747,7 @@ class ApplicationMigration:
         self._journal = {
             **self._journal,
             "preflightDataManifest": preflight,
+            "preexistingRuntimeEntries": _bounded_sorted_directory_names(self._durable_root_fd),
             "durableDirectory": {
                 "device": durable_info.st_dev,
                 "inode": durable_info.st_ino,
@@ -3850,6 +3948,34 @@ class ApplicationMigration:
             )
             if source_present and not entry["reused"]:
                 raise MigrationBlocked(f"Host data preparation did not publish: {name}")
+        # Verify exact copy fidelity above before applying the product's normal
+        # offline schema/config migrations. Health must compare to that prepared
+        # schema, not to the older database that the Host has just upgraded.
+        initialization_environment = {
+            key: value for key, value in environment.items()
+            if not key.startswith("YULU_LEGACY_AGENT_QUEUE_")
+        }
+        self._journal = {**self._journal, "runtimeInitializationStarted": True}
+        self._write_journal()
+        try:
+            initialized = (run or _run_node_leaf_bounded)(
+                [str(node_executable), str(server_js), "--initialize-application-data"],
+                cwd=server_js.parent,
+                env=initialization_environment,
+                pass_fds=(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        finally:
+            self.record_transaction_output_identities(preflight)
+        if getattr(initialized, "returncode", 1) != 0:
+            raise MigrationBlocked("Host data initialization leaf failed")
+        for name, kind in _SQLITE_OUTPUTS:
+            if _present_kind(self.paths.durable_root / name) is not None:
+                identity = _sqlite_identity(self.paths.durable_root / name, kind)
+                published[name]["preparedSchemaSHA256"] = identity["schemaSHA256"]
+                published[name]["preparedSchemaObservationSHA256"] = identity["schemaObservationSHA256"]
         self.transition("data_published", intent={"action": "data-verified"})
         assert self._journal is not None
         self._journal = {**self._journal, "dataManifest": published}
@@ -3902,6 +4028,122 @@ class ApplicationMigration:
             "transactionOutputIdentities": identities,
         }
         self._write_journal()
+
+    def retain_started_transaction_outputs(self) -> None:
+        """Recover a started attempt without discarding its legitimate writes."""
+        assert self._journal is not None
+        if self._journal.get("phase") != "rolling_back" or not (
+            "serviceNonce" in self._journal or self._journal.get("runtimeInitializationStarted") is True
+        ):
+            raise MigrationBlocked("runtime data retention is out of phase")
+        preflight = self._journal.get("preflightDataManifest")
+        root_identity = self._journal.get("durableDirectory")
+        transaction_id = self._journal.get("transactionId")
+        if (
+            not isinstance(preflight, dict)
+            or not isinstance(root_identity, dict)
+            or not isinstance(transaction_id, str)
+            or re.fullmatch(r"[0-9a-f]{32}", transaction_id) is None
+        ):
+            raise MigrationBlocked("runtime data retention metadata is invalid")
+        root_info = os.fstat(self._durable_root_fd)
+        if (root_info.st_dev, root_info.st_ino) != (
+            root_identity.get("device"), root_identity.get("inode")
+        ):
+            raise MigrationBlocked("standard application data root changed")
+        copied_directories = {destination for _, destination in _DIRECTORY_OUTPUTS}
+        runtime_directories = {"recording-events", "legacy-agent-queue"}
+        directories = copied_directories | runtime_directories
+        names = {destination for _, destination in _ORDINARY_FILE_OUTPUTS} | copied_directories | {
+            name for name, _ in _SQLITE_OUTPUTS
+        }
+        if not names <= set(preflight):
+            raise MigrationBlocked("transaction output manifest is incomplete")
+        created_names: set[str] = set()
+        for name in names:
+            entry = preflight[name]
+            if not isinstance(entry, dict) or type(entry.get("reused")) is not bool:
+                raise MigrationBlocked("transaction output manifest is invalid")
+            # Preexisting standard data is never moved by this recovery path.
+            if not entry["reused"]:
+                created_names.add(name)
+                if name.endswith(".sqlite"):
+                    created_names.update({name + "-wal", name + "-shm"})
+        retained = self._journal.get("retainedRuntimeOutputs")
+        preexisting = self._journal.get("preexistingRuntimeEntries")
+        if preexisting is not None and (
+            not isinstance(preexisting, list) or any(not isinstance(name, str) for name in preexisting)
+        ):
+            raise MigrationBlocked("runtime entry baseline is invalid")
+        extra_names = set(_bounded_sorted_directory_names(self._durable_root_fd))
+        if isinstance(retained, dict):
+            extra_names.update(retained)
+        for name in extra_names:
+            if name not in runtime_directories and re.fullmatch(
+                r"config\.legacy-(?:automatic-share|connectors|transcription)\.[0-9TZ]+\.json", name
+            ) is None:
+                continue
+            if preexisting is not None:
+                belongs_to_attempt = name not in preexisting
+            elif isinstance(retained, dict) and name in retained:
+                belongs_to_attempt = True
+            else:
+                # Compatibility with an older, already failed journal: retain
+                # only known runtime entries created after that attempt began.
+                info = os.stat(name, dir_fd=self._durable_root_fd, follow_symlinks=False)
+                try:
+                    created_at = datetime.fromisoformat(str(self._journal["createdAt"])).timestamp()
+                except (KeyError, ValueError) as exc:
+                    raise MigrationBlocked("runtime entry baseline is invalid") from exc
+                belongs_to_attempt = getattr(info, "st_birthtime", info.st_ctime) >= created_at
+            if belongs_to_attempt:
+                created_names.add(name)
+        if retained is None:
+            retained = {}
+            for name in sorted(created_names):
+                identity_at = _directory_identity_at if name in directories else _regular_file_identity_at
+                identity = identity_at(self._durable_root_fd, name)
+                if identity is not None:
+                    retained[name] = identity
+            self._journal = {**self._journal, "retainedRuntimeOutputs": retained}
+            self._write_journal()
+        if (
+            not isinstance(retained, dict)
+            or not set(retained) <= created_names
+            or any(not isinstance(identity, dict) for identity in retained.values())
+        ):
+            raise MigrationBlocked("runtime data retention identities are invalid")
+        recovery_root = _open_private_child_directory_at(self._journal_dir_fd, "retained-runtime-data", create=True)
+        try:
+            recovery = _open_private_child_directory_at(recovery_root, transaction_id, create=True)
+            try:
+                _atomic_write_json_at(recovery, "manifest.json", {
+                    "schemaVersion": 1, "transactionId": transaction_id,
+                    "reason": "uncommitted-runtime-rollback", "outputs": retained,
+                })
+                for name, expected in sorted(retained.items()):
+                    identity_at = _directory_identity_at if name in directories else _regular_file_identity_at
+                    saved = identity_at(recovery, name)
+                    current = identity_at(self._durable_root_fd, name)
+                    if saved is not None:
+                        if saved != expected or current is not None:
+                            raise MigrationBlocked("runtime data retention conflicts")
+                        continue
+                    if current != expected:
+                        raise MigrationBlocked("runtime data changed during retention")
+                    if not _rename_exclusive_at(self._durable_root_fd, name, recovery, name):
+                        raise MigrationBlocked("runtime data retention conflicts")
+                    os.fsync(self._durable_root_fd)
+                    os.fsync(recovery)
+                    if identity_at(recovery, name) != expected:
+                        _rename_exclusive_at(recovery, name, self._durable_root_fd, name)
+                        os.fsync(self._durable_root_fd)
+                        os.fsync(recovery)
+                        raise MigrationBlocked("runtime data changed during retention")
+            finally:
+                os.close(recovery)
+        finally:
+            os.close(recovery_root)
 
     def remove_transaction_outputs(self) -> None:
         assert self._journal is not None
@@ -4213,7 +4455,16 @@ class ApplicationMigration:
             _wait_for_legacy_job_state(
                 label, loaded=bool(snapshot[label]["loaded"]), launchctl=launchctl
             )
-        self.remove_transaction_outputs()
+        if "preflightDataManifest" in self._journal and (
+            "serviceNonce" in self._journal or self._journal.get("runtimeInitializationStarted") is True
+        ):
+            # A launched Host legitimately replaces config.json and writes WAL
+            # and database pages. Never delete these using pre-start digests.
+            # Retain the transaction's new outputs as an auditable recovery set;
+            # the untouched legacy root remains the rollback source.
+            self.retain_started_transaction_outputs()
+        else:
+            self.remove_transaction_outputs()
         if "archiveDirectory" not in self._journal:
             # Failure before archiving still needs a transaction-bound empty
             # rollback archive so a subsequent explicit retry can validate it.

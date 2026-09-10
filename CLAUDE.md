@@ -228,14 +228,14 @@ Agent Console -> pinned Conversation Provider -> xAI bounded local excerpts
 
 | launchd label | Purpose |
 |---|---|
-| `com.yulu.audiodaemon` | Native audio capture |
-| `com.yulu.statusagent` | Menu bar, recording status, and global shortcuts |
-| `com.yulu.ui` | Local Host and web UI |
-| `com.yulu.detector` | Meeting-window detection |
-| `com.yulu.scheduler` | Local schedule actions |
-| `com.yulu.calendar` | Optional calendar synchronization |
+| `com.yulu.app.capture` | Bundled native audio capture |
+| `com.yulu.app.host` | Bundled local Host and web UI |
 
-There is no active STT or Agent-queue LaunchAgent.
+The installed App owns menu-bar controls and auxiliary lifecycle components.
+Repository-install labels (`com.yulu.ui`, `com.yulu.audiodaemon`, statusagent,
+detector, scheduler, calendar, sttdaemon and agentqueue) are legacy migration
+inputs, not the installed App's owners. Keep the Capture signing/TCC identifier
+`com.yulu.audiodaemon` unchanged; signing identity is not a launchd label.
 
 ### Durable and security invariants
 

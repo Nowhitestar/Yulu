@@ -10,6 +10,8 @@ const FORMAL_APP = "/Applications/Yulu.app";
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 const MAX_COMMAND_BYTES = 1024 * 1024;
 const LEGACY_LABELS = [
+  "com.yulu.ui",
+  "com.yulu.audiodaemon",
   "com.yulu.agentqueue",
   "com.yulu.calendar",
   "com.yulu.detector",
@@ -160,8 +162,8 @@ function appIdentity() {
 }
 
 function currentOwners(signatures) {
-  const hostPid = launchOwner("com.yulu.ui");
-  const capturePid = launchOwner("com.yulu.audiodaemon");
+  const hostPid = launchOwner("com.yulu.app.host");
+  const capturePid = launchOwner("com.yulu.app.capture");
   if (!hostPid || !capturePid || hostPid === capturePid) fail("current Host and Capture owners are not unique");
   for (const label of LEGACY_LABELS) {
     if (launchOwner(label) !== null) fail("an old LaunchAgent owner revived after commit");
@@ -280,7 +282,7 @@ const expectedJourneyCheckpoint = options.scenario === "fresh" ? "production-sha
 const expectedShares = options.scenario === "fresh" ? 1 : 0;
 if (journey.value?.schema !== 1 || journey.value?.formalAcceptance !== false ||
     journey.value?.checkpoint !== expectedJourneyCheckpoint || journey.value?.releaseTag !== RELEASE_TAG ||
-    journey.value?.health?.status !== "ok" || journey.value?.health?.serviceOwner !== "com.yulu.ui" ||
+    journey.value?.health?.status !== "ok" || journey.value?.health?.serviceOwner !== "com.yulu.app.host" ||
     journey.value?.health?.databaseStatus !== "ok" || !Number.isSafeInteger(journey.value?.health?.database?.schemaVersion) ||
     !Number.isSafeInteger(journey.value?.health?.database?.minimumReadableVersion) ||
     journey.value?.version?.product !== RELEASE_TAG.slice(1) || journey.value?.ipc?.readOnly !== true ||

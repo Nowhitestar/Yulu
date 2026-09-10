@@ -186,7 +186,7 @@ def _valid_update_health(
     return (
         application.get("nativeControlsReady") is True
         and host.get("hostIPCVersion") == _HOST_IPC_VERSION
-        and host.get("serviceOwner") == "com.yulu.ui"
+        and host.get("serviceOwner") == "com.yulu.app.host"
         and host.get("portOwnerPID") == host_pid
         and nonce_is_valid
         and re.fullmatch(
@@ -200,7 +200,7 @@ def _valid_update_health(
         and database.get("minimumReadableVersion")
         == _HOST_DATABASE_MINIMUM_READABLE_VERSION
         and capture.get("captureIPCVersion") == _CAPTURE_IPC_VERSION
-        and capture.get("serviceOwner") == "com.yulu.audiodaemon"
+        and capture.get("serviceOwner") == "com.yulu.app.capture"
         and capture.get("socketOwnerPID") == capture_pid
         and isinstance(services, dict)
         and set(services) == _BUNDLED_SERVICES

@@ -271,7 +271,7 @@ def test_update_health_payload_contains_concrete_runtime_attestation(
         "productVersion": "0.23.0",
         "bundleVersion": "732",
         "hostIPCVersion": 1,
-        "serviceOwner": "com.yulu.ui",
+        "serviceOwner": "com.yulu.app.host",
         "pid": 102,
         "uid": os.geteuid(),
         "generation": "100:2",
@@ -293,7 +293,7 @@ def test_update_health_payload_contains_concrete_runtime_attestation(
         "productVersion": "0.23.0",
         "bundleVersion": "732",
         "captureIPCVersion": 1,
-        "serviceOwner": "com.yulu.audiodaemon",
+        "serviceOwner": "com.yulu.app.capture",
         "pid": 103,
         "uid": os.geteuid(),
         "generation": "100:3",
@@ -602,25 +602,38 @@ def test_bundled_background_owners_use_only_bundle_relative_smappservice_program
     launch_agents = SCRIPTS / "Yulu.app" / "Contents" / "Library" / "LaunchAgents"
     expected = {
         "com.yulu.ui.plist": (
-            "com.yulu.ui",
+            "com.yulu.app.host",
             "Contents/MacOS/yulu_app",
             ["yulu_app", "--run-host-service"],
         ),
         "com.yulu.audiodaemon.plist": (
-            "com.yulu.audiodaemon",
+            "com.yulu.app.capture",
             "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
             ["audio_daemon"],
         ),
     }
 
-    assert {path.name for path in launch_agents.glob("*.plist")} == set(expected)
+    retired = {"RetiredHost.plist": "com.yulu.ui", "RetiredCapture.plist": "com.yulu.audiodaemon"}
+    assert {path.name for path in launch_agents.glob("*.plist")} == set(expected) | set(retired)
+    for filename, label in retired.items():
+        payload = read_plist(launch_agents / filename)
+        assert payload["Label"] == label
+        assert payload["RunAtLoad"] is False
+        assert payload.get("KeepAlive", False) is False
+        assert payload["ProgramArguments"] == ["yulu_app", "--retired-bundled-service"]
+        assert payload["BundleProgram"] == "Contents/MacOS/yulu_app"
+    legacy_labels = {"com.yulu.ui", "com.yulu.audiodaemon"}
     for filename, (label, bundle_program, arguments) in expected.items():
         payload = read_plist(launch_agents / filename)
         assert payload["Label"] == label
+        assert payload["Label"] not in legacy_labels
         assert payload["BundleProgram"] == bundle_program
         assert payload["ProgramArguments"] == arguments
         assert "Program" not in payload
         assert not payload["ProgramArguments"][0].startswith("/")
+    capture = read_plist(launch_agents / "com.yulu.audiodaemon.plist")
+    assert capture["EnvironmentVariables"]["YULU_SERVICE_OWNER"] == "com.yulu.app.capture"
+    assert read_plist(CAPTURE_INFO)["CFBundleIdentifier"] == "com.yulu.audiodaemon"
 
 
 def test_clean_app_output_copies_embedded_smappservice_agents_before_signing():
@@ -1098,7 +1111,7 @@ def test_host_smappservice_mode_executes_the_bundled_host_on_the_declared_port(t
         "arguments": ["/Applications/Yulu.app/Contents/Resources/Host/server.js"],
         "executable": "/Applications/Yulu.app/Contents/Resources/runtime/bin/node",
         "port": 7777,
-        "serviceOwner": "com.yulu.ui",
+        "serviceOwner": "com.yulu.app.host",
     }
 
     source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
@@ -1146,7 +1159,7 @@ def test_host_smappservice_mode_executes_the_bundled_host_on_the_declared_port(t
     ):
         assert name not in executed_environment
     assert executed_environment["YULU_UI_PORT"] == "7777"
-    assert executed_environment["YULU_SERVICE_OWNER"] == "com.yulu.ui"
+    assert executed_environment["YULU_SERVICE_OWNER"] == "com.yulu.app.host"
 
 
 def test_capture_smappservice_reports_its_owner_and_capability_readiness():
@@ -1159,7 +1172,7 @@ def test_capture_smappservice_reports_its_owner_and_capability_readiness():
         / "com.yulu.audiodaemon.plist"
     )
     assert launch_agent["EnvironmentVariables"] == {
-        "YULU_SERVICE_OWNER": "com.yulu.audiodaemon",
+        "YULU_SERVICE_OWNER": "com.yulu.app.capture",
     }
 
     capture = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
@@ -1218,7 +1231,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
 
     assert inspect("host", {
         "status": "ok",
-        "serviceOwner": "com.yulu.ui",
+        "serviceOwner": "com.yulu.app.host",
         "pid": 2468,
         "instanceLockToken": "host-lock-generation",
         "instanceNonce": "host-instance-nonce",
@@ -1237,7 +1250,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
         "running": True,
     }
     assert inspect("capture", {
-        "serviceOwner": "com.yulu.audiodaemon",
+        "serviceOwner": "com.yulu.app.capture",
         "pid": 1357,
         "micReady": True,
         "sysReady": False,
@@ -1275,7 +1288,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
     }
     assert inspect("host", {
         "status": "ok",
-        "serviceOwner": "com.yulu.ui",
+        "serviceOwner": "com.yulu.app.host",
         "pid": 2468,
         "instanceLockToken": "public-forgery",
     }, {
@@ -1433,7 +1446,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
             return json.loads(result.stdout)
 
         assert inspect_capture({
-            "serviceOwner": "com.yulu.audiodaemon",
+            "serviceOwner": "com.yulu.app.capture",
             "pid": os.getpid(),
             "micReady": True,
             "sysReady": True,
@@ -1443,7 +1456,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
             "running": True,
         }
         assert inspect_capture({
-            "serviceOwner": "com.yulu.audiodaemon",
+            "serviceOwner": "com.yulu.app.capture",
             "pid": os.getpid() + 1,
             "micReady": True,
             "sysReady": True,
@@ -1468,7 +1481,7 @@ connection, _ = server.accept()
 with connection:
     connection.recv(4096)
     connection.sendall(json.dumps({
-        'serviceOwner': 'com.yulu.audiodaemon',
+        'serviceOwner': 'com.yulu.app.capture',
         'pid': os.getpid(),
         'micReady': True,
         'sysReady': True,
@@ -1515,7 +1528,7 @@ server.close()
     finally:
         shutil.rmtree(socket_root)
     assert inspect("capture", {
-        "serviceOwner": "com.yulu.audiodaemon",
+        "serviceOwner": "com.yulu.app.capture",
         "pid": 1357,
         "micReady": True,
         "sysReady": True,
@@ -1528,7 +1541,7 @@ server.close()
     })["running"] is False
 
     assert inspect("capture", {
-        "serviceOwner": "com.yulu.audiodaemon",
+        "serviceOwner": "com.yulu.app.capture",
         "pid": 1357,
         "micReady": True,
         "sysReady": True,
@@ -1925,8 +1938,8 @@ def test_native_background_services_view_reports_both_owner_states(tmp_path: Pat
     assert result.returncode == 0, result.stderr
     presentation = json.loads(result.stdout)
     assert [service["label"] for service in presentation["services"]] == [
-        "Host — com.yulu.ui",
-        "Capture — com.yulu.audiodaemon",
+        "Host — com.yulu.app.host",
+        "Capture — com.yulu.app.capture",
     ]
     assert presentation["services"][0]["state"]["rows"] == [
         {"label": "Registration", "value": "Registered"},

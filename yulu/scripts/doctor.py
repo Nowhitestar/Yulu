@@ -28,10 +28,19 @@ from application_paths import (
     LOGS_DIR,
 )
 
+def _application_bundle_for_scripts(script_dir: Path) -> Path | None:
+    script_dir = script_dir.absolute()
+    for parent in script_dir.parents:
+        if parent.suffix == ".app" and script_dir.relative_to(parent) == Path("Contents/Resources/runtime/yulu/scripts"):
+            return parent
+    return None
+
+
 DEFAULT_SOURCE_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_RUNTIME_ROOT = Path.home() / ".yulu"
+_BUNDLED_APPLICATION = _application_bundle_for_scripts(Path(__file__).resolve().parent)
+DEFAULT_RUNTIME_ROOT = DEFAULT_SOURCE_ROOT if _BUNDLED_APPLICATION else Path.home() / ".yulu"
 DEFAULT_LEGACY_ROOT = Path.home() / ".openclaw/workspace/meeting-assistant/yulu"
-DEFAULT_CONFIG_DIR = LEGACY_READ_ONLY_DATA_DIR
+DEFAULT_CONFIG_DIR = DURABLE_DATA_DIR if _BUNDLED_APPLICATION else LEGACY_READ_ONLY_DATA_DIR
 DEFAULT_APPLICATION_DATA_DIR = DURABLE_DATA_DIR
 DEFAULT_IPC_DIR = IPC_DIR
 DEFAULT_LOGS_DIR = LOGS_DIR
@@ -746,6 +755,13 @@ def check_yulu_ui(
     dist_server = ui_dir / "dist" / "server.js"
     dist_index = ui_dir / "dist" / "web" / "index.html"
     plist_path = Path.home() / "Library" / "LaunchAgents" / "com.yulu.ui.plist"
+    service_label = "com.yulu.ui"
+    app_bundle = _application_bundle_for_scripts(script_dir)
+    if app_bundle is not None:
+        dist_server = app_bundle / "Contents/Resources/Host/server.js"
+        dist_index = app_bundle / "Contents/Resources/Host/web/index.html"
+        plist_path = app_bundle / "Contents/Library/LaunchAgents/com.yulu.ui.plist"
+        service_label = "com.yulu.app.host"
     log_path = config_dir / "ui.log"
 
     report: dict[str, Any] = {
@@ -753,6 +769,8 @@ def check_yulu_ui(
         "dist_web_present": dist_index.is_file() and dist_index.stat().st_size > 0,
         "plist_installed": plist_path.is_file(),
         "launchctl_loaded": False,
+        "service_label": service_label,
+        "installation_kind": "application" if app_bundle else "legacy",
         "port": 7777,
         "healthz_ok": False,
         "healthz_response": None,
@@ -763,9 +781,9 @@ def check_yulu_ui(
     }
 
     # launchctl loaded?
-    code, out, _ = _run(["launchctl", "list"], timeout=3)
-    if code == 0 and any("com.yulu.ui" in line for line in out.splitlines()):
-        report["launchctl_loaded"] = True
+    code, out, _ = _run(["launchctl", "print", f"gui/{os.geteuid()}/{service_label}"], timeout=3)
+    owner_pid = re.search(r"^\s*pid = (\d+)\s*$", out, re.MULTILINE) if code == 0 else None
+    report["launchctl_loaded"] = owner_pid is not None
 
     # A healthy process on the fixed localhost port is not evidence for an
     # arbitrary --runtime-root.  Refuse to attribute that process to this
@@ -776,18 +794,35 @@ def check_yulu_ui(
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{report['port']}/healthz", timeout=timeout
             ) as resp:
-                body = resp.read().decode("utf-8", errors="replace")[:200]
-                report["healthz_response"] = body
-                if resp.status == 200 and '"status":"ok"' in body:
-                    report["healthz_ok"] = True
+                body = resp.read(64 * 1024 + 1)
+                payload = json.loads(body) if len(body) <= 64 * 1024 else None
+                if not isinstance(payload, dict):
+                    raise ValueError("invalid Host health response")
+                # Diagnostics must never emit the process-local nonce or lock token.
+                report["healthz_response"] = json.dumps({
+                    name: payload.get(name) for name in ("status", "serviceOwner", "pid", "productVersion", "database")
+                })
+                report["healthz_ok"] = resp.status == 200 and payload.get("status") == "ok" and (
+                    app_bundle is None or (
+                        payload.get("serviceOwner") == service_label
+                        and owner_pid is not None
+                        and payload.get("pid") == int(owner_pid.group(1))
+                    )
+                )
         except Exception as exc:
             report["error"] = f"healthz fetch failed: {exc}"
 
     # Categorize the most actionable single error message
     if not report["dist_server_present"] or not report["dist_web_present"]:
-        report["error"] = "build artifacts missing — run setup.sh --upgrade"
+        report["error"] = (
+            "application payload missing — replace the whole Yulu.app from its DMG"
+            if app_bundle else "build artifacts missing — run setup.sh --upgrade"
+        )
     elif report["plist_installed"] and not report["launchctl_loaded"]:
-        report["error"] = "plist installed but service not loaded — run yulu start"
+        report["error"] = (
+            "bundled Host not running — open Yulu > Components > Background Services"
+            if app_bundle else "plist installed but service not loaded — run yulu start"
+        )
 
     return report
 
