@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.18](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.17...v0.23.0-rc.18) (2026-09-10)
+
+
+### Bug Fixes
+
+* **migration:** preserve shared LaunchAgents permissions ([a06bbff](https://github.com/Nowhitestar/Yulu/commit/a06bbffc40dc4ee22e1c42185de2f1785ab1028d))
+
 ## [0.23.0-rc.17](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.16...v0.23.0-rc.17) (2026-09-10)
 
 
