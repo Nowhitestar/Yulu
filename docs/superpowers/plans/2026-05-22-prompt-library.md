@@ -1,6 +1,6 @@
 # Prompt Library + Multi-Summary Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Replace hardcoded `SUMMARY_PROMPT` strings + dual LLM dispatch paths with a SQLite-backed Prompt Library; one meeting can produce multiple `<slug>.summary.md` files; `agent_queue_worker` becomes the single LLM dispatcher. Follows [spec/2026-05-22-prompt-library-design.md](../specs/2026-05-22-prompt-library-design.md).
 

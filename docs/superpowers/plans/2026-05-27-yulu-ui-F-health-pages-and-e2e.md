@@ -1,6 +1,6 @@
 # Yulu UI · Phase F — Health Pages + Playwright E2E Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Replace the Phase B placeholders for `/health/daemons` and `/health/logs` with two interactive pages. Add a server-side log tailer that publishes new log lines via WS so the Logs page auto-scrolls. Install Playwright and ship one critical-flow E2E spec covering all real pages from Phases C–E.
 
@@ -1385,7 +1385,7 @@ kill $PID 2>/dev/null; wait 2>/dev/null
 
 Expected: all 200 (or `/trpc/daemons.health` may return 200 with the array).
 
-- [ ] **Step 2: Dev mode + browser visual smoke** via `npm run dev` + the gstack `/browse` skill:
+- [ ] **Step 2: Dev mode + browser visual smoke** via `npm run dev` in a browser:
 
 1. `/health/daemons` renders 8 cards with status pills + PIDs + last-log lines + Restart/Stop/View logs buttons
 2. Status colors look right: running=green, stopped=grey, crashed=red

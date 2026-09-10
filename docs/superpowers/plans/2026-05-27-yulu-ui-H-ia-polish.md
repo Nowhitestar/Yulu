@@ -1,6 +1,6 @@
 # Phase H — Yulu UI IA + Polish Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Restructure yulu_ui sidebar IA, consolidate Settings + Health into single pages, replace `/inbox/search` with a TopBar global search popover, rewrite tokens.css to canonical Ayu palette, migrate emoji to Lucide icons, and ship a handful of targeted polish fixes.
 

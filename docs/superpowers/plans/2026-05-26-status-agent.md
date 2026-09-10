@@ -1,6 +1,6 @@
 # Menu-Bar Status Agent + Global Hotkey Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Ship a macOS menu-bar status item + global hotkey (default `⌘⇧V`) that drives Phase 4's voicemail capture from any app with one click or one keystroke.
 

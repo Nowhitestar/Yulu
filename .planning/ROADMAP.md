@@ -1,5 +1,11 @@
 # Roadmap: Yulu
 
+> Historical roadmap, not the current execution queue. Checkboxes and proposed
+> integrations below are dated planning records, not proof of remaining work or
+> current authorization. Use current code, still-valid requirements, and the
+> [Engineering Workflow](../CLAUDE.md#engineering-workflow); do not rerun completed
+> phases or restore a framework from this file.
+
 ## Overview
 
 This is a brownfield re-architecture milestone. Yulu already ships (8 launchd daemons, Swift `audio_daemon`, Hono+tRPC+React UI, SQLite, MLX/whisper.cpp, release-please). The milestone adds three new horizontal layers above the unchanged runtime — a **platform-abstraction layer** (macOS impl now, Linux/Windows stubbed), an **agent-capability layer** (detect-and-reuse what the host agent already has), and an **agent-orchestration surface** (the host agent provisions Yulu via named, idempotent steps) — while fixing a catalogue of pre-existing fragilities. The journey runs detection-first along a strict one-way layer dependency (`provision/` → `capabilities/` → `platform/` → existing runtime): unblock signed pre-built binaries (Phase 1), lay the platform seams (Phase 2), build the `HostCapabilityReport` spine every consumer binds to (Phase 3), surface it in the UI (Phase 4), reuse host capabilities and safely separate syncable content from machine-local runtime (Phase 5), compose it all as an agent-orchestrated step registry (Phase 6), migrate existing installs without data loss (Phase 7), and generalize to all three agents (Phase 8).
@@ -205,7 +211,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] 06-04-PLAN.md — provision/cli.py resume-walk driver + skill.py + yulu dispatcher wiring + setup.sh skill decouple (PROV-01/PROV-05, D-02/D-05/D-08)
 
-**Research**: needs deeper per-phase research (the spike IS the research) — `/gsd-plan-phase --research-phase 6`. FEATURES.md flags agent-as-primary-provisioning-UX as LOW confidence; STACK.md flags `uv`/`uvx` as "EVALUATE in spike." Exit criteria are explicit: partial-failure/resume (kill-at-step-N) and tampered-asset rejection, not just the happy path.
+**Historical research scope**: the spike was the research. FEATURES.md flags agent-as-primary-provisioning-UX as LOW confidence; STACK.md flags `uv`/`uvx` as "EVALUATE in spike." Exit criteria are explicit: partial-failure/resume (kill-at-step-N) and tampered-asset rejection, not just the happy path.
 **Spike-gated open question**: WHO calls provisioning — host agent vs `curl|bash`. The step registry itself is BUILD NOW regardless (the decomposed `setup_*.sh` scripts from Phase 1 map 1:1 onto these steps); the spike decides only the *caller*. If the spike fails, the verified signed-zip path stays primary.
 
 ### Phase 7: Seamless Auto-Migration

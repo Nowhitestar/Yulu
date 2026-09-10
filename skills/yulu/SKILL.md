@@ -207,7 +207,8 @@ yulu mcp status
 yulu mcp test
 ```
 
-开发 checkout 修改后，先同步到真实运行态再验收：
+按改动范围选择验证；文档修改和仅源码验证不要求重装。任务明确包含开发运行态
+验收时，在已授权范围内同步对应 checkout，再检查真实运行态：
 
 ```bash
 make dev-install
@@ -215,4 +216,6 @@ python3 yulu/scripts/doctor.py --json
 curl -fsS http://127.0.0.1:7777/healthz
 ```
 
-不要仅凭源码测试推断已安装 runtime 已更新。当前架构详情见 `docs/ARCHITECTURE.md`、`docs/operations.md`、`yulu/spec/adr/005-agent-native-durable-recording-pipeline.md` 和 `yulu/spec/adr/007-explicit-audio-transcription-engines.md`。
+公开 DMG 的验收必须安装完整签名 App，不能用 `make dev-install` 代替或修改已签名
+App。不要仅凭源码测试推断已安装 runtime 已更新，也不要无新疑点地重复通过的检查。
+当前架构详情见 `docs/ARCHITECTURE.md`、`docs/operations.md`、`yulu/spec/adr/005-agent-native-durable-recording-pipeline.md` 和 `yulu/spec/adr/007-explicit-audio-transcription-engines.md`。

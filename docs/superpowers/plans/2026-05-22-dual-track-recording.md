@@ -1,6 +1,6 @@
 # Dual-Track Recording + Recording Lock Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Make Yulu recordings preserve source identity (mic vs sys) all the way from the WavWriter to LLM prompts, while folding in a small flock-based mutex for recording-start.
 

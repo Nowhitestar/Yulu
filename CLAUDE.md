@@ -1,4 +1,3 @@
-<!-- GSD:project-start source:PROJECT.md -->
 ## Project
 
 **Yulu (语录)** is an Agent-native macOS meeting recorder. It captures system
@@ -41,9 +40,7 @@ accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-record
   uncertain result is never blindly replayed.
 - **Compatibility:** upgrade code archives retired settings, imports resolvable
   historical work, and unloads retired services.
-<!-- GSD:project-end -->
 
-<!-- GSD:stack-start source:codebase/STACK.md -->
 ## Technology Stack
 
 ### Languages and runtimes
@@ -91,6 +88,10 @@ dictation context), `agent_pipeline`, `llm`,
 
 ### Build and verification
 
+Choose checks for the changed behavior and risk. The commands below are
+references, not a mandatory sequence for every change. Documentation-only changes
+normally need diff, reference, and consistency checks, not a product rebuild.
+
 ```bash
 python3 -m pytest -q
 cd yulu/scripts/yulu_ui
@@ -99,18 +100,20 @@ npm run typecheck
 npm run build
 ```
 
-After product changes, synchronize and verify the installed runtime:
+When the task includes installed-runtime verification, inspect the actual runtime
+separately from the checkout. Run these read-only checks from the repository root:
 
 ```bash
-make dev-install
 python3 yulu/scripts/doctor.py --json
 curl -fsS http://127.0.0.1:7777/healthz
 ```
 
+Use `make dev-install` only for an intended, authorized development-runtime
+installation. It is not a prerequisite for documentation or source-only work and
+must not replace whole-App installation when accepting a signed public DMG.
+Health checks establish reachability, not a successful recording or migration.
 Do not infer live behavior from checkout tests alone.
-<!-- GSD:stack-end -->
 
-<!-- GSD:conventions-start source:CONVENTIONS.md -->
 ## Conventions
 
 ### Change discipline
@@ -168,9 +171,7 @@ Do not infer live behavior from checkout tests alone.
 - `/healthz` proves only that the loopback Host is listening.
 - Doctor checks are read-only and should return structured error data instead of
   throwing through the report.
-<!-- GSD:conventions-end -->
 
-<!-- GSD:architecture-start source:ARCHITECTURE.md -->
 ## Architecture
 
 ### Recording flow
@@ -291,14 +292,11 @@ sending -> delivery_reported -> completed
 - Calling Notion without task opt-in, Host begin authorization, and Host result
   commit.
 - Retrying `delivery_unverified` work before reconciling the destination.
-<!-- GSD:architecture-end -->
 
-<!-- GSD:skills-start source:skills/ -->
 ## Project Skills
 
 The user-facing Yulu Agent contract is [`skills/yulu/SKILL.md`](skills/yulu/SKILL.md).
 The internal architecture/developer guide is [`yulu/SKILL.md`](yulu/SKILL.md).
-<!-- GSD:skills-end -->
 
 ## Agent skills
 
@@ -314,22 +312,31 @@ Use the five default triage labels. See `docs/agents/triage-labels.md`.
 
 Use a single-context domain model. See `docs/agents/domain.md`.
 
-<!-- GSD:workflow-start source:GSD defaults -->
-## GSD Workflow Enforcement
+## Engineering Workflow
 
-Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.
-
-Use these entry points:
-- `/gsd-quick` for small fixes, doc updates, and ad-hoc tasks
-- `/gsd-debug` for investigation and bug fixing
-- `/gsd-execute-phase` for planned phase work
-
-Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
-<!-- GSD:workflow-end -->
-
-<!-- GSD:profile-start -->
-## Developer Profile
-
-> Profile not yet configured. Run `/gsd-profile-user` to generate your developer profile.
-> This section is managed by `generate-claude-profile` -- do not edit manually.
-<!-- GSD:profile-end -->
+- Small fixes and bounded investigations can proceed directly within the user's
+  authorized scope. No specific skill framework is a prerequisite.
+- Discuss complex changes before implementation. For longer work, record the
+  necessary decisions, remaining tasks, and acceptance criteria; choose planning,
+  task splitting, context handoffs, and independent review to fit the task.
+- Use relevant `CONTEXT.md` terminology, ADRs, and existing GitHub specs/tickets
+  as project evidence. See [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+- Determine remaining work from the current request, observed code/runtime, and
+  still-valid requirements. An unchecked historical plan item is not evidence of
+  missing implementation; retain completed work and its verification evidence.
+- `.planning/` and `docs/superpowers/` are historical/reference material, not the
+  active execution queue or sources for regenerating repository instructions.
+  Historical workflow preferences do not override current user instructions.
+  Use GSD, gstack, Ask Matt, Superpowers, or another process framework only when
+  the user explicitly selects it.
+- Complete the requested change and affected checks without adding workflow
+  gates. Preserve the project's architecture, privacy, and artifact contracts.
+- Reuse applicable passing checks unless changed code, environment, or new
+  evidence creates a reason to repeat them. State the source/artifact and scope
+  each result covers; do not promote old evidence to an untested candidate.
+- Prefer the existing physical Mac for installed-runtime investigation. Use an
+  existing isolated environment only when a clean-install, supported-upgrade, or
+  OS-specific requirement actually needs it; do not create a VM per candidate.
+- Keep publishing, merging, deployment, installed-runtime changes, and external
+  writes within their explicitly authorized scope. Local verification alone does
+  not establish that a change shipped or passed installed-runtime acceptance.

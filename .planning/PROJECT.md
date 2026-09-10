@@ -1,5 +1,11 @@
 # Yulu (语录)
 
+> Historical project snapshot, not the current product contract or execution
+> queue. Preserve these dated requirements and decisions as reference; reconcile
+> them with current code, `CONTEXT.md`, accepted ADRs, and the current request.
+> Follow the [Engineering Workflow](../CLAUDE.md#engineering-workflow), not the
+> former framework or maintenance schedule below.
+
 ## What This Is
 
 Yulu is a local-first, **agent-optional** native meeting recorder for macOS. It captures system audio and microphone locally, then lets the user choose local transcription, xAI, a supported local Agent Runtime, a Model Gateway, or a Direct Model API for transcription, summaries, and meeting conversation. Audio or transcript content leaves the laptop only after the user explicitly enables a cloud capability.
@@ -89,18 +95,21 @@ A new user can install Yulu, record a real meeting, and obtain saved audio, tran
 | xAI conversation uses local retrieval and `store:false` | Preserve local-first control while enabling useful meeting Q&A | Locked for v0.6 |
 | CLI OAuth reuse follows each provider's supported custody boundary | Grok public-client OAuth, Codex App Server, and the unmodified Claude Code CLI keep their own auth; Yulu never imports CLI tokens | Locked for v0.6 |
 
-## Evolution
+## Historical maintenance checklist
 
-This document evolves at phase transitions and milestone boundaries.
+This was the maintenance checklist for the old milestone. This archive is not
+automatically updated or used to regenerate repository instructions.
 
-**After each phase transition** (via `/gsd-transition`):
+**At phase boundaries (historical):**
+
 1. Requirements invalidated? → Move to Out of Scope with reason
 2. Requirements validated? → Move to Validated with phase reference
 3. New requirements emerged? → Add to Active
 4. Decisions to log? → Add to Key Decisions
 5. "What This Is" still accurate? → Update if drifted
 
-**After each milestone** (via `/gsd-complete-milestone`):
+**At milestone boundaries (historical):**
+
 1. Full review of all sections
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?

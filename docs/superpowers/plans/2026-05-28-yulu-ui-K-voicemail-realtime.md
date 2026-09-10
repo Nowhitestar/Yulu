@@ -1,6 +1,6 @@
 # Phase K — Voicemail Realtime Transcription + Global Settings Toggle Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Give voicemail recordings live transcription, gated by a single global `transcription.realtime_enabled` flag (default on); on stop, promote the realtime transcript to the final transcript (whole-file fallback when empty); off keeps today's whole-file behavior.
 

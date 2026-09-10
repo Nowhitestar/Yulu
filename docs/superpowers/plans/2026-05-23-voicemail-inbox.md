@@ -1,6 +1,6 @@
 # Voicemail Inbox Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Ship a `yulu memo` CLI that captures mic-only voice notes into a dedicated inbox, transcribes them via the existing stt_daemon (Phase 3 SYS_DISABLED + DUAL_TRACK marker), enqueues voicemail-category prompts for LLM summarization, and provides inbox-management commands.
 

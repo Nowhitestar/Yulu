@@ -260,7 +260,11 @@ cd Yulu
 bash yulu/scripts/setup.sh --dev
 ```
 
-After source changes, synchronize the installed runtime before live acceptance:
+For engineering work, follow the repository's
+[Engineering Workflow](../CLAUDE.md#engineering-workflow). Choose checks for the
+changed behavior; documentation and source-only verification do not require an
+installation. When the task includes testing a development-runtime change,
+synchronize that runtime within the authorized scope:
 
 ```bash
 make dev-install
@@ -268,7 +272,9 @@ python3 yulu/scripts/doctor.py --json
 curl -fsS http://127.0.0.1:7777/healthz
 ```
 
-Do not infer installed behavior from checkout tests alone.
+Signed public-DMG acceptance instead installs the complete signed App; do not
+substitute `make dev-install` or mutate that App. Do not infer installed behavior
+from checkout tests alone, or repeat passing checks without a new reason.
 
 ## Permissions
 

@@ -1,6 +1,6 @@
 # Yulu UI · Phase E — Knowledge Pages Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan:** This is reference material, not an active execution queue. Follow the current request and [Engineering Workflow](../../../CLAUDE.md#engineering-workflow); no framework or sub-skill is required by this plan.
 
 **Goal:** Replace the Phase B placeholders for `/knowledge/prompts` and `/knowledge/glossary` with two fully interactive pages. Users can browse/edit/create/delete prompts in master-detail; browse/edit/add/bulk-delete glossary terms in a table. Both auto-refresh via WS.
 
@@ -1841,7 +1841,7 @@ kill $PROD_PID 2>/dev/null; wait 2>/dev/null
 
 Expected: all 200.
 
-- [ ] **Step 2: Dev mode + browser visual** via `npm run dev` + the gstack `/browse` skill. Verify:
+- [ ] **Step 2: Dev mode + browser visual** via `npm run dev` in a browser. Verify:
 
 1. `/knowledge/prompts` renders list + filter chips + "+ New prompt" button
 2. Click a prompt row → reader form shows fields + autorun toggle + content textarea + Save disabled + Delete present
