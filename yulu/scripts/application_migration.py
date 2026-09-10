@@ -21,6 +21,7 @@ import stat
 import struct
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -93,6 +94,8 @@ _MAX_TRANSACTION_TREE_SERIALIZED_BYTES = 2 * 1024 * 1024
 _SESSION_RESPONSE_TIMEOUT_SECONDS = 30.0
 _NODE_LEAF_TIMEOUT_SECONDS = 120.0
 _NODE_LEAF_TERMINATION_GRACE_SECONDS = 2.0
+_LEGACY_JOB_TRANSITION_TIMEOUT_SECONDS = 10.0
+_LEGACY_JOB_POLL_INTERVAL_SECONDS = 0.05
 _APPROVAL_TIMEOUT = timedelta(minutes=10)
 _BUNDLED_SERVICE_PLISTS = (
     "com.yulu.ui.plist",
@@ -163,6 +166,29 @@ def _run_launchctl(arguments: list[str]) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def _wait_for_legacy_job_state(
+    label: str,
+    *,
+    loaded: bool,
+    launchctl: Callable[[list[str]], object],
+) -> None:
+    """A successful launchctl command can precede the service's actual removal."""
+    deadline = time.monotonic() + _LEGACY_JOB_TRANSITION_TIMEOUT_SECONDS
+    expected = 0 if loaded else 113
+    while True:
+        observed = launchctl(["print", f"gui/{os.geteuid()}/{label}"])
+        returncode = getattr(observed, "returncode", None)
+        if returncode == expected:
+            return
+        if returncode not in (0, 113):
+            raise MigrationBlocked(f"cannot inspect legacy job state: {label}")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            detail = "state was not restored" if loaded else "did not stop"
+            raise MigrationBlocked(f"legacy job {detail}: {label}")
+        time.sleep(min(_LEGACY_JOB_POLL_INTERVAL_SECONDS, remaining))
 
 
 def _run_node_leaf_bounded(
@@ -1627,6 +1653,20 @@ def run_migration_step(
             return authority.resume_pending_registration()
         if phase in {"registration_requested", "services_enabled", "verifying"}:
             return authority.request_rollback("crash_recovery")
+        if phase == "rollback_blocked" and "serviceNonce" in authority._journal:
+            # Re-observe removal through the bound Swift adapter before any
+            # legacy restoration; a prior failed rollback is not that proof.
+            return authority.request_rollback("rollback_recovery")
+        if phase == "rollback_blocked":
+            # The user may have resumed recording after a previous failed
+            # recovery. Recheck the current native owner before restoring jobs.
+            recovery_snapshot = snapshot_legacy_jobs(
+                launch_agents_dir, launchctl=launchctl
+            )
+            assert_legacy_capture_idle(
+                _capture_snapshot_from_jobs(recovery_snapshot, home_dir),
+                legacy_capture_socket,
+            )
         if phase == "rollback_requested":
             return authority._service_action(
                 "unregister_services",
@@ -1645,6 +1685,7 @@ def run_migration_step(
             "data_publishing",
             "data_published",
             "rolling_back",
+            "rollback_blocked",
         }:
             job_snapshot = authority._journal.get("jobSnapshot")
             if not isinstance(job_snapshot, dict):
@@ -3468,12 +3509,11 @@ class ApplicationMigration:
             def stop_loaded_job(label: str) -> None:
                 if not snapshot[label]["loaded"]:
                     return
+                self._record_pending_legacy_bootout(label)
                 result = launchctl(["bootout", f"gui/{uid}/{label}"])
                 if getattr(result, "returncode", 1) != 0:
                     raise MigrationBlocked(f"cannot stop legacy job: {label}")
-                observed = launchctl(["print", f"gui/{uid}/{label}"])
-                if getattr(observed, "returncode", 0) != 113:
-                    raise MigrationBlocked(f"legacy job did not stop: {label}")
+                self._settle_pending_legacy_bootout(launchctl=launchctl)
 
             for label in LEGACY_JOB_LABELS:
                 if label != capture_label:
@@ -3978,6 +4018,29 @@ class ApplicationMigration:
         finally:
             os.close(root_fd)
 
+    def _record_pending_legacy_bootout(self, label: str) -> None:
+        assert self._journal is not None
+        if label not in LEGACY_JOB_LABELS or "pendingLegacyBootout" in self._journal:
+            raise MigrationBlocked("legacy bootout intent is invalid")
+        self._journal = {**self._journal, "pendingLegacyBootout": label}
+        self._write_journal()
+
+    def _settle_pending_legacy_bootout(
+        self, *, launchctl: Callable[[list[str]], object]
+    ) -> None:
+        assert self._journal is not None
+        if "pendingLegacyBootout" not in self._journal:
+            return
+        label = self._journal["pendingLegacyBootout"]
+        if not isinstance(label, str) or label not in LEGACY_JOB_LABELS:
+            raise MigrationBlocked("legacy bootout intent is invalid")
+        _wait_for_legacy_job_state(label, loaded=False, launchctl=launchctl)
+        self._journal = {
+            key: value for key, value in self._journal.items()
+            if key != "pendingLegacyBootout"
+        }
+        self._write_journal()
+
     def rollback_legacy_jobs(
         self,
         snapshot: dict[str, dict[str, object]],
@@ -4050,6 +4113,10 @@ class ApplicationMigration:
                 os.close(source_fd)
 
         self.transition("rolling_back", intent={"action": "restore-launchd-state"})
+        # A timed-out quiesce can leave a job visible while launchd is still
+        # removing it. Wait for that exact durable intent before deciding that
+        # an already-loaded snapshot job needs no bootstrap.
+        self._settle_pending_legacy_bootout(launchctl=launchctl)
         uid = os.geteuid()
         for label in LEGACY_JOB_LABELS:
             enable_action = "disable" if snapshot[label]["disabled"] else "enable"
@@ -4057,16 +4124,24 @@ class ApplicationMigration:
             if getattr(result, "returncode", 1) != 0:
                 raise MigrationBlocked(f"cannot restore launchd disabled state: {label}")
             observed = launchctl(["print", f"gui/{uid}/{label}"])
-            loaded = getattr(observed, "returncode", 1) == 0
+            observed_returncode = getattr(observed, "returncode", None)
+            if observed_returncode not in (0, 113):
+                raise MigrationBlocked(f"cannot inspect legacy job state: {label}")
+            loaded = observed_returncode == 0
             if snapshot[label]["loaded"] and not loaded:
                 plist_path = launch_agents_dir / f"{label}.plist"
                 result = launchctl(["bootstrap", f"gui/{uid}", str(plist_path)])
                 if getattr(result, "returncode", 1) != 0:
                     raise MigrationBlocked(f"cannot restore legacy job: {label}")
             elif not snapshot[label]["loaded"] and loaded:
+                self._record_pending_legacy_bootout(label)
                 result = launchctl(["bootout", f"gui/{uid}/{label}"])
                 if getattr(result, "returncode", 1) != 0:
                     raise MigrationBlocked(f"cannot restore unloaded legacy job: {label}")
+                self._settle_pending_legacy_bootout(launchctl=launchctl)
+            _wait_for_legacy_job_state(
+                label, loaded=bool(snapshot[label]["loaded"]), launchctl=launchctl
+            )
         disabled_result = launchctl(["print-disabled", f"gui/{uid}"])
         if getattr(disabled_result, "returncode", 1) != 0:
             raise MigrationBlocked("cannot verify restored launchd disabled state")
@@ -4078,12 +4153,29 @@ class ApplicationMigration:
                 raise MigrationBlocked(
                     f"legacy launchd disabled state was not restored: {label}"
                 )
-            observed = launchctl(["print", f"gui/{uid}/{label}"])
-            returncode = int(getattr(observed, "returncode", 1))
-            expected_returncode = 0 if snapshot[label]["loaded"] else 113
-            if returncode != expected_returncode:
-                raise MigrationBlocked(f"legacy job state was not restored: {label}")
+            _wait_for_legacy_job_state(
+                label, loaded=bool(snapshot[label]["loaded"]), launchctl=launchctl
+            )
         self.remove_transaction_outputs()
+        if "archiveDirectory" not in self._journal:
+            # Failure before archiving still needs a transaction-bound empty
+            # rollback archive so a subsequent explicit retry can validate it.
+            archive_fd = self.archive_dir_fd(archive_dir, create=True)
+            try:
+                self.require_archive_path(archive_dir)
+                if os.listdir(archive_fd):
+                    raise MigrationBlocked("rollback archive is not empty")
+                archive_info = os.fstat(archive_fd)
+                self._journal = {
+                    **self._journal,
+                    "archiveDirectory": {
+                        "device": archive_info.st_dev, "inode": archive_info.st_ino,
+                    },
+                }
+            finally:
+                os.close(archive_fd)
+        if "transactionOutputIdentities" not in self._journal:
+            self._journal = {**self._journal, "transactionOutputIdentities": {}}
         self.transition("rolled_back", intent={"action": "rollback-complete"})
 
 
