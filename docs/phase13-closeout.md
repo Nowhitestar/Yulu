@@ -2,21 +2,27 @@
 
 ## Current checkpoint
 
-- Installed: complete signed `0.23.0-dev.phase13.8`, build 1592. Migration
-  attempt 7 remains committed without replay; Host and Capture are running.
-  Native recording status reports microphone and system audio ready, idle.
-- The native window rendered the existing QA result after normal Navigate >
-  Open Yulu. Late-startup recovery is fixed in `16f0c2b` and passed full CI
-  `34574823529`, but that newer shell has not yet been installed. Do not call
-  cold-launch recovery accepted from the menu recovery alone.
+- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34577975321`, build 1604,
+  source `5725490b8f363562dd7fcb46e7c0dc8ab0cfdc2e`. Finder replaced the whole
+  App; its installed CodeResources digest matches the verified CI artifact.
+  Migration attempt 7 remains committed without replay; Host PID 52911 and
+  Capture PID 52912 report the new version. Both native audio inputs are ready,
+  idle, and database quick-check is healthy.
+- The new native shell automatically rendered the main page after replacement
+  and after one ordinary quit/reopen, without Navigate > Open Yulu or a service
+  retry. The already-current background PIDs were retained on reopen. Loading
+  was observed between snapshots; this is a functional recovery check, not a
+  measured launch-performance claim or public-DMG acceptance.
 - Sharing now uses the explicitly selected, already-installed ChatGPT desktop
   Codex CLI 0.153.4 and retains `gpt-5.6-sol`. Installed target discovery returned
   10 recent Notion pages, and the separate read-only access probe passed.
   No destination has been selected and no external write has been performed;
   positive Test Share/manual Share readback awaits a designated test parent.
-- xAI's original saved grant is temporarily unreadable. This is not evidence of
-  lost authorization. Real recording/transcription/summary previously passed on
-  dev6; that does not establish current xAI readiness on dev8.
+- xAI's original saved grant remains unreadable in the installed CI App. The
+  normal Settings UI and one read-only connection recheck show the new accurate
+  unavailable-credential explanation, not a missing-login claim. Grok OAuth and
+  both `grok-4.6` selections remain unchanged. Real recording/transcription/summary
+  previously passed on dev6; that does not establish current xAI readiness.
 - Local signing is unavailable. The user explicitly declined password access:
   do not open Passwords/Keychain Access, read credential material, modify access
   controls, reset stores, or retry local signing. Continue with simulated
@@ -25,8 +31,10 @@
   verification path. No new OAuth authorization is implied.
 - The credential-error UI repair distinguishes unreadable from absent, offers
   a read-only connection recheck, and retains the selected source/model. The
-  CI validation path creates no GitHub Release, DMG or update feed; its explicit
-  internal validation ref and artifact are not a new RC or formal acceptance.
+  CI validation run `34577975321` and full source CI `34577813845` passed.
+  The internal App's archive checksum, signature, notarization staple and
+  Gatekeeper assessment passed. This path creates no GitHub Release, DMG or
+  update feed; the internal ref/artifact is not a new RC or formal acceptance.
 
 ## Goal and order
 
@@ -169,13 +177,26 @@ candidate is not progress toward that outcome by itself.
   included the subsequent connector repairs. Local dev9 compiled the late
   startup fix but signing failed, so it was not installed. Public RC19 remains
   unchanged; these intermediate artifacts are not public candidates.
+- The no-local-password alternative has now completed: the existing CI signer
+  built and notarized the complete consolidated App in run `34577975321`.
+  Artifact `10190616251` matched GitHub's SHA-256
+  `4fca71aceb4c42026a4b0161ee62bf5684e6cf2b5ebdae632ce78b370dc5c527`;
+  its inner archive checksum also passed. Signature verification, staple
+  validation and Gatekeeper assessment passed with Team `WMU9678ZQL`.
+  Installed CodeResources SHA-256 is
+  `24e3030f840b518d1b6d2406a0090581ec6e59e204a860786db1427bafcf1d38`.
+  Normal launch and quit/reopen automatically rendered the main page. Host,
+  Capture and the committed journal remained healthy; no recording was replayed,
+  external Share was sent, or password store was inspected. The xAI UI recheck
+  did not restore current account availability and did not change any selection.
 
 ## Remaining work in order
 
-1. Install the consolidated complete CI-signed validation App and verify the
-   changed startup/error-recovery behavior through normal product UI. Preserve
-   the dev6 recording/transcript/summary/no-automatic-share evidence and record
-   current account readiness separately, without password/credential inspection.
+1. Current xAI account availability remains an unresolved live-access blocker. The
+   consolidated CI App is installed and startup/error UI verification is done;
+   do not repeat signing, installation or credential probes without new evidence.
+   Keep the original grant/source/models and the no-password-access boundary.
+   Preserve dev6's successful pipeline evidence separately from current readiness.
 2. Finish the user-designated Test Share/manual Share write/readback. Discovery
    and access tests have passed; they do not prove an external write succeeded.
 3. Reconcile #170's existing applicable acceptance evidence, then make the one
