@@ -15,9 +15,25 @@
   measured launch-performance claim or public-DMG acceptance.
 - Sharing now uses the explicitly selected, already-installed ChatGPT desktop
   Codex CLI 0.153.4 and retains `gpt-5.6-sol`. Installed target discovery returned
-  10 recent Notion pages, and the separate read-only access probe passed.
-  No destination has been selected and no external write has been performed;
-  positive Test Share/manual Share readback awaits a designated test parent.
+  10 recent Notion pages on dev8; the CI App's separate read-only access probe
+  passed too. The user then authorized a newly created private QA parent in the
+  connected Notion workspace. Its exact destination was saved and read back.
+  One manually confirmed meeting-free Test Share created the expected child;
+  independent connector fetch confirmed its direct parent and complete fixed
+  message. The installed Host still reports Unknown Outcome because its receipt
+  verifier does not support the current Notion fetch envelope. No second write
+  or recording Share was sent. Keep this action and reconcile it read-only after
+  installing the source repair; do not abandon it or resend the message.
+- The current source batch repairs Notion receipt parsing, UUID/link presentation
+  and empty paragraph separator handling while checking the actual tool result,
+  direct parent and full content. It rejects changed/omitted content, conflicting
+  page identities, truncated/unknown blocks and mutation during verification.
+  Notion's native `verification.state=unverified` and meeting text mentioning an
+  error are no longer confused with transport failure. Destination setup now
+  accepts page links/IDs, explains manual child-page creation, rejects titles
+  before sending, and shows in-flight progress. The native shell adds standard
+  Edit menu first-responder shortcuts after its absent paste/select-all bindings
+  blocked target entry. These changes are source-validated, not installed yet.
 - xAI's original saved grant remains unreadable in the installed CI App. The
   normal Settings UI and one read-only connection recheck show the new accurate
   unavailable-credential explanation, not a missing-login claim. Grok OAuth and
@@ -163,7 +179,7 @@ candidate is not progress toward that outcome by itself.
   typecheck; the final format/guard adjustment passed its 44 affected tests and
   typecheck. No shared/private/favorite-page allowlist expansion, credential
   access, global CLI upgrade, Test Share, or meeting Share was performed.
-  A dedicated user-approved Notion test parent is still needed for write/readback
+  At that checkpoint, a dedicated user-approved Notion test parent was needed for write/readback
   acceptance. Discovery and source tests do not prove that positive write path.
 - Complete signed `0.23.0-dev.phase13.8` was installed through Finder with matching
   payload hashes. Host PID 36778 and Capture PID 36779 are running; Host health
@@ -189,16 +205,53 @@ candidate is not progress toward that outcome by itself.
   Capture and the committed journal remained healthy; no recording was replayed,
   external Share was sent, or password store was inspected. The xAI UI recheck
   did not restore current account availability and did not change any selection.
+- The subsequent user-approved private-parent Test Share reproduced the actual
+  Notion compatibility failure. The write completed once, but the old verifier
+  compared a model's JSON re-serialization and expected structured `parent` /
+  `content` fields instead of the connector's enhanced-Markdown page envelope.
+  The immutable action and provisional receipt remain in the Host for read-only
+  reconciliation. No real meeting content was uploaded. The current source
+  repair passed 117 targeted sharing/guard/onboarding tests, Node 24 typecheck,
+  the production Host/frontend build, and two native-shell checks including
+  compilation. The large frontend chunk warning remains non-blocking and is not
+  a reason for an unrelated refactor or another public RC.
 
 ## Remaining work in order
+
+### Evidence reuse decisions
+
+The 2026-09-11 reconciliation inspected retained collector output and the current
+Host's public MCP readback, not just old checkboxes. Reuse only the stated scope:
+
+| Requirement | Retained evidence | What it does not establish |
+|---|---|---|
+| Self-contained drag-to-Applications baseline | RC14 `b2c554c`, build 1568, macOS 26.5 arm64: fresh preflight passed with host dependencies absent, browser provenance verified, bundle observation matched, and first-launch Host/database healthy. | The baseline explicitly has `coreCompleted=false` and no Share receipt. Its old `com.yulu.ui` owner cannot prove the newly separated service registration path. |
+| Current physical migration and App takeover | CI validation App `5725490`, build 1604: committed attempt 7 retained, new Host/Capture own the runtime, native inputs ready, automatic UI entry and ordinary quit/reopen observed. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
+| Committed artifacts survive whole-App replacement | Current MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. `sendToNotion=false`, no legacy delivery, and zero Share Actions. | This verifies preservation of dev6's successful synthetic result, not a new xAI request while the credential is unreadable. |
+| Sharing setup and external write | Discovery and independent access probes passed with desktop Codex 0.153.4 / `gpt-5.6-sol`. A new user-approved private parent is saved, and one fixed Test Share child was independently fetched with the correct parent/content. | The installed Host's action remains Unknown Outcome until the readback repair is installed and that same receipt is reconciled. No positive recording Share exists yet; do not resend or choose an unrelated business page. |
+| Public distribution | RC19's retained receipt binds anonymous asset sizes/hashes to `fb2be51` and explicitly has `installedAcceptance=false`; signature/notary/site checks are retained for those bytes. | It cannot accept the later internal App or establish stable promotion. |
+| Supported v0.22.2 upgrade and public update/rollback | Relevant source regressions are retained; the reviewed checkpoints continue to identify complete installed journeys as unearned. | Source tests, prepared harnesses and temporary fixture directories are not completed real-install receipts. |
+
+RC14 retained collector digests are: preflight
+`9d99629e15f1eaa95cdfeca9087aac77c6c292e21bf227bf421615f0e4ed4d7d`,
+bundle observation `9d3c3f582f6444fba90e24d5379fdb8318fffab69d32a1a03ff14579a60a1962`,
+and baseline journey `33680b4b39d7f9c0ef3467d6d01d13f7688d7b5e9a73bb12dff25cd4c1e36f75`.
+Do not alter these old receipts or relabel them as evidence for the final source.
+The current user restriction also means that a historical collector's credential-
+store inspection is not permission to inspect the user's password store now.
+
+### Required outcomes
 
 1. Current xAI account availability remains an unresolved live-access blocker. The
    consolidated CI App is installed and startup/error UI verification is done;
    do not repeat signing, installation or credential probes without new evidence.
    Keep the original grant/source/models and the no-password-access boundary.
    Preserve dev6's successful pipeline evidence separately from current readiness.
-2. Finish the user-designated Test Share/manual Share write/readback. Discovery
-   and access tests have passed; they do not prove an external write succeeded.
+2. Install the complete CI-signed sharing repair, then reconcile the existing
+   Test Share receipt read-only. Only after Host verification succeeds, manually
+   share the existing synthetic QA summary once to the same private test parent
+   and verify its durable receipt. Test native paste/select-all in the new shell;
+   do not patch the installed signed App or repeat the external Test Share.
 3. Reconcile #170's existing applicable acceptance evidence, then make the one
    consolidated public candidate and complete distribution/stable closure. Keep
    #145/#170/#171 open until their actual remaining outcomes are verified.

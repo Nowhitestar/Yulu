@@ -71,6 +71,16 @@ def compile_yulu_app_inspector(tmp_path: Path) -> Path:
     return binary
 
 
+def test_shell_edit_shortcuts_use_the_webview_first_responder():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    menu = source.split("private func installMainMenu()", 1)[1].split("private func addRoute", 1)[0]
+    edit = menu.split('let edit = NSMenu(title: "Edit")', 1)[1].split("editItem.submenu = edit", 1)[0]
+    for action, key in [("cut", "x"), ("copy", "c"), ("paste", "v"), ("selectAll", "a")]:
+        assert f'#selector(NSText.{action}(_:)), keyEquivalent: "{key}"' in edit
+    assert "target =" not in edit
+    assert "NSPasteboard" not in edit
+
+
 def compile_audio_daemon_inspector(tmp_path: Path) -> Path:
     binary = tmp_path / "audio_daemon"
     result = subprocess.run(

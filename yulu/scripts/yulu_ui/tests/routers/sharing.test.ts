@@ -7,6 +7,8 @@ import { SharingConfiguration, type SharingConnectorAdapter } from "../../src/sh
 import { sharingRouter } from "../../src/routers/sharing.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
+const destination = JSON.stringify({ page_id: "01234567-89ab-cdef-0123-456789abcdef" });
+
 describe("sharingRouter", () => {
   let root = "";
   let host: HostStore | undefined;
@@ -30,18 +32,18 @@ describe("sharingRouter", () => {
     });
     const adapter: SharingConnectorAdapter = {
       discover: vi.fn(async () => ({
-        options: [{ label: "Product Notes", value: "Product Notes" }],
+        options: [{ label: "Product Notes", value: destination }],
         detail: "Found Product Notes",
       })),
       probe: vi.fn(async () => ({ detail: "Notion read access verified" })),
       testShare: vi.fn(async () => ({
-        destination: "Product Notes",
+        destination,
         receiptId: "page-123",
         receiptUrl: "https://notion.so/page-123",
       })),
       share: vi.fn(),
       verifyReceipt: vi.fn(async () => ({
-        destination: "Product Notes",
+        destination,
         receiptId: "page-123",
         receiptUrl: "https://notion.so/page-123",
       })),
@@ -66,7 +68,7 @@ describe("sharingRouter", () => {
     await caller.select({ connectionId: "codex", connector: "notion" });
     await caller.discover();
     await caller.probe();
-    await caller.saveDestination({ destination: "Product Notes" });
+    await caller.saveDestination({ destination });
     const input = {
       confirmed: true,
       actionId: "00000000-0000-4000-8000-000000000001",
@@ -78,7 +80,7 @@ describe("sharingRouter", () => {
     expect(result).toMatchObject({
       connectorDiscovery: { status: "ready" },
       connectorReadiness: { status: "ready" },
-      destination: { configured: true, value: "Product Notes" },
+      destination: { configured: true, value: destination },
       sharingReadiness: { status: "ready" },
     });
     expect(adapter.testShare).toHaveBeenCalledTimes(1);
@@ -90,7 +92,7 @@ describe("sharingRouter", () => {
     const { adapter, caller } = setup();
     await caller.select({ connectionId: "codex", connector: "notion" });
     await caller.probe();
-    await caller.saveDestination({ destination: "Product Notes" });
+    await caller.saveDestination({ destination });
 
     await expect(caller.testShare({
       confirmed: false,

@@ -7,6 +7,7 @@ import {
 } from "./agentCliRunner.js";
 import type { AgentRuntime } from "./agentRuntime.js";
 import type { PersistedAgentConnection, SharingConnector } from "./hostStore.js";
+import { notionFetchedSharePage, notionShareContentMatches, notionSharingPageId } from "./notionSharing.js";
 import {
   SharingConnectorUnknownOutcomeError,
   YULU_TEST_SHARE_CONTENT,
@@ -145,7 +146,12 @@ function exactZulipDestination(value: unknown, expected: string): boolean {
 function exactNotionParent(value: unknown, expected: string): boolean {
   const wanted = notionParentIdentity(expected);
   const observed = notionParentIdentity(value);
-  return Boolean(wanted && observed && canonicalJson(observed) === canonicalJson(wanted));
+  if (!wanted || !observed) return false;
+  const key = "page_id" in wanted ? "page_id" : "data_source_id";
+  if (!(key in observed)) return false;
+  const left = (observed as Record<string, string>)[key]!;
+  const right = (wanted as Record<string, string>)[key]!;
+  return left === right || Boolean(notionSharingPageId(left) && notionSharingPageId(left) === notionSharingPageId(right));
 }
 
 function toolResultPayload(value: unknown): unknown {
@@ -177,6 +183,10 @@ function exactWriteDestination(value: unknown, connector: SharingConnector, expe
 function exactReceiptDestination(value: unknown, connector: SharingConnector, expected: string): boolean {
   const payload = toolResultPayload(value);
   if (connector === "notion") {
+    if (typeof asRecord(payload).text === "string") {
+      const page = notionFetchedSharePage(payload);
+      return Boolean(page && exactNotionParent(page.parent, expected));
+    }
     const parent = firstPathValue(payload, [
       ["parent"], ["page", "parent"], ["result", "parent"], ["data", "parent"],
     ]);
@@ -215,6 +225,12 @@ function exactWriteContent(value: unknown, connector: SharingConnector, expected
 
 function exactReceiptContent(value: unknown, connector: SharingConnector, expected: string): boolean {
   const payload = toolResultPayload(value);
+  if (connector === "notion") {
+    if (typeof asRecord(payload).text === "string") {
+      const page = notionFetchedSharePage(payload);
+      return Boolean(page && notionShareContentMatches(page.content, expected));
+    }
+  }
   const paths = connector === "notion"
     ? [["content"], ["page", "content"], ["result", "content"], ["data", "content"]]
     : [["content"], ["message", "content"], ["result", "content"], ["data", "content"]];
@@ -229,6 +245,12 @@ function exactReceiptIdentity(
 ): boolean {
   const payload = toolResultPayload(value);
   if (connector === "notion") {
+    if (typeof asRecord(payload).text === "string") {
+      const fetched = notionFetchedSharePage(payload);
+      return Boolean(fetched && (receiptId || receiptUrl) &&
+        (!receiptId || notionSharingPageId(receiptId) === fetched.id) &&
+        (!receiptUrl || notionSharingPageId(receiptUrl) === fetched.id));
+    }
     const pages = pathValue(payload, ["pages"]);
     if (pages.found) {
       if (!Array.isArray(pages.value) || pages.value.length !== 1) return false;
@@ -253,7 +275,9 @@ function exactReceiptReadArgument(
   const record = asRecord(decodedChild(value));
   if (connector === "notion") {
     return Boolean((receiptId && exactIdentifier(record.id, receiptId)) ||
-      (receiptUrl && record.id === receiptUrl));
+      (receiptUrl && record.id === receiptUrl) ||
+      (notionSharingPageId(record.id) &&
+        notionSharingPageId(record.id) === notionSharingPageId(receiptId || receiptUrl)));
   }
   return Boolean(receiptId && exactIdentifier(record.message_id ?? record.id, receiptId));
 }
@@ -350,6 +374,17 @@ export function connectorMatches(actual: string, selected: string): boolean {
 function toolResultSucceeded(result: string, isError = false): boolean {
   const value = result.trim();
   const decoded = decodedValue(value);
+  const payload = asRecord(toolResultPayload(decoded));
+  if (notionFetchedSharePage(payload)) {
+    // These are document facts, not transport outcomes. In particular Notion's
+    // native verification.state="unverified" is unrelated to a Share read-back,
+    // and a meeting may legitimately discuss "request failed" or an error budget.
+    const { text: _text, title: _title, path: _path, verification: _verification,
+      cover: _cover, icon: _icon, ...outcome } = payload;
+    const { content: _content, structuredContent: _structured, ...outer } = asRecord(decoded);
+    return !isError && !hasFailedStatus(decoded) && !hasNonSuccessEnvelope(outcome) &&
+      !hasNonSuccessEnvelope(payload === decoded ? {} : outer);
+  }
   return Boolean(value) && !isError && !hasFailedStatus(decoded) && !hasNonSuccessEnvelope(decoded) && !(
     /<tool_error\b/i.test(value) ||
     /"(?:ok|success)"\s*:\s*false/i.test(value) ||
@@ -694,6 +729,10 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
         `Saved destination: ${input.destination}`,
         `Receipt ID: ${input.receipt.receiptId}`,
         `Receipt URL: ${input.receipt.receiptUrl}`,
+        ...(input.connector === "notion" ? [
+          "Fetch that exact receipt page once, including its full content and ancestor path. Do not use search snippets or infer its parent from titles.",
+          "The Host verifies the actual fetch tool result; do not rewrite, summarize, or normalize the page's content.",
+        ] : []),
         'Return only JSON: {"status":"verified","connector":"' + input.connector +
           '","destination":"observed destination","content":"observed exact content","id":"observed id","url":"observed URL"}.',
       ].join("\n"), "read");
@@ -705,14 +744,24 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
         (result.stderr || result.stdout || "Receipt read-back ended without verification").trim(),
       );
     }
+    if (input.connector === "notion") {
+      // Notion's fetch result owns the facts. A model's re-serialization can omit
+      // pvs, UUID hyphens or paragraph separators; it cannot establish verification.
+      // Preserve the original receipt after an exact, read-only tool-evidence check.
+      try {
+        this.requireReadBackEvidence(result, input.connector, input);
+      } catch (error) {
+        throw new SharingConnectorUnknownOutcomeError(this.errorMessage(error));
+      }
+      return { ...input.receipt, destination: input.destination };
+    }
     let value: Record<string, unknown>;
     try {
       value = parseObject(result.stdout);
     } catch (error) {
       throw new SharingConnectorUnknownOutcomeError((error as Error).message);
     }
-    const destination = input.connector === "notion" && exactNotionParent(value.destination, input.destination)
-      ? input.destination : boundedString(value.destination, 500);
+    const destination = boundedString(value.destination, 500);
     const receiptId = boundedIdentifier(value.id, 500);
     const receiptUrl = boundedString(value.url, 2_000);
     if (

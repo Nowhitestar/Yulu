@@ -18,7 +18,10 @@ export function SharingSettings() {
   const select = trpc.sharing.select.useMutation({ onSuccess: refresh, onError: failed });
   const discover = trpc.sharing.discover.useMutation({ onSuccess: refresh, onError: failed });
   const probe = trpc.sharing.probe.useMutation({ onSuccess: refresh, onError: failed });
-  const save = trpc.sharing.saveDestination.useMutation({ onSuccess: refresh, onError: failed });
+  const save = trpc.sharing.saveDestination.useMutation({
+    onSuccess: (saved) => { setDestination(saved.destination.value); refresh(); },
+    onError: failed,
+  });
   const testShare = trpc.sharing.testShare.useMutation({ onSuccess: refresh, onError: failed });
   const reconcileUnknown = trpc.sharing.reconcileUnknown.useMutation({ onSuccess: refresh, onError: failed });
   const abandonUnknown = trpc.sharing.abandonUnknown.useMutation({ onSuccess: refresh, onError: failed });
@@ -131,11 +134,17 @@ export function SharingSettings() {
           {t("sharing.destination.input")}
           <input
             aria-label={t("sharing.destination.input")}
+            aria-describedby={connector === "notion" ? "sharing-notion-target-help" : undefined}
+            placeholder={connector === "notion" ? t("sharing.destination.notionPlaceholder") : undefined}
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="none"
             value={destination}
             maxLength={500}
             onChange={(event) => setDestination(event.target.value)}
           />
         </label>
+        {connector === "notion" && <p id="sharing-notion-target-help">{t("sharing.destination.notionHelp")}</p>}
         <button
           type="button"
           disabled={!canSave || save.isPending}
@@ -153,6 +162,9 @@ export function SharingSettings() {
           </span>
         </div>
         <p>{t("sharing.testShare.payload")}</p>
+        {(testShare.isPending || reconcileUnknown.isPending) && (
+          <p role="status">{t("sharing.testShare.pending")}</p>
+        )}
         <p>{data.sharingReadiness.detail}</p>
         {data.sharingReadiness.remediation && <p className="sharing-remediation">{data.sharingReadiness.remediation}</p>}
         {data.sharingReadiness.receipt && (

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { agentConnectionRevision } from "./agentConnectionRevision.js";
+import { normalizeNotionShareDestination } from "./notionSharing.js";
 import type {
   HostStore,
   PersistedAgentConnection,
@@ -188,7 +189,8 @@ export class SharingConfiguration {
     if (this.readiness.get(key)?.status !== "ready") {
       throw new Error("Test connector access before saving a Share Destination");
     }
-    const destination = input.destination.trim();
+    const destination = persisted.connector === "notion"
+      ? normalizeNotionShareDestination(input.destination) : input.destination.trim();
     const saved = this.options.host.saveShareDestination({
       connectionId: persisted.connectionId,
       connector: persisted.connector,

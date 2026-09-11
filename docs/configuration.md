@@ -274,7 +274,10 @@ structured `notion_create_pages` parent (`{"page_id":"..."}` or
 `{"data_source_id":"..."}`), not a matching page title or nested hint.
 Structured parent objects and their JSON-string representation normalize to the
 same saved identity; malformed or ambiguous parents are not suggested. A Notion
-page can include only the fixed required title `Yulu Share`, never an inferred
+page link or page ID can also be pasted directly; saving converts it to an
+explicit page parent and reads that value back. Page titles, malformed IDs and
+untrusted URLs are rejected before sending. Saving alone never creates a page.
+A shared Notion page can include only the fixed required title `Yulu Share`, never an inferred
 meeting title or additional properties. The approved content remains unchanged.
 
 Sharing and Agent Calendar connector calls use the selected Connection's explicit
@@ -334,11 +337,18 @@ to recover. Hook availability alone does not prove the CLI supports that model.
 
 Discovery, access, write, and read-back results are accepted only when the Agent
 session contains a successful selected-connector tool call. Write/read-back
-evidence must contain exact structured destination, content, and receipt values
-rather than matching substrings, and every nested result status that is present
-must be an explicit success value. Standard MCP text envelopes are decoded only
-when they contain one structured JSON result; Notion's single-page receipt shape
-is verified explicitly. Matching model-authored JSON alone is not evidence. An interrupted or
+evidence must prove the destination, full content, and receipt identity rather
+than matching substrings. Transport failures and partial outcomes are rejected.
+Standard MCP text envelopes are decoded only when they contain one structured
+JSON result. Notion's current fetch envelope is parsed for the actual page URL,
+direct parent in its ancestor path, and full enhanced-Markdown content. Only UUID
+hyphen/case, trusted page-link presentation, and Notion's discarded empty
+paragraph separators normalize; code whitespace, content order, additions and
+omissions do not. Conflicting IDs, truncated or unknown blocks, malformed page
+wrappers and parent-title hints cannot verify a receipt. Notion's native page
+verification state and words such as "error" in the document are not transport
+statuses. The Host validates the tool facts and preserves the original receipt;
+model-authored JSON cannot substitute for or override that proof. An interrupted or
 unverifiable write is fenced as an Unknown Outcome across Host restarts; a hook
 feature rejection or guard denial proven to occur before authorization is an
 ordinary failed attempt, not an Unknown Outcome. An unknown attempt
