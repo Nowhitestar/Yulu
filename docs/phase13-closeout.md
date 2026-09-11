@@ -34,6 +34,12 @@
   before sending, and shows in-flight progress. The native shell adds standard
   Edit menu first-responder shortcuts after its absent paste/select-all bindings
   blocked target entry. These changes are source-validated, not installed yet.
+- Local repair commit: `a147d66`. The push to the existing
+  `https://github.com/Nowhitestar/Yulu.git` remote was rejected by platform review
+  for insufficient destination-specific push authorization. The remote was
+  verified read-only; no alternative channel or retry bypass was used, and no
+  CI validation run was started for this commit. Obtain the specific push/CI
+  authorization before continuing the password-free whole-App path.
 - xAI's original saved grant remains unreadable in the installed CI App. The
   normal Settings UI and one read-only connection recheck show the new accurate
   unavailable-credential explanation, not a missing-login claim. Grok OAuth and
