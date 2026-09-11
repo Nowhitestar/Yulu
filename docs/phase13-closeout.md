@@ -129,6 +129,14 @@ candidate is not progress toward that outcome by itself.
   access, global CLI upgrade, Test Share, or meeting Share was performed.
   A dedicated user-approved Notion test parent is still needed for write/readback
   acceptance. Discovery and source tests do not prove that positive write path.
+- Complete signed `0.23.0-dev.phase13.8` was installed through Finder with matching
+  payload hashes. Host PID 36778 and Capture PID 36779 are running; Host health
+  and database checks pass and attempt 7's committed journal is unchanged.
+  The shell nevertheless remained on its 30-second startup failure screen after
+  the Host became ready. The same batch now accepts late, identity-verified
+  owner readiness and continues read-only startup polling at two-second intervals;
+  it does not automatically retry services or migration. Its focused wiring
+  check passes; the final native rebuild/installed UI check is pending.
 - A complete signed `0.23.0-dev.phase13.7` was built to verify the first Sharing
   diagnostics repair, but remains uninstalled because the subsequent explicit
   connector-model fix must be included in the same local update. The installed

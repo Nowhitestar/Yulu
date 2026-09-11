@@ -36,6 +36,25 @@ def read_plist(path: Path) -> dict[str, object]:
         return plistlib.load(handle)
 
 
+def test_shell_late_startup_health_recovers_without_resetting_services():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    observer = source.split("func submitHealth(host: RuntimeOwnerEvidence", 1)[1]
+    observer = observer.split("guard let pendingHealth", 1)[0]
+    assert "freshInstallPhase == .awaitingHealth || freshInstallPhase == .healthBlocked" in observer
+    assert "freshInstallHostReady = runtimeOwnerIsReady(host)" in observer
+    assert "freshInstallCaptureReady = runtimeOwnerIsReady(capture)" in observer
+    assert "retryAvailable = false" in observer
+    assert "freshInstallNeedsServiceReset = false" in observer
+    assert 'onStateChange?("committed", nil)' in observer
+    assert "unregister" not in observer
+    assert "advance(" not in observer
+    slow_poll = source.split("} else if !self.migrationCommitted {", 1)[1]
+    slow_poll = slow_poll.split("} else if self.migrationCommitted {", 1)[0]
+    assert "deadline: .now() + 2" in slow_poll
+    assert "self.pollHost(generation: generation)" in slow_poll
+    assert "retry(" not in slow_poll
+
+
 def compile_yulu_app_inspector(tmp_path: Path) -> Path:
     binary = tmp_path / "yulu_app"
     result = subprocess.run(
@@ -1856,8 +1875,10 @@ def test_fresh_install_registration_requires_runtime_health_and_has_a_retryable_
         return json.loads(result.stdout)
 
     assert inspect_health(True, True, False) == "committed"
+    assert inspect_health(True, True, True) == "committed"
     assert inspect_health(True, False, False) == "pending"
     assert inspect_health(True, False, True) == "blocked"
+    assert inspect_health(False, True, True) == "blocked"
 
     def inspect_recovery(
         phase_active: bool,

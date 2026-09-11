@@ -1753,7 +1753,9 @@ final class ApplicationMigrationCoordinator {
     }
 
     func submitHealth(host: RuntimeOwnerEvidence, capture: RuntimeOwnerEvidence) {
-        if freshInstallPhase == .awaitingHealth {
+        // A diagnostic deadline is not proof that a registered service failed.
+        // Accept a later identity-verified pair without resetting either owner.
+        if freshInstallPhase == .awaitingHealth || freshInstallPhase == .healthBlocked {
             freshInstallHostReady = runtimeOwnerIsReady(host)
             freshInstallCaptureReady = runtimeOwnerIsReady(capture)
             if FreshInstallHealthDisposition.evaluate(
@@ -1762,6 +1764,7 @@ final class ApplicationMigrationCoordinator {
                 timedOut: false
             ) == .committed {
                 freshInstallPhase = .inactive
+                retryAvailable = false
                 freshInstallNeedsServiceReset = false
                 onStateChange?("committed", nil)
             }
@@ -4612,7 +4615,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             retryMigrationMenuItem?.isEnabled = true
             showMigrationRetry(
                 "Yulu components did not become ready",
-                detail: "\(detail ?? "The bundled services did not become ready.") Retry restarts both bundled services; Background Services shows their current status."
+                detail: "\(detail ?? "The bundled services did not become ready.") Yulu is still checking and will open when both services are ready. Retry restarts both bundled services; Background Services shows their current status."
             )
         case "blocked":
             migrationRetryAvailable = false
@@ -4830,6 +4833,12 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
                     }
                 } else if self.hostPollAttempts < 60 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        self.pollHost(generation: generation)
+                    }
+                } else if !self.migrationCommitted {
+                    // Keep observing late startup at the normal healthy cadence.
+                    // This is read-only; no automatic service retry or migration.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         self.pollHost(generation: generation)
                     }
                 } else if self.migrationCommitted {
