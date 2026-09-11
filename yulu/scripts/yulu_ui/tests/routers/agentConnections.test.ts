@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigManager } from "../../src/config.js";
 import { HostStore } from "../../src/hostStore.js";
-import { AgentConnectionCenter } from "../../src/agentConnections.js";
+import { AgentConnectionCenter, type DiscoveredAgentRuntime } from "../../src/agentConnections.js";
 import { agentConnectionsRouter } from "../../src/routers/agentConnections.js";
 import { createCaller } from "../../src/trpc.js";
 import { createAgentSession, readAgentSessionStore } from "../../src/agentSessionStore.js";
@@ -26,7 +26,7 @@ const roots: string[] = [];
 
 function setup(
   config: Record<string, unknown>,
-  discovered: Array<{ adapter: "codex" | "claude-code" | "hermes" | "openclaw"; label: string; path: string }> = [],
+  discovered: DiscoveredAgentRuntime[] = [],
   options: {
     seedDirectCredentialSource?: "oauth" | "api-key" | false;
     conversationOnlyClient?: ConversationOnlyRuntimeClient;
@@ -360,6 +360,32 @@ afterEach(() => {
 });
 
 describe("public Agent Connection Host contract", () => {
+  it("keeps an alternate installed Codex visible without switching until explicit confirmation", async () => {
+    const current = setup({}, [
+      {adapter:"codex",label:"Codex",path:"/fake/bin/codex"},
+      {candidateId:"candidate:codex:desktop:chatgpt",adapter:"codex",label:"Codex (ChatGPT desktop)",path:"/Applications/ChatGPT.app/Contents/Resources/codex"},
+    ]);
+    await current.center.refreshCandidates();
+    await current.center.confirmCandidate({candidateId:"candidate:codex",model:"gpt-5.6-sol"});
+    const selections = current.configManager.read().intelligence;
+
+    const scanned = await current.center.refreshCandidates();
+    expect(scanned.candidates.map(candidate => candidate.id)).toContain("candidate:codex:desktop:chatgpt");
+    expect(scanned.candidates.map(candidate => candidate.id)).not.toContain("candidate:codex");
+    expect(current.host.listAgentConnectionRecords().find(record => record.id === "codex")?.settings.executablePath)
+      .toBe("/fake/bin/codex");
+    expect(current.codex.probe).not.toHaveBeenCalled();
+    expect(current.codex.probeSummary).not.toHaveBeenCalled();
+
+    await current.center.confirmCandidate({candidateId:"candidate:codex:desktop:chatgpt",model:"gpt-5.6-sol"});
+    expect(current.host.listAgentConnectionRecords().find(record => record.id === "codex")?.settings).toMatchObject({
+      executablePath:"/Applications/ChatGPT.app/Contents/Resources/codex",
+      summaryModel:"gpt-5.6-sol",conversationModel:"gpt-5.6-sol",
+    });
+    expect(current.configManager.read().intelligence).toEqual(selections);
+    current.host.close();
+  });
+
   it.each(["oauth", "api-key"] as const)("retains the explicitly selected %s summary credential across Host restarts without a new probe", (source) => {
     const { center, makeCenter, host, credentials, text, audio } = setup({}, [], {
       seedDirectCredentialSource: source,

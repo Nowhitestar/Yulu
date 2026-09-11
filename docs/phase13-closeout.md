@@ -83,10 +83,60 @@ candidate is not progress toward that outcome by itself.
   63 tests; Agent Connection/pipeline/recording command tests passed 135 tests
   and Node typecheck passed. The shell and signed App inventory were built and
   verified together, not patched after installation.
+- Commit `b6a3854` passed complete CI (run `34563789242`). Ordinary foreground
+  quit/reopen rendered the main UI and retained Host PID 43977 / Capture PID
+  43978; already-current background images were not restarted.
+- Real read-only Sharing discovery exposed two additional diagnostics defects:
+  Codex's cold initialization consumed the old probe deadline, and its terminal
+  JSON error was lost behind stderr/guard diagnostics. A bounded startup-hook
+  experiment proved the unchanged overlay executes; no guard weakening or
+  persistent Codex config change was needed. The same-batch repair adds a
+  60-second initialization allowance and preserves terminal failure reasons.
+- The next real discovery reached the upstream API and reported that Codex CLI
+  0.144.4 cannot use the CLI-global `gpt-6-astra`. UI readback then established
+  that Yulu's Connection actually specifies `gpt-5.6-sol`: Sharing and Calendar
+  were omitting the explicit model argument. Both adapters now pass the saved
+  Connection model and reject a missing selection rather than using a global
+  default. No CLI installation, selected model or credential was changed.
+- The desktop application also contains Codex CLI 0.153.4. Its read-only
+  diagnostic passed the model-version check but was denied by the tool guard;
+  it was not selected or installed. Diagnostic failures and timeouts are not
+  successful connector acceptance. No Test Share or meeting Share was sent.
+- The resulting evidence identified the missing exact Notion Apps namespace
+  and the difference between hook names and CLI audit names. The batch now
+  recognizes that selected app without authorizing other apps, recognizes its
+  recent-pages read, and limits discovery prompts to one read. A proposed wider
+  shared/private/favorite-page allowlist was rejected by safety review and was
+  not applied. The supported read allowlist was not widened to those scopes.
+- Actual CLI events also contain started/completed updates for a single MCP
+  call. The audit now deduplicates only the same call ID, preserving separate
+  write attempts. This prevents a single real manual write from being falsely
+  counted twice. The original one-write guard and Unknown Outcome fences remain.
+- Runtime scanning offers the already-installed desktop Codex as an explicit
+  alternate candidate, avoiding an unnecessary global CLI upgrade. Existing
+  provider/model selections do not change during scanning. The latest bounded
+  read reached Notion but its optional title filter was unsupported; the
+  discovery prompt now prefers a single recent-page read and excludes optional
+  plan-specific filters. A subsequent bounded diagnostic using the selected
+  `gpt-5.6-sol` successfully read recent pages in 62 seconds. This exposed a
+  separate parser bug: valid structured parent objects were silently discarded.
+  They now normalize to the same identity as JSON strings, and write-response
+  examples are properly JSON-escaped. Notion's required fixed `Yulu Share` title
+  is allowed without allowing arbitrary properties or meeting metadata.
+- The complete connector/runtime-discovery batch passed 162 targeted tests and
+  typecheck; the final format/guard adjustment passed its 44 affected tests and
+  typecheck. No shared/private/favorite-page allowlist expansion, credential
+  access, global CLI upgrade, Test Share, or meeting Share was performed.
+  A dedicated user-approved Notion test parent is still needed for write/readback
+  acceptance. Discovery and source tests do not prove that positive write path.
+- A complete signed `0.23.0-dev.phase13.7` was built to verify the first Sharing
+  diagnostics repair, but remains uninstalled because the subsequent explicit
+  connector-model fix must be included in the same local update. The installed
+  usable version is still `0.23.0-dev.phase13.6`; no new RC is published.
 
 ## Remaining work in order
 
-1. Finish manual-sharing configuration/readback and ordinary App relaunch;
+1. Finish manual-sharing configuration/readback; ordinary App relaunch passed.
    preserve the verified recording/transcript/summary/no-automatic-share result.
    Reuse unrelated applicable evidence rather than replaying historical plans.
 2. Reconcile #170's existing applicable acceptance evidence, then make the one

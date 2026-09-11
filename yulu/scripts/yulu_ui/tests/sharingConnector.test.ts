@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PersistedAgentConnection } from "../src/hostStore.js";
 import {
   AgentSharingConnectorAdapter,
+  extractConnectorToolCalls,
   SharingConnectorUnknownOutcomeError,
 } from "../src/sharingConnector.js";
 import { YULU_TEST_SHARE_CONTENT } from "../src/sharingConfiguration.js";
@@ -13,7 +14,7 @@ const connection: PersistedAgentConnection = {
   adapter: "codex",
   label: "Codex",
   lifecycle: "available",
-  settings: { executablePath: "/opt/bin/codex" },
+  settings: { executablePath: "/opt/bin/codex", conversationModel: "gpt-5.6-sol" },
   createdAt: "2026-08-28T01:00:00.000Z",
   updatedAt: "2026-08-28T01:00:00.000Z",
 };
@@ -61,7 +62,48 @@ function claudeToolEvidence(input: {
   ].join("\n");
 }
 
+function codexLifecycleEvidence(input: Parameters<typeof codexToolEvidence>[0], id = "call-1") {
+  const completed = JSON.parse(codexToolEvidence(input));
+  completed.item.id = id;
+  return [
+    JSON.stringify({type:"item.started",item:{...completed.item,status:"in_progress",result:null}}),
+    JSON.stringify(completed),
+  ].join("\n");
+}
+
 describe("AgentSharingConnectorAdapter", () => {
+  it("counts lifecycle updates by call id without collapsing two distinct operations", () => {
+    const input = {name:"notion_create_pages",arguments:{},result:{pages:[]}};
+    expect(extractConnectorToolCalls(codexLifecycleEvidence(input))).toHaveLength(1);
+    const calls = extractConnectorToolCalls([
+      codexLifecycleEvidence(input, "call-1"), codexLifecycleEvidence(input, "call-2"),
+    ].join("\n"));
+    expect(calls).toHaveLength(2);
+    expect(calls.every(call => call.success)).toBe(true);
+  });
+  it.each([
+    ["codex_apps", "notion__notion_list_recent_pages"],
+    ["codex_apps__notion", "notion_list_recent_pages"],
+    ["codex_apps", "notion.notion-list-recent-pages"],
+  ])("normalizes the exact Codex Notion app identity (%s, %s)", (server, tool) => {
+    const row = JSON.parse(codexToolEvidence({name: tool, arguments:{}, result:{pages:[]}}));
+    row.item.server = server;
+    expect(extractConnectorToolCalls(JSON.stringify(row))).toMatchObject([
+      {connector:"notion",name:"notion_list_recent_pages",success:true},
+    ]);
+    row.item.server = "codex_apps__other_app";
+    expect(extractConnectorToolCalls(JSON.stringify(row))[0]?.connector).not.toBe("notion");
+  });
+
+  it("rejects an unselected model instead of inheriting the CLI global default", async () => {
+    const run = vi.fn();
+    const adapter = new AgentSharingConnectorAdapter({ scriptDir: "/app/scripts", configDir: "/config", run });
+    await expect(adapter.discover({
+      connection: { ...connection, settings: { executablePath: "/opt/bin/codex" } }, connector: "notion",
+    })).rejects.toThrow(/Choose an explicit Conversation model/);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("uses separate read-only discovery and bounded readiness invocations", async () => {
     const destination = JSON.stringify({ page_id: "parent-123" });
     const run = vi.fn()
@@ -70,6 +112,10 @@ describe("AgentSharingConnectorAdapter", () => {
         stdout: JSON.stringify({
           options: [
             { label: "Product Notes", value: destination },
+            { label: "Structured page", value: { page_id: "parent-structured" } },
+            { label: "Structured data source", value: { data_source_id: "source-123" } },
+            { label: "Ambiguous parent", value: { page_id: "page", data_source_id: "source" } },
+            { label: "Oversized parent", value: { page_id: "x".repeat(510) } },
             { label: "Unverified title", value: "Product Notes" },
           ],
           detail: "found",
@@ -98,18 +144,25 @@ describe("AgentSharingConnectorAdapter", () => {
     });
 
     await expect(adapter.discover({ connection, connector: "notion" })).resolves.toEqual({
-      options: [{ label: "Product Notes", value: destination }],
+      options: [
+        { label: "Product Notes", value: destination },
+        { label: "Structured page", value: '{"page_id":"parent-structured"}' },
+        { label: "Structured data source", value: '{"data_source_id":"source-123"}' },
+      ],
       detail: "found",
     });
+    expect(run.mock.calls[0]![0].runtime.command).toEqual(expect.arrayContaining(["--model", "gpt-5.6-sol"]));
     await expect(adapter.probe({ connection, connector: "notion" })).resolves.toEqual({
       detail: "read access verified",
     });
 
     expect(run.mock.calls[0]![0].prompt).toMatch(/read-only/i);
+    expect(run.mock.calls[0]![0].prompt).toMatch(/at most one read/i);
+    expect(run.mock.calls[0]![0].prompt).toMatch(/Do not enumerate shared, private, or favorite page lists/);
     expect(run.mock.calls[0]![0].prompt).toMatch(/do not write/i);
     expect(run.mock.calls[0]![0].connectorToolPolicy).toEqual({
       connector: "notion",
-      allowedTools: ["notion_search", "notion_fetch", "search", "fetch"],
+      allowedTools: ["notion_search", "notion_fetch", "search", "fetch", "notion_list_recent_pages"],
     });
     expect(run.mock.calls[1]![0].prompt).toMatch(/bounded/i);
     expect(run.mock.calls[1]![0].prompt).toMatch(/do not create, update, or delete/i);
@@ -122,15 +175,15 @@ describe("AgentSharingConnectorAdapter", () => {
       .mockResolvedValueOnce({
         code: 0,
         stdout: JSON.stringify({
-          status: "sent", connector: "notion", destination,
+          status: "sent", connector: "notion", destination: JSON.parse(destination),
           id: "page-123", url: "https://notion.so/page-123",
         }),
         stderr: "",
-        rawStdout: codexToolEvidence({
+        rawStdout: codexLifecycleEvidence({
           name: "notion_create_pages",
           arguments: {
             parent: { page_id: "parent-123" },
-            pages: [{ content: YULU_TEST_SHARE_CONTENT }],
+            pages: [{ content: YULU_TEST_SHARE_CONTENT, properties: { title: "Yulu Share" } }],
           },
           result: {
             content: [{
@@ -145,7 +198,7 @@ describe("AgentSharingConnectorAdapter", () => {
         stdout: JSON.stringify({
           status: "verified",
           connector: "notion",
-          destination,
+          destination: JSON.parse(destination),
           content: YULU_TEST_SHARE_CONTENT,
           id: "page-123",
           url: "https://notion.so/page-123",
@@ -192,6 +245,8 @@ describe("AgentSharingConnectorAdapter", () => {
       receipt,
     })).resolves.toEqual(receipt);
     const invocation = run.mock.calls[0]![0];
+    const receiptExample = invocation.prompt.split("Return only JSON: ").at(-1)!.replace(/\.$/, "");
+    expect(JSON.parse(receiptExample).destination).toBe(destination);
     expect(invocation.prompt).toContain(YULU_TEST_SHARE_CONTENT);
     expect(invocation.prompt).toContain("no meeting title, transcript, summary, participant, or meeting metadata");
     expect(invocation.connectorToolPolicy).toEqual({
@@ -210,7 +265,7 @@ describe("AgentSharingConnectorAdapter", () => {
     expect(run.mock.calls[1]![0].prompt).toMatch(/Do not write/i);
     expect(run.mock.calls[1]![0].connectorToolPolicy).toEqual({
       connector: "notion",
-      allowedTools: ["notion_search", "notion_fetch", "search", "fetch"],
+      allowedTools: ["notion_search", "notion_fetch", "search", "fetch", "notion_list_recent_pages"],
     });
   });
 

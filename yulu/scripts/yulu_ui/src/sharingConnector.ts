@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   runAgentCliCommand,
+  NOTION_SHARE_PAGE_TITLE,
   type AgentCliRunResult,
   type ConnectorToolPolicy,
 } from "./agentCliRunner.js";
@@ -97,9 +98,10 @@ function notionParentIdentity(value: unknown): { page_id: string } | { data_sour
   return null;
 }
 
-function canonicalNotionDestination(value: string): string | null {
+function canonicalNotionDestination(value: unknown): string | null {
   const identity = notionParentIdentity(value);
-  return identity ? canonicalJson(identity) : null;
+  const destination = identity ? canonicalJson(identity) : "";
+  return destination && destination.length <= 500 ? destination : null;
 }
 
 function decodedChild(value: unknown): unknown {
@@ -199,7 +201,11 @@ function exactWriteContent(value: unknown, connector: SharingConnector, expected
     if (!Array.isArray(pages) || pages.length !== 1) return false;
     const page = asRecord(decodedChild(pages[0]));
     return hasExactKeys(record, ["parent", "pages"]) &&
-      hasExactKeys(page, ["content"]) && page.content === expected;
+      (hasExactKeys(page, ["content"]) || (
+        hasExactKeys(page, ["content", "properties"]) &&
+        hasExactKeys(page.properties, ["title"]) &&
+        asRecord(page.properties).title === NOTION_SHARE_PAGE_TITLE
+      )) && page.content === expected;
   }
   const keys = record.type === "stream"
     ? ["type", "to", "topic", "content"]
@@ -314,9 +320,22 @@ function jsonLines(raw: string): Array<Record<string, unknown>> {
   });
 }
 
+function canonicalConnectorTool(connector: string, tool: string): { connector: string; tool: string } {
+  // Codex's runtime-owned Apps bridge preserves the app namespace in tool names.
+  // Never treat the whole bridge (or a similar app prefix) as the selected app.
+  if (connector === "codex_apps" && tool.startsWith("notion__")) {
+    return { connector: "notion", tool: tool.slice("notion__".length) };
+  }
+  if (connector === "codex_apps" && tool.startsWith("notion.")) {
+    return { connector: "notion", tool: tool.slice("notion.".length).replaceAll("-", "_") };
+  }
+  if (connector === "codex_apps__notion") return { connector: "notion", tool };
+  return { connector, tool };
+}
+
 function connectorToolIdentity(name: string): { connector: string; tool: string } | null {
-  const double = /^mcp__([A-Za-z0-9.-]+)__(.+)$/.exec(name);
-  if (double) return { connector: double[1]!, tool: double[2]! };
+  const double = /^mcp__([A-Za-z0-9_.-]+?)__(.+)$/.exec(name);
+  if (double) return canonicalConnectorTool(double[1]!, double[2]!);
   const single = /^mcp_([A-Za-z0-9.-]+)_(.+)$/.exec(name);
   return single ? { connector: single[1]!, tool: single[2]! } : null;
 }
@@ -348,21 +367,31 @@ export function extractConnectorToolCalls(raw: string): AuditedConnectorToolCall
   for (const row of rows) {
     const item = asRecord(row.item);
     if (item.type === "mcp_tool_call") {
-      const connector = boundedString(item.server, 100);
-      const name = boundedString(item.tool, 200);
+      const identity = canonicalConnectorTool(boundedString(item.server, 100), boundedString(item.tool, 200));
+      const connector = identity.connector;
+      const name = identity.tool;
       const resultText = [
         item.result === null || item.result === undefined ? "" : serialized(item.result),
         item.error ? serialized(item.error) : "",
       ].filter(Boolean).join("\n");
       if (connector && name) {
-        calls.push({
+        const call: AuditedConnectorToolCall = {
           connector,
           name,
           argumentsText: serialized(item.arguments),
           resultText,
           transportError: item.status === "completed" ? Boolean(item.error) : true,
           success: item.status === "completed" && !item.error && toolResultSucceeded(resultText),
-        });
+        };
+        const id = typeof item.id === "string" && item.id.length <= 200 ? item.id : "";
+        const prior = id ? byId.get(`codex:${id}`) : undefined;
+        if (prior) {
+          if (item.arguments === undefined) call.argumentsText = prior.argumentsText;
+          Object.assign(prior, call);
+        } else {
+          calls.push(call);
+          if (id) byId.set(`codex:${id}`, call);
+        }
       }
     }
 
@@ -441,7 +470,7 @@ const CONNECTOR_TOOLS: Record<SharingConnector, {
   write: readonly string[];
 }> = {
   notion: {
-    read: ["notion_search", "notion_fetch", "search", "fetch"],
+    read: ["notion_search", "notion_fetch", "search", "fetch", "notion_list_recent_pages"],
     write: ["notion_create_pages"],
   },
   zulip: {
@@ -467,10 +496,11 @@ function connectionRuntime(connection: PersistedAgentConnection, workDir: string
   }
   const executable = boundedString(connection.settings.executablePath, 1_000);
   if (!executable) throw new Error(`${connection.label} has no executable path`);
+  const model = boundedString(connection.settings.conversationModel, 200);
   const command = connection.adapter === "codex"
-    ? [executable, "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
+    ? [executable, "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--model", model]
     : connection.adapter === "claude-code"
-      ? [executable, "--print", "--output-format", "stream-json", "--verbose"]
+      ? [executable, "--print", "--output-format", "stream-json", "--verbose", "--model", model]
       : [];
   const provider = connection.adapter === "claude-code" ? "claude" : connection.adapter;
   if (connection.adapter === "openclaw") {
@@ -482,6 +512,7 @@ function connectionRuntime(connection: PersistedAgentConnection, workDir: string
   if (command.length === 0 || !["codex", "claude"].includes(provider)) {
     throw new Error(`${connection.label} does not have a supported Sharing connector adapter`);
   }
+  if (!model) throw new Error(`Choose an explicit Conversation model for ${connection.label} in Settings > Agent Connections before configuring Sharing`);
   return {
     provider: provider as AgentRuntime["provider"],
     label: connection.label,
@@ -512,6 +543,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
       "Do not write, create, update, or delete anything.",
       "List destinations that can receive a Yulu Test Share.",
       ...(input.connector === "notion" ? [
+        "Use at most one read: prefer notion_list_recent_pages with limit 10. If that tool is not available, use one basic Yulu keyword search without optional filters or content highlights. Do not enumerate shared, private, or favorite page lists, inspect page bodies, or retry other searches. Return only destinations supported by that one result; an empty list is valid.",
         'For each Notion value use canonical JSON matching notion_create_pages parent exactly: {"page_id":"..."} or {"data_source_id":"..."}.',
       ] : []),
       ...(input.connector === "zulip" ? [
@@ -524,9 +556,8 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
     const rawOptions = Array.isArray(value.options) ? value.options : [];
     const options = rawOptions.slice(0, 100).flatMap((raw): ConnectorDestinationOption[] => {
       const option = asRecord(raw);
-      const value = boundedString(option.value, 500);
-      if (!value) return [];
-      const destination = input.connector === "notion" ? canonicalNotionDestination(value) : value;
+      const destination = input.connector === "notion"
+        ? canonicalNotionDestination(option.value) : boundedString(option.value, 500);
       if (!destination) return [];
       return [{ label: boundedString(option.label, 200) || destination, value: destination }];
     });
@@ -543,6 +574,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
     const result = await this.invoke(input.connection, input.connector, 30_000, [
       `Run one bounded, read-only ${input.connector} connector readiness probe.`,
       "Prove that runtime-owned authorization can access the connector without relying on configuration files alone.",
+      ...(input.connector === "notion" ? ["Prefer a single notion_list_recent_pages call with limit 1; do not use plan-specific search filters or enumerate other page lists."] : []),
       "Do not create, update, or delete any external content.",
       `Return only JSON: {"status":"ready","connector":"${input.connector}","detail":"what access was verified"}.`,
     ].join("\n"), "read");
@@ -594,8 +626,9 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
       ]),
       ...(input.connector === "notion" ? [
         `Pass the saved destination object as the exact top-level parent and create exactly one page whose content is the exact ${test ? "fixed message" : "summary snapshot"}.`,
+        `Set only the required page title property: ${JSON.stringify({ title: NOTION_SHARE_PAGE_TITLE })}. Do not derive a title from the meeting or add other properties.`,
       ] : []),
-      `Return only JSON: {"status":"sent","connector":"${input.connector}","destination":"${input.destination}","id":"external receipt id","url":"external receipt URL if available"}.`,
+      `Return only JSON: ${JSON.stringify({status:"sent",connector:input.connector,destination:input.destination,id:"external receipt id",url:"external receipt URL if available"})}.`,
     ].join("\n");
     const runtime = connectionRuntime(input.connection, this.options.scriptDir);
     let result: AgentCliRunResult;
@@ -621,7 +654,8 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
       throw new SharingConnectorUnknownOutcomeError((error as Error).message);
     }
     const status = boundedString(value.status, 20).toLowerCase();
-    const destination = boundedString(value.destination, 500);
+    const destination = input.connector === "notion" && exactNotionParent(value.destination, input.destination)
+      ? input.destination : boundedString(value.destination, 500);
     const receiptId = boundedIdentifier(value.id, 500);
     const receiptUrl = boundedString(value.url, 2_000);
     if (
@@ -677,7 +711,8 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
     } catch (error) {
       throw new SharingConnectorUnknownOutcomeError((error as Error).message);
     }
-    const destination = boundedString(value.destination, 500);
+    const destination = input.connector === "notion" && exactNotionParent(value.destination, input.destination)
+      ? input.destination : boundedString(value.destination, 500);
     const receiptId = boundedIdentifier(value.id, 500);
     const receiptUrl = boundedString(value.url, 2_000);
     if (

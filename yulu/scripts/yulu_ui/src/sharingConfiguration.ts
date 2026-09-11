@@ -742,13 +742,23 @@ export class SharingConfiguration {
     detail: string,
   ) {
     const executable = String(connection.settings.executablePath ?? connection.adapter).trim();
+    if (/^Choose an explicit Conversation model /i.test(detail)) return detail;
+    if (/model requires a newer version of Codex/i.test(detail)) {
+      return `Update the Codex CLI at "${executable}" to a version that supports its selected model, then return to Settings > Sharing and ${retryAction}. Yulu has not changed the Agent or model.`;
+    }
     if (/guard denied (?:an unauthorized tool call|before any connector write was authorized)/i.test(detail)) {
       return `Return to Settings > Sharing and ${retryAction}; if ${connection.label} repeats an unauthorized tool call, update that Agent before retrying.`;
     }
-    if (/(?:sharing guard|pre-tool authorization|hook did not|hooks? (?:is|are) (?:unavailable|unsupported))/i.test(detail)) {
+    if (/\b(?:timed? out|timeout)\b/i.test(detail)) {
+      return `Open ${connection.label} and check its startup, model and connector connection errors; this operation reached its time limit. After resolving them, return to Settings > Sharing and ${retryAction}.`;
+    }
+    if (/hooks? (?:is|are) (?:unavailable|unsupported)/i.test(detail)) {
       return connection.adapter === "codex"
         ? `Run "${executable} features list" and update Codex until it reports "hooks stable true", then return to Settings > Sharing and ${retryAction}.`
         : `Update ${connection.label} to a version with PreToolUse hooks enabled, then return to Settings > Sharing and ${retryAction}.`;
+    }
+    if (/(?:sharing guard|pre-tool authorization|hook did not)/i.test(detail)) {
+      return `${connection.label} did not prove Yulu's per-operation tool authorization. Check the Agent's startup errors and hook policy; do not disable the guard. Then return to Settings > Sharing and ${retryAction}.`;
     }
     if (/(?:not configured|not found|missing|unavailable|no executable)/i.test(detail)) {
       return `Run "${executable} mcp" and add the ${connector} connector to ${connection.label}, then return to Settings > Sharing and ${retryAction}.`;

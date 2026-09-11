@@ -26,6 +26,7 @@ export interface AgentCliRunResult {
   code: number;
   nativeSessionId?: string;
   rawStdout?: string;
+  timedOut?: boolean;
   connectorWriteState?: "not-started" | "authorized" | "unknown";
 }
 
@@ -40,6 +41,9 @@ export interface ConnectorToolPolicy {
   writeGuard?: { destination: string; content: string };
 }
 
+// Notion requires a page title. It is fixed, not inferred from meeting data.
+export const NOTION_SHARE_PAGE_TITLE = "Yulu Share";
+
 interface CodexSessionIndexEntry {
   id: string;
   updatedAt: string;
@@ -49,6 +53,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const UUID_ANYWHERE_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig;
 const HERMES_CONNECTOR_RE = /^[a-zA-Z0-9_.-]+$/;
 const HERMES_CONNECTOR_DISCOVERY_TIMEOUT_SECONDS = 8;
+// Codex initializes runtime-owned plugins/MCP servers before SessionStart.
+// Keep that cold-start cost separate from the bounded connector operation.
+const CODEX_CONNECTOR_STARTUP_ALLOWANCE_MS = 60_000;
 
 function codexHome(): string {
   return process.env.CODEX_HOME || join(homedir(), ".codex");
@@ -352,6 +359,7 @@ export function buildSharingGuardSource(rawPolicy: ConnectorToolPolicy, auditPat
   const policy = connectorPolicy(rawPolicy);
   const expected = JSON.stringify({
     connector: policy.connector,
+    notionPageTitle: NOTION_SHARE_PAGE_TITLE,
     tools: policy.allowedTools,
     readGuard: policy.readGuard,
     ...policy.writeGuard,
@@ -375,6 +383,9 @@ process.stdin.on("end", () => {
   const tool = String(event?.tool_name || "");
   const serverNames = expected.connector === "zulip" ? ["zulip", "zulipchat"] : [expected.connector];
   const allowedNames = serverNames.flatMap((server) => expected.tools.map((name) => \`mcp__\${server}__\${name}\`));
+  if (expected.connector === "notion") {
+    allowedNames.push(...expected.tools.map((name) => \`mcp__codex_apps__notion__\${name}\`));
+  }
   if (!allowedNames.includes(tool)) return deny("Sharing blocked an unexpected connector tool", tool);
   if (expected.readGuard) {
     const toolName = expected.tools.find((name) => serverNames.some((server) => tool === \`mcp__\${server}__\${name}\`));
@@ -431,7 +442,11 @@ process.stdin.on("end", () => {
         stable(parent) === stable(wanted) &&
         Array.isArray(pages) && pages.length === 1 &&
         pages[0] && typeof pages[0] === "object" && !Array.isArray(pages[0]) &&
-        exactKeys(pages[0], ["content"]) &&
+        (exactKeys(pages[0], ["content"]) || (
+          exactKeys(pages[0], ["content", "properties"]) &&
+          exactKeys(pages[0].properties, ["title"]) &&
+          pages[0].properties.title === expected.notionPageTitle
+        )) &&
         pages[0].content === expected.content
       );
     }
@@ -506,6 +521,7 @@ export function buildCodexConnectorCommand(
   const hooks = `{SessionStart=[{hooks=[${handler}]}],PreToolUse=[{matcher=".*",hooks=[${handler}]}]}`;
   return [
     ...command,
+    "-c", 'model_reasoning_effort="low"',
     "-c", `projects.${JSON.stringify(profile.cwd)}.trust_level="trusted"`,
     "-c", `hooks=${hooks}`,
     "--dangerously-bypass-hook-trust",
@@ -520,24 +536,29 @@ function inspectSharingHookAudit(profile: Pick<CodexConnectorProfile, "auditPath
     error: "Sharing guard did not execute; connector operation was not authorized",
     writeState: "unknown",
   };
-  const decisions = readFileSync(profile.auditPath, "utf8")
+  const entries = readFileSync(profile.auditPath, "utf8")
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .flatMap((line): string[] => {
+    .flatMap((line): Array<{ decision: string; tool: string }> => {
       try {
         const value = JSON.parse(line) as Record<string, unknown>;
-        return typeof value.decision === "string" ? [value.decision] : [];
+        const tool = typeof value.tool === "string" && /^[A-Za-z0-9_.:-]{1,200}$/.test(value.tool)
+          ? value.tool : "";
+        return typeof value.decision === "string" ? [{ decision: value.decision, tool }] : [];
       } catch {
         return [];
       }
     });
+  const decisions = entries.map(entry => entry.decision);
   if (decisions.includes("deny")) {
+    const tool = entries.find(entry => entry.decision === "deny")?.tool;
+    const detail = tool ? ` (tool: ${tool})` : "";
     return decisions.includes("allow") ? {
-      error: "Sharing guard denied a tool call after an authorized connector write",
+      error: `Sharing guard denied a tool call after an authorized connector operation${detail}`,
       writeState: "authorized",
     } : {
-      error: "Sharing guard denied before any connector write was authorized",
+      error: `Sharing guard denied before any connector write was authorized${detail}`,
       writeState: "not-started",
     };
   }
@@ -633,6 +654,27 @@ function extractCodexFinalMessage(stdout: string): string {
   return last;
 }
 
+function extractCodexFailureMessage(stdout: string): string {
+  let failure = "";
+  for (const line of stdout.split(/\r?\n/)) {
+    try {
+      const event = JSON.parse(line) as Record<string, unknown>;
+      // item.error also carries non-fatal startup warnings. Only a failed turn
+      // is authoritative; do not turn successful runs into failures.
+      if (event.type !== "turn.failed") continue;
+      const error = event.error as { message?: unknown } | undefined;
+      if (typeof error?.message !== "string") continue;
+      failure = error.message.trim();
+      try {
+        const envelope = JSON.parse(failure) as { error?: { message?: unknown }; message?: unknown };
+        const detail = envelope.error?.message ?? envelope.message;
+        if (typeof detail === "string" && detail.trim()) failure = detail.trim();
+      } catch { /* Plain runtime error text is already actionable. */ }
+    } catch { /* Ignore non-event output. */ }
+  }
+  return failure.slice(0, 2_000);
+}
+
 function findLikelyText(value: unknown): string | undefined {
   if (!value || typeof value !== "object") return undefined;
   if (Array.isArray(value)) {
@@ -684,7 +726,7 @@ function runSpawnCommand(command: string[], input: {
   stdin: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
-}): Promise<{ stdout: string; stderr: string; code: number }> {
+}): Promise<AgentCliRunResult> {
   return new Promise((resolve) => {
     const [rawCmd, ...args] = resolveBundledScriptArgs(command, input.cwd);
     const spawnEnv = envWithFallbackPath({ ...process.env, ...input.env });
@@ -696,13 +738,17 @@ function runSpawnCommand(command: string[], input: {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const finish = (result: { stdout: string; stderr: string; code: number }) => {
+    let timedOut = false;
+    const finish = (result: AgentCliRunResult) => {
       if (settled) return;
       settled = true;
       resolve(result);
     };
     const proc = spawn(cmd, args, { cwd: input.cwd, env: spawnEnv });
-    const timer = setTimeout(() => { proc.kill("SIGKILL"); }, input.timeoutMs);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill("SIGKILL");
+    }, input.timeoutMs);
     proc.stdin.write(input.stdin);
     proc.stdin.end();
     proc.stdout.on("data", (b: Buffer) => { stdout += b.toString("utf8"); });
@@ -713,7 +759,12 @@ function runSpawnCommand(command: string[], input: {
     });
     proc.on("close", (code: number | null) => {
       clearTimeout(timer);
-      finish({ stdout, stderr, code: code ?? 1 });
+      finish(timedOut ? {
+        stdout,
+        stderr: [`Agent command timed out after ${input.timeoutMs} ms (including runtime initialization)`, stderr.trim()].filter(Boolean).join("\n"),
+        code: 124,
+        timedOut: true,
+      } : { stdout, stderr, code: code ?? 1 });
     });
   });
 }
@@ -726,6 +777,7 @@ async function requireCodexSharingHooks(runtime: AgentRuntime, timeoutMs: number
     stdin: "",
     timeoutMs: Math.min(timeoutMs, 5_000),
   });
+  if (result.timedOut) return `Codex capability check timed out before any connector turn started\n${result.stderr}`;
   if (result.code === 0 && /^hooks\s+stable\s+true\s*$/m.test(result.stdout)) return null;
   const detail = (result.stderr || result.stdout).trim();
   return [
@@ -869,8 +921,14 @@ export async function runAgentCliCommand(args: {
     result = await runSpawnCommand(command, {
       cwd: profile?.cwd ?? args.runtime.cwd,
       stdin: args.prompt,
-      timeoutMs: args.timeoutMs,
+      timeoutMs: args.timeoutMs + (profile ? CODEX_CONNECTOR_STARTUP_ALLOWANCE_MS : 0),
     });
+    const failure = extractCodexFailureMessage(result.stdout);
+    if (failure) result = {
+      ...result,
+      stderr: [failure, result.stderr.trim()].filter(Boolean).join("\n"),
+      code: result.code || 1,
+    };
     if (profile) {
       const audit = inspectSharingHookAudit(profile);
       result = { ...result, connectorWriteState: audit.writeState };
@@ -900,5 +958,6 @@ export async function runAgentCliCommand(args: {
     nativeSessionId,
     rawStdout: result.stdout,
     connectorWriteState: result.connectorWriteState,
+    ...(result.timedOut ? { timedOut: true } : {}),
   };
 }

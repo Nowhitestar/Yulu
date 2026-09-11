@@ -134,9 +134,41 @@ describe("SharingConfiguration", () => {
     await expect(sharing.probe()).resolves.toMatchObject({
       connectorReadiness: {
         status: "failed",
-        remediation: 'Run "/fake/codex features list" and update Codex until it reports "hooks stable true", then return to Settings > Sharing and test connector access again.',
+        remediation: "Codex did not prove Yulu's per-operation tool authorization. Check the Agent's startup errors and hook policy; do not disable the guard. Then return to Settings > Sharing and test connector access again.",
       },
     });
+  });
+
+  it("reports a startup/operation timeout before secondary guard or model-cache errors", async () => {
+    const { adapter, sharing } = setup();
+    vi.mocked(adapter.probe).mockRejectedValue(new Error([
+      "Agent command timed out after 90000 ms (including runtime initialization)",
+      "failed to load models cache: missing field base_instructions",
+      "Sharing guard did not execute; connector operation was not authorized",
+    ].join("\n")));
+    sharing.select({ connectionId: "codex", connector: "notion" });
+
+    const result = await sharing.probe();
+    expect(result.connectorReadiness).toMatchObject({
+      status: "failed",
+      remediation: expect.stringContaining("startup, model and connector connection errors"),
+    });
+    expect(result.connectorReadiness.remediation).not.toMatch(/update Codex|add the notion connector/i);
+  });
+
+  it("identifies a CLI/model incompatibility rather than incorrectly blaming hooks", async () => {
+    const { adapter, sharing } = setup();
+    vi.mocked(adapter.discover).mockRejectedValue(new Error([
+      "The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again.",
+      "Sharing guard did not prove lifecycle and pre-tool authorization",
+    ].join("\n")));
+    sharing.select({ connectionId: "codex", connector: "notion" });
+    const result = await sharing.discover();
+    expect(result.connectorDiscovery).toMatchObject({
+      status: "failed", remediation: expect.stringContaining('Codex CLI at "/fake/codex"'),
+    });
+    expect(result.connectorDiscovery.remediation).toContain("supports its selected model");
+    expect(result.connectorDiscovery.remediation).not.toContain("hooks stable true");
   });
 
   it("keeps a proven pre-write Test Share rejection retryable with exact hook remediation", async () => {

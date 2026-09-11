@@ -90,6 +90,7 @@ interface XaiTextBoundary {
 }
 
 export interface DiscoveredAgentRuntime {
+  candidateId?: string;
   adapter: "codex" | "claude-code" | "hermes" | "openclaw";
   label: string;
   path: string;
@@ -792,11 +793,13 @@ export class AgentConnectionCenter {
       ...claudeConnections,
       ...conversationOnlyConnections,
     ];
-    const connectedAdapters = new Set(records
-      .filter((record) => record.kind === "supported-agent")
-      .map((record) => record.adapter));
     const candidates = this.host.listAgentConnectionCandidates()
-      .filter((candidate) => !connectedAdapters.has(candidate.adapter))
+      .filter((candidate) => {
+        const connected = records.filter(record => record.kind === "supported-agent" && record.adapter === candidate.adapter);
+        return connected.length === 0 || Boolean(candidate.detectedPath && connected.every(
+          record => record.settings.executablePath !== candidate.detectedPath,
+        ));
+      })
       .map((candidate) => ({
       id: candidate.id,
       kind: "supported-agent" as const,
@@ -1556,7 +1559,7 @@ export class AgentConnectionCenter {
     this.ensureMigrated();
     for (const runtime of this.options.discover()) {
       this.host.upsertAgentConnectionCandidate({
-        id: `candidate:${runtime.adapter}`,
+        id: runtime.candidateId ?? `candidate:${runtime.adapter}`,
         adapter: runtime.adapter,
         label: runtime.label,
         source: "discovered",

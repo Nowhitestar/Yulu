@@ -272,6 +272,27 @@ A suggested target remains unconfigured until the user explicitly saves it and
 the Host reads back the exact destination. Notion discovery stores the exact
 structured `notion_create_pages` parent (`{"page_id":"..."}` or
 `{"data_source_id":"..."}`), not a matching page title or nested hint.
+Structured parent objects and their JSON-string representation normalize to the
+same saved identity; malformed or ambiguous parents are not suggested. A Notion
+page can include only the fixed required title `Yulu Share`, never an inferred
+meeting title or additional properties. The approved content remains unchanged.
+
+Sharing and Agent Calendar connector calls use the selected Connection's explicit
+Conversation model. They pass that exact model to the CLI instead of inheriting
+the CLI's mutable global default. An unselected model stops before execution;
+there is no implicit model fallback.
+Codex connector operations use low reasoning for bounded configuration and
+receipt work, without changing the user's global CLI or Conversation settings.
+Notion Apps bridge names are recognized only within the exact Notion namespace;
+discovery is limited to one recent-page list (limit 10) or a basic Yulu search,
+not shared/private/favorite-page enumeration. Tool lifecycle updates sharing the
+same call ID count as one operation; distinct writes never collapse together.
+
+On macOS, runtime scanning also offers Codex CLIs already bundled in the Codex
+or ChatGPT desktop App. An alternate path remains a candidate even when a PATH
+CLI is connected. Choosing it is explicit, performs the normal runtime/OAuth
+status validation and uses the exact model entered; scanning alone never
+switches the active runtime or installs/upgrades any global program.
 
 Sharing Readiness additionally requires a freshly confirmed Test Share that
 contains only Yulu's connection-verification message. The selected Agent must
@@ -287,7 +308,7 @@ is the Codex 0.144.4 path proven to load without mutating persistent trust or
 configuration. The hook runs for every tool call: foreign tools are denied before
 execution, read phases permit only their explicit read allowlist, and the write
 phase permits one selected-connector tool only when its structured destination
-and single fixed meeting-free payload match exactly. That authorization is
+and single approved payload match exactly (plus the fixed Notion title). That authorization is
 consumed atomically before execution, so a second write in the same Test Share
 is denied before it can reach the connector. Before starting any connector
 turn, Yulu also requires `codex features list` to report exactly
@@ -301,6 +322,15 @@ configuration; it does not expose a credential-safe selected-server-only switch.
 Yulu intentionally does not inspect or reconstruct the credential-bearing MCP
 inventory. Those foreign servers remain unusable by this operation because the
 pre-tool guard denies every non-selected tool call before execution.
+
+Codex connector calls have a bounded 60-second initialization allowance in
+addition to their operation deadline: runtime-owned plugin, skill and MCP setup
+can otherwise consume the whole readiness probe before `SessionStart`. A timeout
+remains a failure, and an uncertain write remains fenced rather than retried.
+Yulu preserves structured `turn.failed` errors ahead of secondary hook/audit
+diagnostics, distinguishing a CLI/model incompatibility, a timeout, unavailable
+hooks and an unproven guard. It does not change the selected model or credentials
+to recover. Hook availability alone does not prove the CLI supports that model.
 
 Discovery, access, write, and read-back results are accepted only when the Agent
 session contains a successful selected-connector tool call. Write/read-back
