@@ -1780,6 +1780,8 @@ describe("public Agent Connection Host contract", () => {
     const unavailable = await setupResult.center.view();
     expect(unavailable.connections.find(({ id }: { id: string }) => id === "direct-xai")?.settings)
       .toMatchObject({ credentialSource: null });
+    expect(unavailable.connections.find(({ id }: { id: string }) => id === "direct-xai")?.authorization)
+      .toMatchObject({ oauthReadSucceeded: false, apiKeyReadSucceeded: true });
 
     const recovered = await setupResult.center.view();
     expect(recovered.connections.find(({ id }: { id: string }) => id === "direct-xai")?.settings)

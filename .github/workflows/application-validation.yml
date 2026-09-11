@@ -1,0 +1,102 @@
+name: Signed App validation (no release)
+
+# Deliberately triggered by an internal validation ref, never a PR or an RC tag.
+# This avoids requiring the developer's local login keychain for App validation.
+on:
+  push:
+    tags: ["internal/phase13-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yulu-signed-app-validation
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve locked toolchain and internal build identity
+        id: identity
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          base="${version%%[-+]*}"
+          {
+            printf 'node=%s\n' "$(python3 packaging/scripts/runtime_node_version.py packaging/runtime-lock.json)"
+            printf 'version=%s-dev.ci.%s\n' "$base" "$GITHUB_RUN_ID"
+            printf 'bundle_version=%s\n' "$base"
+            printf 'build=%s\n' "$(( $(git rev-list --count HEAD) * 2 ))"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.identity.outputs.node }}
+          cache: npm
+          cache-dependency-path: yulu/scripts/yulu_ui/package-lock.json
+
+      - name: Build current Host and frontend
+        working-directory: yulu/scripts/yulu_ui
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/packaging/scripts/install_application_node_dependencies.sh" "$PWD"
+          npm run build
+
+      - name: Sign and notarize complete internal App
+        env:
+          TAG: internal-validation
+          YULU_RELEASE_VERSION: ${{ steps.identity.outputs.version }}
+          YULU_BUNDLE_SHORT_VERSION: ${{ steps.identity.outputs.bundle_version }}
+          YULU_BUILD_NUMBER: ${{ steps.identity.outputs.build }}
+          YULU_CODESIGN_IDENTITY: ${{ secrets.YULU_CODESIGN_IDENTITY }}
+          YULU_CODESIGN_P12_BASE64: ${{ secrets.YULU_CODESIGN_P12_BASE64 }}
+          P12_PWD: ${{ secrets.P12_PWD }}
+          KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: bash packaging/scripts/sign_and_notarize.sh --validation
+
+      - name: Record source identity
+        env:
+          VALIDATION_VERSION: ${{ steps.identity.outputs.version }}
+          VALIDATION_BUILD: ${{ steps.identity.outputs.build }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          pathlib.Path("dist/validation-source.json").write_text(json.dumps({
+              "sourceCommit": os.environ["GITHUB_SHA"],
+              "version": os.environ["VALIDATION_VERSION"],
+              "build": os.environ["VALIDATION_BUILD"],
+              "runId": os.environ["GITHUB_RUN_ID"],
+              "publicRelease": False,
+              "formalAcceptance": False,
+          }, indent=2) + "\n")
+          PY
+
+      - name: Upload internal validation artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: yulu-app-validation-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          path: |
+            dist/yulu-validation-app.zip
+            dist/validation-checksums.txt
+            dist/validation-source.json
+
+      - name: Clean up ephemeral CI signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/yulu-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/asc_key.p8" \
+            "$RUNNER_TEMP/Yulu-notarize.zip"

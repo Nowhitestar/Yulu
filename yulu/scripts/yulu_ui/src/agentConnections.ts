@@ -411,6 +411,8 @@ export class AgentConnectionCenter {
         features: ["transcription", "summary", "conversation", "no-provider-fallback"] as const,
         oauthConnected: status.oauthConnected,
         apiKeyConfigured: status.apiKeyConfigured,
+        oauthReadSucceeded: status.oauthReadSucceeded,
+        apiKeyReadSucceeded: status.apiKeyReadSucceeded,
         status: status.authorization.status,
         verificationUrl: status.authorization.verificationUrl,
         userCode: status.authorization.userCode,
@@ -986,6 +988,8 @@ export class AgentConnectionCenter {
           source: null,
           oauthConnected: false,
           apiKeyConfigured: false,
+          oauthReadSucceeded: undefined,
+          apiKeyReadSucceeded: undefined,
           detail: "Add direct xAI in Agent Connection Center",
           authorization: {
             status: "idle" as const,
@@ -1008,7 +1012,14 @@ export class AgentConnectionCenter {
         source: direct.authorization.credentialSource,
         oauthConnected: direct.authorization.oauthConnected,
         apiKeyConfigured: direct.authorization.apiKeyConfigured,
-        detail: direct.authorization.connected ? "xAI connection is available" : "Connect xAI in Agent Connection Center",
+        oauthReadSucceeded: direct.authorization.oauthReadSucceeded,
+        apiKeyReadSucceeded: direct.authorization.apiKeyReadSucceeded,
+        detail: direct.authorization.connected ? "xAI connection is available"
+          : (direct.authorization.credentialSource === "api-key"
+            ? direct.authorization.apiKeyReadSucceeded === false
+            : direct.authorization.oauthReadSucceeded === false)
+            ? "The saved xAI credential is temporarily unreadable; keep it and check again"
+            : "Connect xAI in Agent Connection Center",
         authorization: {
           status: direct.authorization.status,
           verificationUrl: direct.authorization.verificationUrl,

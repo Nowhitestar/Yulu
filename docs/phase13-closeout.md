@@ -1,5 +1,33 @@
 # Phase 13 closeout — active scope, updated 2026-09-11
 
+## Current checkpoint
+
+- Installed: complete signed `0.23.0-dev.phase13.8`, build 1592. Migration
+  attempt 7 remains committed without replay; Host and Capture are running.
+  Native recording status reports microphone and system audio ready, idle.
+- The native window rendered the existing QA result after normal Navigate >
+  Open Yulu. Late-startup recovery is fixed in `16f0c2b` and passed full CI
+  `34574823529`, but that newer shell has not yet been installed. Do not call
+  cold-launch recovery accepted from the menu recovery alone.
+- Sharing now uses the explicitly selected, already-installed ChatGPT desktop
+  Codex CLI 0.153.4 and retains `gpt-5.6-sol`. Installed target discovery returned
+  10 recent Notion pages, and the separate read-only access probe passed.
+  No destination has been selected and no external write has been performed;
+  positive Test Share/manual Share readback awaits a designated test parent.
+- xAI's original saved grant is temporarily unreadable. This is not evidence of
+  lost authorization. Real recording/transcription/summary previously passed on
+  dev6; that does not establish current xAI readiness on dev8.
+- Local signing is unavailable. The user explicitly declined password access:
+  do not open Passwords/Keychain Access, read credential material, modify access
+  controls, reset stores, or retry local signing. Continue with simulated
+  credential tests and a complete signed CI validation artifact, using the
+  existing CI signing setup. Normal Yulu functionality is the only live account
+  verification path. No new OAuth authorization is implied.
+- The credential-error UI repair distinguishes unreadable from absent, offers
+  a read-only connection recheck, and retains the selected source/model. The
+  CI validation path creates no GitHub Release, DMG or update feed; its explicit
+  internal validation ref and artifact are not a new RC or formal acceptance.
+
 ## Goal and order
 
 Finish the existing guided-onboarding, manual-sharing and self-contained Mac App
@@ -62,7 +90,7 @@ candidate is not progress toward that outcome by itself.
   installed file, then retires only an identified idle old pair under the
   existing transaction lock. It does not depend on the old Host's health or
   restart already-current images. This also detects same-version rebuilds.
-- Complete signed local `0.23.0-dev.phase13.6` is installed. Normal launch
+- Complete signed local `0.23.0-dev.phase13.6` was installed. Normal launch
   replaced both old processes: Host PID 43977 and Capture PID 43978 report that
   version; microphone and system capture are ready. Attempt 7's committed
   journal is unchanged. This is local validation, not public RC acceptance.
@@ -77,7 +105,7 @@ candidate is not progress toward that outcome by itself.
   false, legacy delivery is absent, and Share Action count is zero. No historic
   recording was replayed. Sharing currently explains that its independent
   meeting-free Test Share must be verified before a meeting can be shared.
-- The installed App's MCP `health_check` now returns `ok=true`: bundled Host,
+- The dev6 App's MCP `health_check` returned `ok=true`: bundled Host,
   database and native audio socket are healthy. The complete migration/update
   regression batch passed 298 tests. The related recording/Doctor batch passed
   63 tests; Agent Connection/pipeline/recording command tests passed 135 tests
@@ -98,9 +126,9 @@ candidate is not progress toward that outcome by itself.
   were omitting the explicit model argument. Both adapters now pass the saved
   Connection model and reject a missing selection rather than using a global
   default. No CLI installation, selected model or credential was changed.
-- The desktop application also contains Codex CLI 0.153.4. Its read-only
+- The desktop application also contains Codex CLI 0.153.4. Its initial read-only
   diagnostic passed the model-version check but was denied by the tool guard;
-  it was not selected or installed. Diagnostic failures and timeouts are not
+  it was not yet selected at that checkpoint. Diagnostic failures and timeouts are not
   successful connector acceptance. No Test Share or meeting Share was sent.
 - The resulting evidence identified the missing exact Notion Apps namespace
   and the difference between hook names and CLI audit names. The batch now
@@ -137,17 +165,20 @@ candidate is not progress toward that outcome by itself.
   owner readiness and continues read-only startup polling at two-second intervals;
   it does not automatically retry services or migration. Its focused wiring
   check passes; the final native rebuild/installed UI check is pending.
-- A complete signed `0.23.0-dev.phase13.7` was built to verify the first Sharing
-  diagnostics repair, but remains uninstalled because the subsequent explicit
-  connector-model fix must be included in the same local update. The installed
-  usable version is still `0.23.0-dev.phase13.6`; no new RC is published.
+- A complete signed `0.23.0-dev.phase13.7` was built but never installed; dev8
+  included the subsequent connector repairs. Local dev9 compiled the late
+  startup fix but signing failed, so it was not installed. Public RC19 remains
+  unchanged; these intermediate artifacts are not public candidates.
 
 ## Remaining work in order
 
-1. Finish manual-sharing configuration/readback; ordinary App relaunch passed.
-   preserve the verified recording/transcript/summary/no-automatic-share result.
-   Reuse unrelated applicable evidence rather than replaying historical plans.
-2. Reconcile #170's existing applicable acceptance evidence, then make the one
+1. Install the consolidated complete CI-signed validation App and verify the
+   changed startup/error-recovery behavior through normal product UI. Preserve
+   the dev6 recording/transcript/summary/no-automatic-share evidence and record
+   current account readiness separately, without password/credential inspection.
+2. Finish the user-designated Test Share/manual Share write/readback. Discovery
+   and access tests have passed; they do not prove an external write succeeded.
+3. Reconcile #170's existing applicable acceptance evidence, then make the one
    consolidated public candidate and complete distribution/stable closure. Keep
    #145/#170/#171 open until their actual remaining outcomes are verified.
 
