@@ -360,6 +360,25 @@ afterEach(() => {
 });
 
 describe("public Agent Connection Host contract", () => {
+  it.each(["oauth", "api-key"] as const)("retains the explicitly selected %s summary credential across Host restarts without a new probe", (source) => {
+    const { center, makeCenter, host, credentials, text, audio } = setup({}, [], {
+      seedDirectCredentialSource: source,
+    });
+    expect(center.selectedXaiCredentialSource()).toBe(source);
+    expect(makeCenter().selectedXaiCredentialSource()).toBe(source);
+    expect(credentials.status).not.toHaveBeenCalled();
+    expect(text.request).not.toHaveBeenCalled();
+    expect(audio.testXai).not.toHaveBeenCalled();
+    host.close();
+  });
+
+  it("does not infer a summary credential from available credentials when the user has no selected source", () => {
+    const { center, host, credentials } = setup({}, [], { seedDirectCredentialSource: false });
+    expect(center.selectedXaiCredentialSource()).toBeNull();
+    expect(credentials.status).not.toHaveBeenCalled();
+    host.close();
+  });
+
   it("projects a crash-recovered fence without readiness history as a public Conversation Unknown Outcome", async () => {
     const setupResult = setup({
       audio: {},

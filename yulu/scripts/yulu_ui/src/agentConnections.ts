@@ -366,6 +366,13 @@ export class AgentConnectionCenter {
     this.credentials.setPreferredSource?.(this.credentialSource(direct?.settings.credentialSource));
   }
 
+  selectedXaiCredentialSource(): XaiCredentialSource | null {
+    const direct = this.host.listAgentConnectionRecords().find((record) =>
+      record.id === DIRECT_XAI_ID && record.kind === "direct-provider" && record.adapter === "direct-xai"
+    );
+    return this.credentialSource(direct?.settings.credentialSource);
+  }
+
   async view() {
     this.ensureMigrated();
     const config = this.config.read();

@@ -36,11 +36,10 @@ candidate is not progress toward that outcome by itself.
   supported recovery. Do not repeat these or reset the system-wide background
   database. Separate legacy and bundled launchd registration identities, while
   retaining the existing signed Capture identity and transaction/data boundaries.
-- The development App successfully started both new owners. Final migration
-  validation then rejected the Host's normal database upgrade; rollback treated
-  its normal config/database writes as foreign changes. The physical journal is
-  attempt 6 / `rollback_blocked`, with old services restored and original data
-  preserved. The current App is **not yet usable/accepted**.
+- The original failure rejected the Host's normal database upgrade and then
+  treated its normal writes as foreign rollback changes. The complete signed
+  development App recovered attempt 6 normally and committed attempt 7 at
+  `2026-09-11T03:39:13.906530+00:00`, preserving original data and credentials.
 - The unreleased batch now initializes schema/config offline after exact-copy
   verification, checks that prepared schema at commit, and retains an initialized
   attempt's new data instead of deleting legitimate writes. It also handles old
@@ -55,20 +54,42 @@ candidate is not progress toward that outcome by itself.
   initialization tests and typecheck. Collector tests passed, including the
   prepared-schema contract and rejection of mismatched evidence. These are not
   installed acceptance claims.
-- The next complete development App build stopped at Developer ID signing after
-  the Mac locked (`errSecInternalComponent`); native automation confirmed that
-  automatic unlock failed. Unlock was requested once while code work continued.
-  Do not install the partially signed artifact or publish from it.
+- The signing interruption was resolved after the Mac unlocked; no keychain,
+  trust, TCC or system-wide background-service reset was used. Partial builds
+  were not installed or published.
+- Physical whole-App replacement exposed stale same-label background owners.
+  The batch now compares the OS-reported loaded executable image with the
+  installed file, then retires only an identified idle old pair under the
+  existing transaction lock. It does not depend on the old Host's health or
+  restart already-current images. This also detects same-version rebuilds.
+- Complete signed local `0.23.0-dev.phase13.6` is installed. Normal launch
+  replaced both old processes: Host PID 43977 and Capture PID 43978 report that
+  version; microphone and system capture are ready. Attempt 7's committed
+  journal is unchanged. This is local validation, not public RC acceptance.
+- This batch also pins xAI summary to the durable selected credential source
+  after Host restart, recognizes self-contained Apps in Doctor without a Git
+  checkout or legacy Hermes dependency, and gives cold native recording startup
+  its own bounded acknowledgement deadline.
+- Cold-start QA recording `Phase13consolidatedcoreflowQA_20260911_124019` returned
+  success and normal Stop enqueued task `58245ef5-b2fb-4f23-80ff-04bcaa163f34`.
+  The task completed on attempt 1 with no error; Host returned committed
+  transcript (227 characters) and summary (1,110 characters). `sendToNotion` is
+  false, legacy delivery is absent, and Share Action count is zero. No historic
+  recording was replayed. Sharing currently explains that its independent
+  meeting-free Test Share must be verified before a meeting can be shared.
+- The installed App's MCP `health_check` now returns `ok=true`: bundled Host,
+  database and native audio socket are healthy. The complete migration/update
+  regression batch passed 298 tests. The related recording/Doctor batch passed
+  63 tests; Agent Connection/pipeline/recording command tests passed 135 tests
+  and Node typecheck passed. The shell and signed App inventory were built and
+  verified together, not patched after installation.
 
 ## Remaining work in order
 
-1. Assemble/sign the complete current development batch, replace the App as a
-   whole, and let the product recover attempt 6 and retry normally. Do not edit
-   the journal, databases or original service files by hand.
-2. Verify actual current owners and a real recording with committed transcript,
-   pinned xAI summary, and no Share Action until a fresh manual command. Check
-   relaunch and the affected migration/update paths; reuse unrelated evidence.
-3. Reconcile #170's existing applicable acceptance evidence, then make the one
+1. Finish manual-sharing configuration/readback and ordinary App relaunch;
+   preserve the verified recording/transcript/summary/no-automatic-share result.
+   Reuse unrelated applicable evidence rather than replaying historical plans.
+2. Reconcile #170's existing applicable acceptance evidence, then make the one
    consolidated public candidate and complete distribution/stable closure. Keep
    #145/#170/#171 open until their actual remaining outcomes are verified.
 

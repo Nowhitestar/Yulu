@@ -1509,6 +1509,75 @@ def legacy_install_present(
         os.close(directory_fd)
 
 
+def _bundled_job_identity(output: str, app_bundle: Path, program: Path) -> tuple[str, str, str] | None:
+    def field(name: str) -> str:
+        match = re.search(rf"^\s*{re.escape(name)} = (.+?)\s*$", output, re.MULTILINE)
+        return match.group(1) if match else ""
+
+    managed = field("managed_by")
+    executable = field("program") or field("program identifier")
+    expected_relative = f"{program.relative_to(app_bundle)} (mode: 2)"
+    pid = field("pid")
+    if managed != "com.apple.xpc.ServiceManagement" or executable not in {str(program), expected_relative}:
+        return None
+    if not pid.isdecimal() or int(pid) <= 1:
+        raise MigrationBlocked("application service has no running owner")
+    return executable, pid, managed
+
+
+def _bundled_owner_image_is_current(
+    app_bundle: Path, label: str, pid: int, *, run: Callable[..., object] = subprocess.run,
+) -> bool:
+    """Compare the kernel's loaded image with the installed file, without HTTP.
+
+    Finder replacement preserves paths but changes file identities. This also
+    detects a same-version rebuild and works when the old Host is unresponsive.
+    """
+    capture = label == "com.yulu.app.capture"
+    executable = app_bundle / (
+        "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon" if capture
+        else "Contents/Resources/runtime/bin/node"
+    )
+    try:
+        generation = _process_generation(pid)
+        if _process_executable(pid) != executable.resolve():
+            raise MigrationBlocked("application service executable does not match its job")
+        result = run(
+            ["/usr/sbin/lsof", "-a", "-p", str(pid), "-d", "txt", "-F0pfnDi"],
+            text=True, capture_output=True, check=False, timeout=5,
+        )
+        output = str(getattr(result, "stdout", ""))
+        if getattr(result, "returncode", 1) != 0 or len(output) > _MAX_PLIST_BYTES:
+            raise MigrationBlocked("application service loaded image is unavailable")
+        files: list[dict[str, str]] = []
+        observed_pid = None
+        for raw in output.split("\0"):
+            field = raw.lstrip("\n")
+            if field.startswith("p"):
+                observed_pid = field[1:]
+            elif field.startswith("f"):
+                files.append({})
+            elif field[:1] in {"n", "D", "i"} and files:
+                files[-1][field[0]] = field[1:]
+        images = [entry for entry in files if entry.get("n") == str(executable)]
+        if observed_pid != str(pid) or len(images) != 1 or _process_generation(pid) != generation:
+            raise MigrationBlocked("application service startup identity changed")
+        installed = executable.stat()
+        return (int(images[0]["D"], 16), int(images[0]["i"])) == (installed.st_dev, installed.st_ino)
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
+        raise MigrationBlocked("cannot inspect application service loaded image") from exc
+
+
+def _current_bundled_services_present(launchctl: Callable[[list[str]], object]) -> bool:
+    for label in ("com.yulu.app.host", "com.yulu.app.capture"):
+        result = launchctl(["print", f"gui/{os.geteuid()}/{label}"])
+        if getattr(result, "returncode", 1) == 0:
+            return True
+        if getattr(result, "returncode", 1) != 113:
+            raise MigrationBlocked("cannot inspect application services")
+    return False
+
+
 def retire_previous_bundled_owners(
     app_bundle: Path,
     socket_path: Path,
@@ -1516,12 +1585,15 @@ def retire_previous_bundled_owners(
     launchctl: Callable[[list[str]], object] = _run_launchctl,
     run: Callable[..., object] = subprocess.run,
 ) -> bool:
-    """Retire only observed old App jobs, never repository LaunchAgents."""
+    """Refresh replaced App owners under the migration lock, without recopying data."""
     expected = {
         "com.yulu.ui": ("RetiredHost.plist", app_bundle / "Contents/MacOS/yulu_app"),
         "com.yulu.audiodaemon": ("RetiredCapture.plist", app_bundle / "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"),
+        "com.yulu.app.host": ("com.yulu.ui.plist", app_bundle / "Contents/MacOS/yulu_app"),
+        "com.yulu.app.capture": ("com.yulu.audiodaemon.plist", app_bundle / "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"),
     }
     previous: list[tuple[str, str, str]] = []
+    current: list[tuple[str, str, str]] = []
     repository_job = False
     for label, (plist, program) in expected.items():
         observed = launchctl(["print", f"gui/{os.geteuid()}/{label}"])
@@ -1530,12 +1602,24 @@ def retire_previous_bundled_owners(
         if getattr(observed, "returncode", 1) != 0:
             raise MigrationBlocked("cannot inspect previous application services")
         output = str(getattr(observed, "stdout", ""))
-        job_program = re.search(r"^\s*program = (.+?)\s*$", output, re.MULTILINE)
-        managed = re.search(r"^\s*managed_by = com\.apple\.xpc\.ServiceManagement\s*$", output, re.MULTILINE)
-        if not managed or job_program is None or job_program.group(1) != str(program):
+        identity = _bundled_job_identity(output, app_bundle, program)
+        if identity is None:
+            if label.startswith("com.yulu.app."):
+                raise MigrationBlocked("application service ownership is unexpected")
             repository_job = True
             continue
-        previous.append((label, plist, output))
+        (current if label.startswith("com.yulu.app.") else previous).append((label, plist, output))
+    if current:
+        needs_refresh = False
+        for label, _, output in current:
+            identity = _bundled_job_identity(output, app_bundle, expected[label][1])
+            assert identity is not None
+            if not _bundled_owner_image_is_current(app_bundle, label, int(identity[1])):
+                needs_refresh = True
+        if needs_refresh:
+            # Treat Host and Capture as one installed version, even if only one
+            # survived Finder replacement. Do not restart already-current pairs.
+            previous.extend(current)
     if not previous:
         return False
     if repository_job:
@@ -1544,21 +1628,16 @@ def retire_previous_bundled_owners(
     for label, plist, output in previous:
         # Recheck immediately before each removal. A Host-only replacement can
         # still have a recording on the current Capture's standard socket.
-        capture_loaded = any(name == "com.yulu.audiodaemon" for name, _, _ in previous)
+        capture_loaded = any(name in {"com.yulu.audiodaemon", "com.yulu.app.capture"} for name, _, _ in previous + current)
         assert_legacy_capture_idle(
             CaptureJobSnapshot(loaded=capture_loaded or socket_path.exists(), executable=capture),
             socket_path,
         )
-        current = launchctl(["print", f"gui/{os.geteuid()}/{label}"])
-        if getattr(current, "returncode", 1) != 0 or str(getattr(current, "stdout", "")) != output:
-            # launchctl statistics can vary, so bind the stable program and PID.
-            current_text = str(getattr(current, "stdout", ""))
-            for field in ("program", "pid", "managed_by"):
-                pattern = rf"^\s*{field} = (.+?)\s*$"
-                before = re.search(pattern, output, re.MULTILINE)
-                after = re.search(pattern, current_text, re.MULTILINE)
-                if getattr(current, "returncode", 1) != 0 or (before.group(1) if before else None) != (after.group(1) if after else None):
-                    raise MigrationBlocked("previous application service identity changed")
+        rechecked = launchctl(["print", f"gui/{os.geteuid()}/{label}"])
+        if getattr(rechecked, "returncode", 1) != 0 or _bundled_job_identity(
+            str(getattr(rechecked, "stdout", "")), app_bundle, expected[label][1]
+        ) != _bundled_job_identity(output, app_bundle, expected[label][1]):
+            raise MigrationBlocked("previous application service identity changed")
         result = run(
             [str(app_bundle / "Contents/MacOS/yulu_app"), "--retire-bundled-service", plist],
             text=True, capture_output=True, check=False, timeout=15,
@@ -2040,7 +2119,7 @@ def run_migration_session(
                     launch_agents_dir=launch_agents_dir,
                     launchctl=launchctl,
                 )
-            if not journal_present and not legacy_present:
+            if not journal_present and not legacy_present and not _current_bundled_services_present(launchctl):
                 output_stream.write(b'{"action":"fresh_install"}\n')
                 output_stream.flush()
                 if attempt_fd >= 0:
@@ -2073,7 +2152,7 @@ def run_migration_session(
         app_bundle = step_arguments.get("app_bundle")
         if step is run_migration_step and isinstance(app_bundle, Path):
             try:
-                retired = retire_previous_bundled_owners(
+                retire_previous_bundled_owners(
                     app_bundle, paths.cache_root / "audio_daemon.sock", launchctl=launchctl,
                 )
             except MigrationBlocked as failure:
@@ -2081,7 +2160,7 @@ def run_migration_session(
                 output_stream.write((json.dumps({"action": action, "detail": str(failure)}) + "\n").encode())
                 output_stream.flush()
                 return 75
-            if retired and not _migration_journal_entry_present(paths.journal_path) and not legacy_install_present(
+            if not _migration_journal_entry_present(paths.journal_path) and not legacy_install_present(
                 legacy_root=legacy_root, launch_agents_dir=launch_agents_dir, launchctl=launchctl,
             ):
                 output_stream.write(b'{"action":"fresh_install"}\n')

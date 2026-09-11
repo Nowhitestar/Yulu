@@ -695,6 +695,30 @@ def test_overall_health_fails_closed_for_unavailable_or_unverified_agent_connect
     }) is True
 
 
+def test_complete_application_health_does_not_require_a_checkout_or_legacy_hermes():
+    doctor = load_doctor()
+    report = {
+        "checks": [{"name": "python3", "ok": True}],
+        "legacy_processes": [],
+        "source_git": {"is_repo": False},
+        "source_install": {"present": False},
+        "runtime_exists": True,
+        "socket": {"ok": True},
+        "yulu_ui": {
+            "installation_kind": "application", "dist_server_present": True,
+            "dist_web_present": True, "plist_installed": True,
+            "launchctl_loaded": True, "healthz_ok": True,
+        },
+        "agent_pipeline": {"enabled": True, "ok": False, "reasons": ["hermes_cli"]},
+        "agent_connections": {"ok": True, "connections": []},
+    }
+    assert doctor._overall_ok(report) is True
+    for key in ("dist_server_present", "dist_web_present", "plist_installed", "launchctl_loaded", "healthz_ok"):
+        assert doctor._overall_ok({**report, "yulu_ui": {**report["yulu_ui"], key: False}}) is False
+    assert doctor._overall_ok({**report, "socket": {"ok": False}}) is False
+    assert doctor._overall_ok({**report, "agent_connections": {"ok": False}}) is False
+
+
 def test_hermes_contract_probes_required_command_surfaces(monkeypatch):
     doctor = load_doctor()
     outputs = {

@@ -924,6 +924,15 @@ def collect_report(
     }
 
 
+def _has_runtime_source(report: dict[str, Any]) -> bool:
+    ui = report.get("yulu_ui", {})
+    if ui.get("installation_kind") == "application":
+        return bool(report.get("runtime_exists") and all(ui.get(key) for key in (
+            "dist_server_present", "dist_web_present", "plist_installed",
+        )))
+    return bool(report.get("source_git", {}).get("is_repo") or report.get("source_install", {}).get("present"))
+
+
 def _overall_ok(report: dict[str, Any]) -> bool:
     required = ["python3"]
     checks = {c["name"]: c for c in report.get("checks", [])}
@@ -931,10 +940,20 @@ def _overall_ok(report: dict[str, Any]) -> bool:
         return False
     if report.get("legacy_processes"):
         return False
-    if not report.get("source_git", {}).get("is_repo") and not report.get("source_install", {}).get("present"):
+    if not _has_runtime_source(report):
+        return False
+    ui = report.get("yulu_ui", {})
+    is_application = ui.get("installation_kind") == "application"
+    if is_application and not (
+        ui.get("launchctl_loaded") and ui.get("healthz_ok")
+        and report.get("socket", {}).get("ok")
+        and isinstance(report.get("agent_connections"), dict)
+    ):
         return False
     pipeline = report.get("agent_pipeline", {})
-    if pipeline.get("enabled") and not pipeline.get("ok"):
+    # The bundled Host owns the pipeline and its explicit Agent Connections.
+    # Retired legacy Hermes configuration is not an Application Runtime dependency.
+    if not is_application and pipeline.get("enabled") and not pipeline.get("ok"):
         return False
     connections = report.get("agent_connections")
     if connections is not None:
@@ -955,7 +974,7 @@ def print_human(report: dict[str, Any]) -> None:
     git = report["source_git"]
     install = report.get("source_install", {})
     print("Yulu doctor")
-    print(f"{mark(git.get('is_repo', False) or install.get('present', False))} source: {report['source_root']}")
+    print(f"{mark(_has_runtime_source(report))} source: {report['source_root']}")
     if git.get("is_repo"):
         dirty = "dirty" if git.get("dirty") else "clean"
         print(f"  branch={git.get('branch')} head={git.get('head')} {dirty}")
@@ -967,6 +986,8 @@ def print_human(report: dict[str, Any]) -> None:
         print(f"  install={source} version={version} asset={asset}")
         if install.get("error"):
             print(f"  install metadata error: {install['error']}")
+    elif report.get("yulu_ui", {}).get("installation_kind") == "application":
+        print("  install=self-contained-application")
     print(f"{mark(report['runtime_exists'])} runtime: {report['runtime_root']}")
     print(f"{mark(not report['legacy_processes'])} legacy root: {report['legacy_root']} exists={report['legacy_root_exists']} legacy_processes={len(report['legacy_processes'])}")
     host_tasks = report.get("host_tasks", {})

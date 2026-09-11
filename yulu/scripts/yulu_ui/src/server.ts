@@ -369,10 +369,10 @@ async function startLockedServer(
     vocabDb: () => dbProxy.vocab,
     transcription: audioTranscription,
     xaiText,
-    xaiSummaryCredentialSource: () => {
-      const proof = xaiReadiness.get("summary");
-      return proof?.status === "ready" ? proof.credentialSource : null;
-    },
+    // Pin the user's durable selection, not a process-local test cache that is
+    // empty after every Host restart. Execution still checks the exact grant,
+    // disclosure and model; a disconnected source waits without fallback.
+    xaiSummaryCredentialSource: () => agentConnections.selectedXaiCredentialSource(),
     supportedAgentSummaryAdapter,
   });
   if (localCaption.status().installed && configManager.read().transcription.engine === "local") {

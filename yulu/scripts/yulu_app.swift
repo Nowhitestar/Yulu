@@ -2696,7 +2696,7 @@ if CommandLine.arguments.count == 3,
     let policy = LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path)
     let name = CommandLine.arguments[2]
     guard policy.persistentRegistrationAllowed,
-          ["RetiredHost.plist", "RetiredCapture.plist"].contains(name) else { exit(78) }
+          ["RetiredHost.plist", "RetiredCapture.plist", "com.yulu.ui.plist", "com.yulu.audiodaemon.plist"].contains(name) else { exit(78) }
     let service = SMAppService.agent(plistName: name)
     if service.status != .notRegistered && service.status != .notFound {
         do { try service.unregister() } catch { exit(75) }

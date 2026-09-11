@@ -106,7 +106,12 @@ def test_python_session_holds_one_attempt_lock_until_process_exit(tmp_path, monk
 
     arguments = [
         sys.executable,
-        str(SCRIPTS / "application_migration.py"),
+        "-c",
+        # This is a process-lock test, not a request to inspect or retire the
+        # developer's actual installed App services.
+        f"import sys; sys.path.insert(0, {str(SCRIPTS)!r}); import application_migration as m; "
+        "m.retire_previous_bundled_owners = lambda *args, **kwargs: False; "
+        "sys.exit(m.main(sys.argv[1:]))",
         "session",
         "--home", str(tmp_path),
         "--durable", str(paths.durable_root),
@@ -332,6 +337,8 @@ def test_disabled_state_residue_without_legacy_artifacts_is_fresh_install(
             ["print", f"gui/{os.geteuid()}/{label}"]
             for label in LEGACY_JOB_LABELS
         ],
+        ["print", f"gui/{os.geteuid()}/com.yulu.app.host"],
+        ["print", f"gui/{os.geteuid()}/com.yulu.app.capture"],
     ]
     assert not home.exists()
     assert not durable.exists()
@@ -2744,7 +2751,8 @@ def test_runtime_retention_preserves_preexisting_data_and_rejects_symlinks(tmp_p
 
 
 @pytest.mark.parametrize("scenario", ["bundled", "repository", "recording", "mixed"])
-def test_manual_app_replacement_retires_only_idle_previous_bundled_owners(scenario, tmp_path, monkeypatch):
+@pytest.mark.parametrize("program_field", ["absolute", "bundle-relative"])
+def test_manual_app_replacement_retires_only_idle_previous_bundled_owners(scenario, program_field, tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(SCRIPTS))
     import application_migration as migration
 
@@ -2753,6 +2761,8 @@ def test_manual_app_replacement_retires_only_idle_previous_bundled_owners(scenar
         "com.yulu.ui": f"program = {app}/Contents/MacOS/yulu_app\npid = 100\nmanaged_by = com.apple.xpc.ServiceManagement\n",
         "com.yulu.audiodaemon": f"program = {app}/Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon\npid = 200\nmanaged_by = com.apple.xpc.ServiceManagement\n",
     }
+    if program_field == "bundle-relative":
+        previous = {label: output.replace(f"program = {app}/", "program identifier = ").replace("\npid", " (mode: 2)\npid") for label, output in previous.items()}
     if scenario in {"repository", "mixed"}:
         previous["com.yulu.ui"] = "program = /original/node\npid = 100\n"
     if scenario == "repository":
@@ -2787,6 +2797,127 @@ def test_manual_app_replacement_retires_only_idle_previous_bundled_owners(scenar
     else:
         assert migration.retire_previous_bundled_owners(app, tmp_path / "capture.sock", launchctl=launchctl, run=retire) is (scenario == "bundled")
         assert calls == (["idle", "RetiredHost.plist", "idle", "RetiredCapture.plist"] if scenario == "bundled" else [])
+
+
+@pytest.mark.parametrize("scenario", ["current", "old-host-image", "old-capture-image", "recording", "changed-pid", "foreign-job", "unavailable"])
+def test_same_label_app_replacement_refreshes_only_observed_idle_old_image(scenario, tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import application_migration as migration
+
+    app = tmp_path / "Yulu.app"
+    (app / "Contents").mkdir(parents=True)
+    (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"YuluReleaseVersion": "0.23.0", "CFBundleVersion": "1600"}))
+    jobs = {
+        "com.yulu.app.host": "program identifier = Contents/MacOS/yulu_app (mode: 2)\npid = 100\nmanaged_by = com.apple.xpc.ServiceManagement\n",
+        "com.yulu.app.capture": "program identifier = Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon (mode: 2)\npid = 200\nmanaged_by = com.apple.xpc.ServiceManagement\n",
+    }
+    if scenario == "foreign-job":
+        jobs["com.yulu.app.host"] = jobs["com.yulu.app.host"].replace("Contents/MacOS/yulu_app", "Contents/MacOS/foreign")
+    calls = []
+    reads = {}
+
+    def launchctl(arguments):
+        label = arguments[1].rsplit("/", 1)[-1]
+        reads[label] = reads.get(label, 0) + 1
+        output = jobs.get(label, "")
+        if scenario == "changed-pid" and reads[label] > 1:
+            output = output.replace("pid = 100", "pid = 300")
+        return SimpleNamespace(returncode=0 if label in jobs else 113, stdout=output)
+
+    def image_current(bundle, label, pid):
+        assert bundle == app
+        assert pid == (100 if label.endswith("host") else 200)
+        if scenario == "unavailable":
+            raise migration.MigrationBlocked("cannot inspect application service loaded image")
+        if scenario == "current":
+            return True
+        return label.endswith("host") if scenario == "old-capture-image" else label.endswith("capture")
+
+    def idle(snapshot, socket_path):
+        assert snapshot.loaded is True
+        calls.append("idle")
+        if scenario == "recording":
+            raise migration.MigrationBlocked("legacy Capture recording is active")
+
+    def retire(arguments, **options):
+        name = arguments[-1]
+        calls.append(name)
+        jobs.pop({"com.yulu.ui.plist": "com.yulu.app.host", "com.yulu.audiodaemon.plist": "com.yulu.app.capture"}[name])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(migration, "_bundled_owner_image_is_current", image_current)
+    monkeypatch.setattr(migration, "assert_legacy_capture_idle", idle)
+    if scenario in {"recording", "changed-pid", "foreign-job", "unavailable"}:
+        with pytest.raises(migration.MigrationBlocked):
+            migration.retire_previous_bundled_owners(app, tmp_path / "capture.sock", launchctl=launchctl, run=retire)
+        assert len(jobs) == 2
+        assert not any(call.endswith(".plist") for call in calls)
+    else:
+        assert migration.retire_previous_bundled_owners(app, tmp_path / "capture.sock", launchctl=launchctl, run=retire) is (scenario != "current")
+        assert calls == ([] if scenario == "current" else ["idle", "com.yulu.ui.plist", "idle", "com.yulu.audiodaemon.plist"])
+
+
+@pytest.mark.parametrize("replaced", [False, True])
+def test_app_without_legacy_data_does_not_start_migration_when_services_already_exist(replaced, tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import application_migration as migration
+
+    home = tmp_path / "home"
+    paths = migration.MigrationPaths(durable_root=home / "data", cache_root=home / "cache")
+    calls = []
+    def launchctl(arguments):
+        if arguments[0] == "print-disabled":
+            return SimpleNamespace(returncode=0, stdout="{}")
+        return SimpleNamespace(returncode=0 if arguments[1].endswith("/com.yulu.app.host") else 113, stdout="")
+    def refresh(*args, **kwargs):
+        assert paths.attempt_lock_path.exists()
+        calls.append("refresh")
+        return replaced
+    monkeypatch.setattr(migration, "retire_previous_bundled_owners", refresh)
+    output = io.BytesIO()
+    assert migration.run_migration_session(
+        paths=paths, home_dir=home, legacy_root=home / "legacy",
+        launch_agents_dir=home / "LaunchAgents", archive_dir=home / "archive",
+        legacy_capture_socket=home / "legacy.sock", node_executable=tmp_path / "node",
+        server_js=tmp_path / "server.js", app_bundle=tmp_path / "Yulu.app",
+        launchctl=launchctl, input_stream=io.BytesIO(), output_stream=output,
+    ) == 0
+    assert json.loads(output.getvalue()) == {"action": "fresh_install"}
+    assert calls == ["refresh"]
+    assert not paths.journal_path.exists()
+    assert not paths.durable_root.exists()
+
+
+@pytest.mark.parametrize("scenario", ["current", "replaced", "pid", "missing", "executable", "generation", "malformed", "timeout"])
+def test_loaded_image_check_is_bound_to_the_observed_host(scenario, tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import application_migration as migration
+
+    app = tmp_path / "Yulu.app"
+    executable = app / "Contents/Resources/runtime/bin/node"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"fixture")
+    info = executable.stat()
+    loaded_inode = info.st_ino + 1 if scenario == "replaced" else info.st_ino
+    fields = [f"p{200 if scenario == 'pid' else 100}", "\nftxt", f"D{hex(info.st_dev)}", f"i{loaded_inode}", f"n{executable}", "\n"]
+    if scenario == "missing":
+        fields[4] = "n/another-file"
+    if scenario == "malformed":
+        fields[3] = "inot-an-inode"
+    generations = iter([(10, 20), (10, 21) if scenario == "generation" else (10, 20)])
+    monkeypatch.setattr(migration, "_process_generation", lambda pid: next(generations))
+    monkeypatch.setattr(migration, "_process_executable", lambda pid: tmp_path / "foreign" if scenario == "executable" else executable)
+    def inspect(arguments, **options):
+        assert arguments == ["/usr/sbin/lsof", "-a", "-p", "100", "-d", "txt", "-F0pfnDi"]
+        assert options["timeout"] == 5
+        if scenario == "timeout":
+            raise subprocess.TimeoutExpired(arguments, 5)
+        return SimpleNamespace(returncode=0, stdout="\0".join(fields))
+    if scenario not in {"current", "replaced"}:
+        with pytest.raises(migration.MigrationBlocked):
+            migration._bundled_owner_image_is_current(app, "com.yulu.app.host", 100, run=inspect)
+    else:
+        assert migration._bundled_owner_image_is_current(app, "com.yulu.app.host", 100, run=inspect) is (scenario == "current")
 
 
 @pytest.mark.parametrize("unsafe", ["root_symlink", "queue_symlink"])
