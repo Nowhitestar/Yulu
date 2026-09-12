@@ -477,17 +477,27 @@ async function validateDatabases(root, committed) {
     if (sqliteQuery(path, "PRAGMA quick_check;", `${name} quick_check`) !== "ok") fail(`${name} database quick_check failed`);
     const schema = sqliteQuery(path, "SELECT type || '|' || name || '|' || IFNULL(sql,'') FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name;", `${name} schema observation`);
     const sentinel = sqliteQuery(path, queries[name], `${name} representative row observation`);
-    if (!schema || !sentinel || sha256Text(schema) !== beforeItems[name]?.schemaSha256 || sha256Text(sentinel) !== beforeItems[name]?.sentinelSha256) {
-      fail(`${name} database schema or representative row changed across migration`);
+    if (!schema || !sentinel || sha256Text(sentinel) !== beforeItems[name]?.sentinelSha256) {
+      fail(`${name} database or representative row was not preserved across migration`);
     }
+    let preparedSchemaSha256;
     if (committed) {
       const item = requireRecord(dataManifest[`${name}.sqlite`], "committed SQLite manifest is missing");
       if (
         !isSha256(item.sourceSchemaSHA256) || item.sourceSchemaSHA256 !== item.destinationSchemaSHA256 ||
         !isSha256(item.sourceContentSHA256) || item.sourceContentSHA256 !== item.destinationContentSHA256
       ) fail("committed SQLite checkpoint manifest is not source-equivalent");
+      preparedSchemaSha256 = item.preparedSchemaObservationSHA256;
+      if (!isSha256(preparedSchemaSha256) || sha256Text(schema) !== preparedSchemaSha256) {
+        fail(`${name} database schema does not match the prepared application schema`);
+      }
+    } else if (sha256Text(schema) !== beforeItems[name]?.schemaSha256) {
+      fail(`${name} rollback database schema changed`);
     }
-    output[name] = { quickCheck: "ok", schemaSha256: sha256Text(schema), sentinelSha256: sha256Text(sentinel) };
+    output[name] = {
+      quickCheck: "ok", schemaSha256: sha256Text(schema), sentinelSha256: sha256Text(sentinel),
+      ...(committed ? { preparedSchemaSha256 } : {}),
+    };
   }
   return output;
 }
@@ -579,8 +589,8 @@ function validateLegacyOwners() {
 }
 
 function validateCurrentOwners() {
-  const host = launchState("com.yulu.ui");
-  const capture = launchState("com.yulu.audiodaemon");
+  const host = launchState("com.yulu.app.host");
+  const capture = launchState("com.yulu.app.capture");
   if (!host.loaded || !capture.loaded || !host.pid || !capture.pid || host.pid === capture.pid) fail("current Host/Capture owners are not unique");
   const hostExecutable = join(installedApp, "Contents/Resources/runtime/bin/node");
   const hostTarget = join(installedApp, "Contents/Resources/Host/server.js");
@@ -596,7 +606,7 @@ function validateCurrentOwners() {
     const combined = `${display.stdout}\n${display.stderr}`;
     if (!combined.includes("TeamIdentifier=WMU9678ZQL")) fail("current owner has the wrong signing Team ID");
   }
-  for (const label of LABELS.filter((value) => value !== "com.yulu.ui" && value !== "com.yulu.audiodaemon")) {
+  for (const label of LABELS) {
     if (launchState(label).loaded) fail("a non-current legacy job remains loaded after commit");
   }
   return { hostPidSha256: sha256Text(String(host.pid)), capturePidSha256: sha256Text(String(capture.pid)), signed: true };

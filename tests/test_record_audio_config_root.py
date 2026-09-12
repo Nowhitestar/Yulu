@@ -4,9 +4,57 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "yulu" / "scripts"
+
+
+@pytest.mark.parametrize(("action", "deadline"), [("start", 45), ("status", 15), ("stop", 15)])
+def test_capture_start_has_a_bounded_cold_start_deadline_and_closes_socket(monkeypatch, tmp_path, action, deadline):
+    import record_audio
+
+    socket_path = tmp_path / "capture.sock"
+    socket_path.touch()
+    monkeypatch.setattr(record_audio, "SOCKET_PATH", socket_path)
+
+    class Socket:
+        timeout = None
+        closed = False
+        chunks = [b'{"status":"recording","file":"/test/recording.wav"}', b""]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.closed = True
+
+        def settimeout(self, value):
+            self.timeout = value
+
+        def connect(self, _path):
+            pass
+
+        def sendall(self, _data):
+            pass
+
+        def shutdown(self, _how):
+            pass
+
+        def recv(self, _size):
+            return self.chunks.pop(0)
+
+    connection = Socket()
+    monkeypatch.setattr(record_audio.socket, "socket", lambda *_args: connection)
+    assert record_audio.socket_send({"action": action})["status"] == "recording"
+    assert connection.timeout == deadline
+    assert connection.closed is True
+
+    connection.closed = False
+    monkeypatch.setattr(connection, "recv", lambda _size: (_ for _ in ()).throw(TimeoutError("timed out")))
+    assert record_audio.socket_send({"action": action}) is None
+    assert connection.closed is True
 
 
 def test_recording_commands_use_standard_durable_and_ipc_roots(tmp_path):

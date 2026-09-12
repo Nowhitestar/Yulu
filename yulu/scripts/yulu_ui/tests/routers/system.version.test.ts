@@ -3,7 +3,7 @@
 // VERSION file — NOT the yulu_ui package version) plus the install source from
 // .yulu-install.json. This query never writes and never throws: a missing or
 // unreadable VERSION degrades to "unknown", and a missing install file → null.
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -14,7 +14,27 @@ function ctxWith(versionFile: string, installJson: string): AppContext {
   return { paths: { versionFile, installJson } } as unknown as AppContext;
 }
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("system.yuluVersion (P3-1 About block)", () => {
+  it("uses the installed App identity without requiring checkout version files", async () => {
+    vi.stubEnv("YULU_SERVICE_OWNER", "com.yulu.app.host");
+    vi.stubEnv("YULU_PRODUCT_VERSION", "0.23.0-dev.ci.123");
+    const caller = createCaller(systemRouter, ctxWith("/no/such/VERSION", "/no/such/.yulu-install.json"));
+    await expect(caller.yuluVersion()).resolves.toEqual({
+      version: "0.23.0-dev.ci.123", installSource: "Yulu.app",
+    });
+  });
+
+  it("does not claim a bundled identity for a legacy or unversioned Host", async () => {
+    vi.stubEnv("YULU_SERVICE_OWNER", "com.yulu.ui");
+    vi.stubEnv("YULU_PRODUCT_VERSION", "0.23.0-dev.ci.123");
+    const caller = createCaller(systemRouter, ctxWith("/no/such/VERSION", "/no/such/.yulu-install.json"));
+    await expect(caller.yuluVersion()).resolves.toEqual({ version: "unknown", installSource: null });
+    vi.stubEnv("YULU_SERVICE_OWNER", "com.yulu.app.host");
+    vi.stubEnv("YULU_PRODUCT_VERSION", " ");
+    await expect(caller.yuluVersion()).resolves.toEqual({ version: "unknown", installSource: null });
+  });
   it("returns the trimmed VERSION string and a release install source", async () => {
     const dir = mkdtempSync(join(tmpdir(), "yulu_ver_"));
     const versionFile = join(dir, "VERSION");

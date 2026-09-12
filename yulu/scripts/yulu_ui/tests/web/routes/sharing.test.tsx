@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { LanguageProvider, translate } from "../../../web/src/i18n/LanguageProvider.js";
 
-const { actions, viewState } = vi.hoisted(() => ({
+const { actions, viewState, mutationState } = vi.hoisted(() => ({
+  mutationState: {
+    sending: false,
+    saved: undefined as undefined | ((value: { destination: { value: string } }) => void),
+  },
   actions: {
     select: vi.fn(),
     discover: vi.fn(),
@@ -41,7 +45,10 @@ const { actions, viewState } = vi.hoisted(() => ({
 
 vi.mock("../../../web/src/trpc.js", () => {
   const mutation = (spy: ReturnType<typeof vi.fn>) => ({
-    useMutation: () => ({ mutate: spy, isPending: false }),
+    useMutation: (options: { onSuccess?: typeof mutationState.saved }) => {
+      if (spy === actions.saveDestination) mutationState.saved = options.onSuccess;
+      return { mutate: spy, isPending: spy === actions.testShare && mutationState.sending };
+    },
   });
   return {
     trpc: {
@@ -65,6 +72,8 @@ import { SharingSettings } from "../../../web/src/routes/sharing.js";
 describe("SharingSettings", () => {
   beforeEach(() => {
     for (const action of Object.values(actions)) action.mockReset();
+    mutationState.sending = false;
+    mutationState.saved = undefined;
     viewState.destination = { configured: false, value: "", savedAt: null };
     viewState.sharingReadiness = {
       status: "untested",
@@ -89,6 +98,29 @@ describe("SharingSettings", () => {
       .toBeInTheDocument();
     expect(view.queryByText(translate("zh", "sharing.destination.configured")))
       .toBeNull();
+  });
+
+  it("explains exact page links and submits the pasted value without silently sending", () => {
+    const view = render(<LanguageProvider><SharingSettings /></LanguageProvider>);
+    const field = view.getByPlaceholderText(translate("zh", "sharing.destination.notionPlaceholder"));
+    expect(field).toHaveAttribute("spellcheck", "false");
+    expect(field).toHaveAttribute("autocorrect", "off");
+    expect(view.getByText(translate("zh", "sharing.destination.notionHelp"))).toBeInTheDocument();
+    const url = "https://app.notion.com/p/0123456789abcdef0123456789abcdef?pvs=204";
+    fireEvent.change(field, { target: { value: url } });
+    fireEvent.click(view.getByRole("button", { name: translate("zh", "sharing.destination.save") }));
+    expect(actions.saveDestination).toHaveBeenCalledWith({ destination: url });
+    expect(actions.testShare).not.toHaveBeenCalled();
+    const canonical = '{"page_id":"01234567-89ab-cdef-0123-456789abcdef"}';
+    act(() => mutationState.saved?.({ destination: { value: canonical } }));
+    expect(field).toHaveValue(canonical);
+  });
+
+  it("keeps the user informed while the same action is in flight", () => {
+    mutationState.sending = true;
+    const view = render(<LanguageProvider><SharingSettings /></LanguageProvider>);
+    expect(view.getByRole("status")).toHaveTextContent(translate("zh", "sharing.testShare.pending"));
+    expect(view.getByRole("button", { name: translate("zh", "sharing.testShare.action") })).toBeDisabled();
   });
 
   it("requires a fresh confirmation before sending the meeting-free Test Share", () => {

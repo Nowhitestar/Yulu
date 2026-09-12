@@ -683,8 +683,8 @@ exit 0
 if [[ -e {post_commit_flag} ]]; then
   read -r host_pid capture_pid < {owner_generation}
   case "$2" in
-    */com.yulu.ui) printf 'pid = %s\n' "$host_pid"; exit 0 ;;
-    */com.yulu.audiodaemon) printf 'pid = %s\n' "$capture_pid"; exit 0 ;;
+    */com.yulu.app.host) printf 'pid = %s\n' "$host_pid"; exit 0 ;;
+    */com.yulu.app.capture) printf 'pid = %s\n' "$capture_pid"; exit 0 ;;
     *) exit 113 ;;
   esac
 fi
@@ -1067,8 +1067,8 @@ def test_post_commit_observer_proves_new_restart_generation_and_stable_no_update
     _command(system_bin / "launchctl", f'''
 read -r host_pid capture_pid < {generation}
 case "$2" in
-  */com.yulu.ui) printf 'pid = %s\n' "$host_pid" ;;
-  */com.yulu.audiodaemon) printf 'pid = %s\n' "$capture_pid" ;;
+  */com.yulu.app.host) printf 'pid = %s\n' "$host_pid" ;;
+  */com.yulu.app.capture) printf 'pid = %s\n' "$capture_pid" ;;
   *) exit 113 ;;
 esac
 ''')
@@ -1106,7 +1106,7 @@ exit 1
         (journey, {
             "schema": 1, "formalAcceptance": False, "checkpoint": "production-share", "releaseTag": TAG,
             "health": {
-                "status": "ok", "serviceOwner": "com.yulu.ui", "databaseStatus": "ok",
+                "status": "ok", "serviceOwner": "com.yulu.app.host", "databaseStatus": "ok",
                 "database": {"schemaVersion": 1, "minimumReadableVersion": 1},
             },
             "version": {"product": TAG.removeprefix("v"), "bundle": "2304"},

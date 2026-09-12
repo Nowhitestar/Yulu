@@ -10,6 +10,8 @@ import {
   type SharingConnectorAdapter,
 } from "../src/sharingConfiguration.js";
 
+const destination = JSON.stringify({ page_id: "01234567-89ab-cdef-0123-456789abcdef" });
+
 describe("SharingConfiguration", () => {
   let root = "";
   let host: HostStore | undefined;
@@ -51,6 +53,21 @@ describe("SharingConfiguration", () => {
       duplicateConfirmed,
     };
   }
+
+  it("saves a pasted page link as an explicit parent and rejects a title before any write", async () => {
+    const { adapter, sharing } = setup();
+    sharing.select({ connectionId: "codex", connector: "notion" });
+    vi.mocked(adapter.probe).mockResolvedValue({ detail: "ready" });
+    await sharing.probe();
+    const saved = sharing.saveDestination({ destination: "https://app.notion.com/p/0123456789abcdef0123456789abcdef?pvs=204" });
+    expect(saved.destination).toMatchObject({
+      configured: true, value: '{"page_id":"01234567-89ab-cdef-0123-456789abcdef"}',
+    });
+    expect(() => sharing.saveDestination({ destination: "Private Notes" })).toThrow(/page title alone/);
+    expect(sharing.view().destination).toEqual(saved.destination);
+    expect(adapter.testShare).not.toHaveBeenCalled();
+    expect(adapter.share).not.toHaveBeenCalled();
+  });
 
   it("selects one Supported Agent Connection for Sharing without implying connector or destination readiness", () => {
     const { sharing } = setup();
@@ -102,7 +119,7 @@ describe("SharingConfiguration", () => {
   it("keeps destination discovery distinct from a bounded Connector Readiness probe", async () => {
     const { adapter, sharing } = setup();
     vi.mocked(adapter.discover).mockResolvedValue({
-      options: [{ label: "Product Notes", value: "Product Notes" }],
+      options: [{ label: "Product Notes", value: destination }],
       detail: "Found 1 Notion destination",
     });
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
@@ -111,7 +128,7 @@ describe("SharingConfiguration", () => {
     expect(await sharing.discover()).toMatchObject({
       connectorDiscovery: {
         status: "ready",
-        options: [{ label: "Product Notes", value: "Product Notes" }],
+        options: [{ label: "Product Notes", value: destination }],
       },
       connectorReadiness: { status: "untested" },
       destination: { configured: false, value: "" },
@@ -134,9 +151,41 @@ describe("SharingConfiguration", () => {
     await expect(sharing.probe()).resolves.toMatchObject({
       connectorReadiness: {
         status: "failed",
-        remediation: 'Run "/fake/codex features list" and update Codex until it reports "hooks stable true", then return to Settings > Sharing and test connector access again.',
+        remediation: "Codex did not prove Yulu's per-operation tool authorization. Check the Agent's startup errors and hook policy; do not disable the guard. Then return to Settings > Sharing and test connector access again.",
       },
     });
+  });
+
+  it("reports a startup/operation timeout before secondary guard or model-cache errors", async () => {
+    const { adapter, sharing } = setup();
+    vi.mocked(adapter.probe).mockRejectedValue(new Error([
+      "Agent command timed out after 90000 ms (including runtime initialization)",
+      "failed to load models cache: missing field base_instructions",
+      "Sharing guard did not execute; connector operation was not authorized",
+    ].join("\n")));
+    sharing.select({ connectionId: "codex", connector: "notion" });
+
+    const result = await sharing.probe();
+    expect(result.connectorReadiness).toMatchObject({
+      status: "failed",
+      remediation: expect.stringContaining("startup, model and connector connection errors"),
+    });
+    expect(result.connectorReadiness.remediation).not.toMatch(/update Codex|add the notion connector/i);
+  });
+
+  it("identifies a CLI/model incompatibility rather than incorrectly blaming hooks", async () => {
+    const { adapter, sharing } = setup();
+    vi.mocked(adapter.discover).mockRejectedValue(new Error([
+      "The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again.",
+      "Sharing guard did not prove lifecycle and pre-tool authorization",
+    ].join("\n")));
+    sharing.select({ connectionId: "codex", connector: "notion" });
+    const result = await sharing.discover();
+    expect(result.connectorDiscovery).toMatchObject({
+      status: "failed", remediation: expect.stringContaining('Codex CLI at "/fake/codex"'),
+    });
+    expect(result.connectorDiscovery.remediation).toContain("supports its selected model");
+    expect(result.connectorDiscovery.remediation).not.toContain("hooks stable true");
   });
 
   it("keeps a proven pre-write Test Share rejection retryable with exact hook remediation", async () => {
@@ -147,7 +196,7 @@ describe("SharingConfiguration", () => {
     );
     sharing.select({ connectionId: "codex", connector: "notion" });
     await sharing.probe();
-    sharing.saveDestination({ destination: JSON.stringify({ page_id: "parent-123" }) });
+    sharing.saveDestination({ destination });
 
     await expect(sharing.testShare(testAction(false))).resolves.toMatchObject({
       sharingReadiness: {
@@ -162,46 +211,46 @@ describe("SharingConfiguration", () => {
   it("never reports a suggested target as configured until it is explicitly saved and read back", async () => {
     const { adapter, host: currentHost, sharing } = setup();
     vi.mocked(adapter.discover).mockResolvedValue({
-      options: [{ label: "Product Notes", value: "Product Notes" }],
+      options: [{ label: "Product Notes", value: destination }],
       detail: "Found Product Notes",
     });
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
     sharing.select({ connectionId: "codex", connector: "notion" });
 
     const discovered = await sharing.discover();
-    expect(discovered.connectorDiscovery.options[0]).toMatchObject({ value: "Product Notes" });
+    expect(discovered.connectorDiscovery.options[0]).toMatchObject({ value: destination });
     expect(discovered.destination).toEqual({ configured: false, value: "", savedAt: null });
-    expect(() => sharing.saveDestination({ destination: "Product Notes" }))
+    expect(() => sharing.saveDestination({ destination }))
       .toThrow(/Test connector access/);
 
     await sharing.probe();
-    expect(sharing.saveDestination({ destination: "Product Notes" })).toMatchObject({
+    expect(sharing.saveDestination({ destination })).toMatchObject({
       destination: {
         configured: true,
-        value: "Product Notes",
+        value: destination,
         savedAt: expect.any(String),
       },
       sharingReadiness: { status: "untested" },
     });
-    expect(currentHost.getSharingConfiguration()?.destination).toBe("Product Notes");
+    expect(currentHost.getSharingConfiguration()?.destination).toBe(destination);
   });
 
   it("establishes Sharing Readiness only from a verified meeting-free Test Share receipt", async () => {
     const { adapter, sharing } = setup();
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
     vi.mocked(adapter.testShare).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-123",
       receiptUrl: "https://notion.so/page-123",
     });
     vi.mocked(adapter.verifyReceipt).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-123",
       receiptUrl: "https://notion.so/page-123",
     });
     sharing.select({ connectionId: "codex", connector: "notion" });
     await sharing.probe();
-    sharing.saveDestination({ destination: "Product Notes" });
+    sharing.saveDestination({ destination });
 
     expect(sharing.view().sharingReadiness.status).toBe("untested");
     expect(await sharing.testShare(testAction(false))).toMatchObject({
@@ -216,12 +265,12 @@ describe("SharingConfiguration", () => {
     });
     expect(adapter.testShare).toHaveBeenCalledWith(expect.objectContaining({
       connector: "notion",
-      destination: "Product Notes",
+      destination,
       content: YULU_TEST_SHARE_CONTENT,
     }));
     expect(adapter.verifyReceipt).toHaveBeenCalledWith(expect.objectContaining({
       connector: "notion",
-      destination: "Product Notes",
+      destination,
       content: YULU_TEST_SHARE_CONTENT,
       receipt: expect.objectContaining({ receiptId: "page-123" }),
     }));
@@ -233,12 +282,12 @@ describe("SharingConfiguration", () => {
   it("exposes exact meeting-free Test Share evidence only after the current receipt is verified", async () => {
     const { adapter, sharing } = setup();
     vi.mocked(adapter.discover).mockResolvedValue({
-      options: [{ label: "Product Notes", value: "Product Notes" }],
+      options: [{ label: "Product Notes", value: destination }],
       detail: "Found Product Notes",
     });
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
     vi.mocked(adapter.testShare).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-adoption-1",
       receiptUrl: "https://notion.so/page-adoption-1",
     });
@@ -248,7 +297,7 @@ describe("SharingConfiguration", () => {
     await sharing.discover();
     expect(() => sharing.adoptionEvidence()).toThrow(/verified Test Share/i);
     await sharing.probe();
-    sharing.saveDestination({ destination: "Product Notes" });
+    sharing.saveDestination({ destination });
     expect(() => sharing.adoptionEvidence()).toThrow(/verified Test Share/i);
 
     const action = testAction(false);
@@ -262,7 +311,7 @@ describe("SharingConfiguration", () => {
         adapter: "codex",
         connectionRevision: expect.stringMatching(/^[a-f0-9]{64}$/),
         connector: "notion",
-        destination: "Product Notes",
+        destination,
         destinationSavedAt: expect.any(String),
         actionId: action.actionId,
         contentSha256: "6efa1b2d90a7d7946bd0942ebdb55bef26b6ee71b37489b77a9592b723f9ebde",
@@ -278,7 +327,7 @@ describe("SharingConfiguration", () => {
     const { adapter, sharing } = setup();
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
     vi.mocked(adapter.testShare).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-unknown",
       receiptUrl: "https://notion.so/page-unknown",
     });
@@ -287,7 +336,7 @@ describe("SharingConfiguration", () => {
     );
     sharing.select({ connectionId: "codex", connector: "notion" });
     await sharing.probe();
-    sharing.saveDestination({ destination: "Product Notes" });
+    sharing.saveDestination({ destination });
 
     const unknown = await sharing.testShare(testAction(false));
     expect(unknown).toMatchObject({
@@ -312,18 +361,18 @@ describe("SharingConfiguration", () => {
     const { adapter, sharing } = setup();
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
     vi.mocked(adapter.testShare).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-123",
       receiptUrl: "https://notion.so/page-123",
     });
     vi.mocked(adapter.verifyReceipt).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-123",
       receiptUrl: "https://notion.so/page-123",
     });
     sharing.select({ connectionId: "codex", connector: "notion" });
     await sharing.probe();
-    sharing.saveDestination({ destination: "Product Notes" });
+    sharing.saveDestination({ destination });
 
     await sharing.testShare(testAction(false));
     await expect(sharing.testShare(testAction(false))).rejects.toThrow(/duplicate/i);
@@ -336,7 +385,7 @@ describe("SharingConfiguration", () => {
     );
     const unknown = await sharing.testShare(testAction(true));
     vi.mocked(adapter.verifyReceipt).mockResolvedValueOnce({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-123",
       receiptUrl: "https://notion.so/page-123",
     });
@@ -351,18 +400,18 @@ describe("SharingConfiguration", () => {
     const { adapter, host: currentHost, sharing } = setup();
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
     vi.mocked(adapter.testShare).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-123",
       receiptUrl: "https://notion.so/page-123",
     });
     vi.mocked(adapter.verifyReceipt).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-123",
       receiptUrl: "https://notion.so/page-123",
     });
     sharing.select({ connectionId: "codex", connector: "notion" });
     await sharing.probe();
-    sharing.saveDestination({ destination: "Product Notes" });
+    sharing.saveDestination({ destination });
     await sharing.testShare(testAction(false));
 
     const restarted = new SharingConfiguration({ host: currentHost, adapter });
@@ -387,14 +436,14 @@ describe("SharingConfiguration", () => {
     const { adapter, host: currentHost, sharing } = setup();
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
     vi.mocked(adapter.testShare).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-revision-a",
       receiptUrl: "https://notion.so/page-revision-a",
     });
     vi.mocked(adapter.verifyReceipt).mockImplementation(async (input) => input.receipt);
     sharing.select({ connectionId: "codex", connector: "notion" });
     await sharing.probe();
-    sharing.saveDestination({ destination: "Product Notes" });
+    sharing.saveDestination({ destination });
     await sharing.testShare(testAction(false));
     expect(sharing.adoptionEvidence().snapshot.adapter).toBe("codex");
 
@@ -419,18 +468,18 @@ describe("SharingConfiguration", () => {
     const { adapter, sharing } = setup();
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
     vi.mocked(adapter.testShare).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-123",
       receiptUrl: "https://notion.so/page-123",
     });
     vi.mocked(adapter.verifyReceipt).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-123",
       receiptUrl: "https://notion.so/page-123",
     });
     sharing.select({ connectionId: "codex", connector: "notion" });
     await sharing.probe();
-    sharing.saveDestination({ destination: "Product Notes" });
+    sharing.saveDestination({ destination });
     const input = {
       actionId: "00000000-0000-4000-8000-000000000001",
       duplicateConfirmed: true,
@@ -446,31 +495,31 @@ describe("SharingConfiguration", () => {
   it("pins one production Share Action snapshot and replays its durable outcome without another write", async () => {
     const { adapter, host: currentHost, sharing } = setup();
     const productionWrite = vi.fn(async () => ({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-production-1",
       receiptUrl: "https://notion.so/page-production-1",
     }));
     vi.mocked(adapter.share).mockImplementation(productionWrite);
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
     vi.mocked(adapter.testShare).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-test-1",
       receiptUrl: "https://notion.so/page-test-1",
     });
     vi.mocked(adapter.verifyReceipt)
       .mockResolvedValueOnce({
-        destination: "Product Notes",
+        destination,
         receiptId: "page-test-1",
         receiptUrl: "https://notion.so/page-test-1",
       })
       .mockResolvedValue({
-        destination: "Product Notes",
+        destination,
         receiptId: "page-production-1",
         receiptUrl: "https://notion.so/page-production-1",
       });
     sharing.select({ connectionId: "codex", connector: "notion" });
     await sharing.probe();
-    sharing.saveDestination({ destination: "Product Notes" });
+    sharing.saveDestination({ destination });
     await sharing.testShare(testAction(false));
 
     const summary = "# Product decision\n\nShip the verified manual flow.";
@@ -487,7 +536,7 @@ describe("SharingConfiguration", () => {
       snapshot: {
         summary,
         connection: { id: "codex", label: "Codex", adapter: "codex" },
-        destination: "Product Notes",
+        destination,
       },
     });
 
@@ -525,7 +574,7 @@ describe("SharingConfiguration", () => {
       connectionId: "codex",
       connectionAdapter: "codex",
       connectionLabel: "Codex",
-      destination: "Product Notes",
+      destination,
       status: "verified",
       receiptId: "page-production-1",
     });
@@ -535,19 +584,19 @@ describe("SharingConfiguration", () => {
     const { adapter, sharing } = setup();
     vi.mocked(adapter.probe).mockResolvedValue({ detail: "Notion read access verified" });
     vi.mocked(adapter.testShare).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-test-1",
       receiptUrl: "https://notion.so/page-test-1",
     });
     vi.mocked(adapter.share).mockResolvedValue({
-      destination: "Product Notes",
+      destination,
       receiptId: "page-production-1",
       receiptUrl: "https://notion.so/page-production-1",
     });
     vi.mocked(adapter.verifyReceipt).mockImplementation(async (input) => input.receipt);
     sharing.select({ connectionId: "codex", connector: "notion" });
     await sharing.probe();
-    sharing.saveDestination({ destination: "Product Notes" });
+    sharing.saveDestination({ destination });
     await sharing.testShare(testAction(false));
 
     const summary = "# Decision\n\nShip it.";

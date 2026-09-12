@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PersistedAgentConnection } from "../src/hostStore.js";
 import {
   AgentSharingConnectorAdapter,
+  extractConnectorToolCalls,
   SharingConnectorUnknownOutcomeError,
 } from "../src/sharingConnector.js";
 import { YULU_TEST_SHARE_CONTENT } from "../src/sharingConfiguration.js";
@@ -13,7 +14,7 @@ const connection: PersistedAgentConnection = {
   adapter: "codex",
   label: "Codex",
   lifecycle: "available",
-  settings: { executablePath: "/opt/bin/codex" },
+  settings: { executablePath: "/opt/bin/codex", conversationModel: "gpt-5.6-sol" },
   createdAt: "2026-08-28T01:00:00.000Z",
   updatedAt: "2026-08-28T01:00:00.000Z",
 };
@@ -61,7 +62,126 @@ function claudeToolEvidence(input: {
   ].join("\n");
 }
 
+function codexLifecycleEvidence(input: Parameters<typeof codexToolEvidence>[0], id = "call-1") {
+  const completed = JSON.parse(codexToolEvidence(input));
+  completed.item.id = id;
+  return [
+    JSON.stringify({type:"item.started",item:{...completed.item,status:"in_progress",result:null}}),
+    JSON.stringify(completed),
+  ].join("\n");
+}
+
+describe("Notion fetch receipt envelopes", () => {
+  const parentId = "01234567-89ab-cdef-0123-456789abcdef";
+  const pageId = "11234567-89ab-cdef-0123-456789abcdef";
+  const pageUrl = `https://app.notion.com/p/${pageId.replaceAll("-", "")}`;
+  const parentUrl = `https://app.notion.com/p/${parentId.replaceAll("-", "")}`;
+  const destination = JSON.stringify({ page_id: parentId });
+  const receipt = { destination, receiptId: pageId, receiptUrl: `${pageUrl}?pvs=204` };
+  const summary = "# QA summary\n\nThe request failed; review the error budget.\n\n- Keep sharing manual.\n";
+  const rendered = summary.split("\n").filter(Boolean).join("\n");
+  function fetched() {
+    return {
+      metadata: { type: "page" }, title: "Yulu Share", url: receipt.receiptUrl,
+      text: [
+        `Here is the result of "fetch" for the Page with URL ${pageUrl} as of 2026-09-11T09:48:45.840Z:`,
+        `<page url="${pageUrl}">`, "<ancestor-path>",
+        `<parent-page url="${parentUrl}" title="Private QA"/>`, "</ancestor-path>",
+        "<properties>", '{"title":"Yulu Share"}', "</properties>", "<iconMetadata>null</iconMetadata>",
+        "<content>", rendered, "</content>", "</page>",
+      ].join("\n"),
+      cover: null, icon: null, path: "Private QA", verification: { state: "unverified" },
+      page_last_edited_at: "2026-09-11T09:48:45.814Z",
+    };
+  }
+  function verifier(payload: unknown, args = { id: pageUrl }, isError = false) {
+    const run = vi.fn().mockResolvedValue({
+      code: 0, stderr: "",
+      // Deliberately not an authoritative receipt: only the fetched tool facts count.
+      stdout: "Fetched the requested page.",
+      rawStdout: codexToolEvidence({
+        name: "notion_fetch", arguments: args,
+        result: { content: [{ type: "text", text: JSON.stringify(payload) }], isError },
+      }),
+    });
+    return { run, adapter: new AgentSharingConnectorAdapter({ scriptDir: "/app/scripts", configDir: "/config", run }) };
+  }
+  const input = { connection, connector: "notion" as const, destination, content: summary, receipt };
+
+  it("verifies actual ancestor, content and UUID facts despite pvs/paragraph formatting and native unverified status", async () => {
+    const { adapter, run } = verifier(fetched());
+    await expect(adapter.verifyReceipt(input)).resolves.toEqual(receipt);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]![0].connectorToolPolicy.allowedTools).not.toContain("notion_create_pages");
+  });
+
+  it.each([
+    ["wrong direct parent", (p: ReturnType<typeof fetched>) => ({ ...p, text: p.text.replace(parentUrl, pageUrl) })],
+    ["expected grandparent only", (p: ReturnType<typeof fetched>) => ({ ...p, text: p.text.replace("<ancestor-path>\n", `<ancestor-path>\n<parent-page url="${pageUrl}" title="Wrong direct parent"/>\n`) })],
+    ["wrong page", (p: ReturnType<typeof fetched>) => ({ ...p, text: p.text.replace(`<page url="${pageUrl}">`, `<page url="${parentUrl}">`) })],
+    ["wrong envelope URL", (p: ReturnType<typeof fetched>) => ({ ...p, url: parentUrl })],
+    ["untrusted URL", (p: ReturnType<typeof fetched>) => ({ ...p, url: pageUrl.replace("app.notion.com", "app.notion.com.evil.test") })],
+    ["conflicting ID", (p: ReturnType<typeof fetched>) => ({ ...p, id: parentId })],
+    ["extra content", (p: ReturnType<typeof fetched>) => ({ ...p, text: p.text.replace(rendered, `${rendered}\nPrivate transcript`) })],
+    ["missing content", (p: ReturnType<typeof fetched>) => ({ ...p, text: p.text.replace("- Keep sharing manual.", "") })],
+    ["truncated", (p: ReturnType<typeof fetched>) => ({ ...p, truncated: true })],
+    ["unknown blocks", (p: ReturnType<typeof fetched>) => ({ ...p, unknown_block_count: 1 })],
+    ["unknown block IDs", (p: ReturnType<typeof fetched>) => ({ ...p, unknown_block_ids: ["unknown"] })],
+    ["partial transport", (p: ReturnType<typeof fetched>) => ({ ...p, status: "partial" })],
+    ["duplicate document", (p: ReturnType<typeof fetched>) => ({ ...p, text: p.text + "\n" + p.text })],
+    ["content wrapper decoy", (p: ReturnType<typeof fetched>) => ({ ...p, text: p.text.replace(rendered, `<content>\n${rendered}\n</content>`) })],
+    ["malformed with decoy structured fields", (p: ReturnType<typeof fetched>) => ({ ...p, text: "not a fetched page", parent: { page_id: parentId }, content: summary, id: pageId })],
+  ])("rejects %s", async (_label, mutate) => {
+    const { adapter } = verifier(mutate(fetched()));
+    await expect(adapter.verifyReceipt(input)).rejects.toBeInstanceOf(SharingConnectorUnknownOutcomeError);
+  });
+
+  it("rejects a different fetch argument or failed MCP envelope even if content appears to match", async () => {
+    await expect(verifier(fetched(), { id: parentId }).adapter.verifyReceipt(input))
+      .rejects.toBeInstanceOf(SharingConnectorUnknownOutcomeError);
+    await expect(verifier(fetched(), { id: pageId }, true).adapter.verifyReceipt(input))
+      .rejects.toBeInstanceOf(SharingConnectorUnknownOutcomeError);
+  });
+
+  it("rejects a conflicting receipt ID and URL", async () => {
+    await expect(verifier(fetched()).adapter.verifyReceipt({ ...input, receipt: { ...receipt, receiptUrl: parentUrl } }))
+      .rejects.toBeInstanceOf(SharingConnectorUnknownOutcomeError);
+  });
+});
+
 describe("AgentSharingConnectorAdapter", () => {
+  it("counts lifecycle updates by call id without collapsing two distinct operations", () => {
+    const input = {name:"notion_create_pages",arguments:{},result:{pages:[]}};
+    expect(extractConnectorToolCalls(codexLifecycleEvidence(input))).toHaveLength(1);
+    const calls = extractConnectorToolCalls([
+      codexLifecycleEvidence(input, "call-1"), codexLifecycleEvidence(input, "call-2"),
+    ].join("\n"));
+    expect(calls).toHaveLength(2);
+    expect(calls.every(call => call.success)).toBe(true);
+  });
+  it.each([
+    ["codex_apps", "notion__notion_list_recent_pages"],
+    ["codex_apps__notion", "notion_list_recent_pages"],
+    ["codex_apps", "notion.notion-list-recent-pages"],
+  ])("normalizes the exact Codex Notion app identity (%s, %s)", (server, tool) => {
+    const row = JSON.parse(codexToolEvidence({name: tool, arguments:{}, result:{pages:[]}}));
+    row.item.server = server;
+    expect(extractConnectorToolCalls(JSON.stringify(row))).toMatchObject([
+      {connector:"notion",name:"notion_list_recent_pages",success:true},
+    ]);
+    row.item.server = "codex_apps__other_app";
+    expect(extractConnectorToolCalls(JSON.stringify(row))[0]?.connector).not.toBe("notion");
+  });
+
+  it("rejects an unselected model instead of inheriting the CLI global default", async () => {
+    const run = vi.fn();
+    const adapter = new AgentSharingConnectorAdapter({ scriptDir: "/app/scripts", configDir: "/config", run });
+    await expect(adapter.discover({
+      connection: { ...connection, settings: { executablePath: "/opt/bin/codex" } }, connector: "notion",
+    })).rejects.toThrow(/Choose an explicit Conversation model/);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("uses separate read-only discovery and bounded readiness invocations", async () => {
     const destination = JSON.stringify({ page_id: "parent-123" });
     const run = vi.fn()
@@ -70,6 +190,10 @@ describe("AgentSharingConnectorAdapter", () => {
         stdout: JSON.stringify({
           options: [
             { label: "Product Notes", value: destination },
+            { label: "Structured page", value: { page_id: "parent-structured" } },
+            { label: "Structured data source", value: { data_source_id: "source-123" } },
+            { label: "Ambiguous parent", value: { page_id: "page", data_source_id: "source" } },
+            { label: "Oversized parent", value: { page_id: "x".repeat(510) } },
             { label: "Unverified title", value: "Product Notes" },
           ],
           detail: "found",
@@ -98,18 +222,25 @@ describe("AgentSharingConnectorAdapter", () => {
     });
 
     await expect(adapter.discover({ connection, connector: "notion" })).resolves.toEqual({
-      options: [{ label: "Product Notes", value: destination }],
+      options: [
+        { label: "Product Notes", value: destination },
+        { label: "Structured page", value: '{"page_id":"parent-structured"}' },
+        { label: "Structured data source", value: '{"data_source_id":"source-123"}' },
+      ],
       detail: "found",
     });
+    expect(run.mock.calls[0]![0].runtime.command).toEqual(expect.arrayContaining(["--model", "gpt-5.6-sol"]));
     await expect(adapter.probe({ connection, connector: "notion" })).resolves.toEqual({
       detail: "read access verified",
     });
 
     expect(run.mock.calls[0]![0].prompt).toMatch(/read-only/i);
+    expect(run.mock.calls[0]![0].prompt).toMatch(/at most one read/i);
+    expect(run.mock.calls[0]![0].prompt).toMatch(/Do not enumerate shared, private, or favorite page lists/);
     expect(run.mock.calls[0]![0].prompt).toMatch(/do not write/i);
     expect(run.mock.calls[0]![0].connectorToolPolicy).toEqual({
       connector: "notion",
-      allowedTools: ["notion_search", "notion_fetch", "search", "fetch"],
+      allowedTools: ["notion_search", "notion_fetch", "search", "fetch", "notion_list_recent_pages"],
     });
     expect(run.mock.calls[1]![0].prompt).toMatch(/bounded/i);
     expect(run.mock.calls[1]![0].prompt).toMatch(/do not create, update, or delete/i);
@@ -122,15 +253,15 @@ describe("AgentSharingConnectorAdapter", () => {
       .mockResolvedValueOnce({
         code: 0,
         stdout: JSON.stringify({
-          status: "sent", connector: "notion", destination,
+          status: "sent", connector: "notion", destination: JSON.parse(destination),
           id: "page-123", url: "https://notion.so/page-123",
         }),
         stderr: "",
-        rawStdout: codexToolEvidence({
+        rawStdout: codexLifecycleEvidence({
           name: "notion_create_pages",
           arguments: {
             parent: { page_id: "parent-123" },
-            pages: [{ content: YULU_TEST_SHARE_CONTENT }],
+            pages: [{ content: YULU_TEST_SHARE_CONTENT, properties: { title: "Yulu Share" } }],
           },
           result: {
             content: [{
@@ -145,7 +276,7 @@ describe("AgentSharingConnectorAdapter", () => {
         stdout: JSON.stringify({
           status: "verified",
           connector: "notion",
-          destination,
+          destination: JSON.parse(destination),
           content: YULU_TEST_SHARE_CONTENT,
           id: "page-123",
           url: "https://notion.so/page-123",
@@ -192,6 +323,8 @@ describe("AgentSharingConnectorAdapter", () => {
       receipt,
     })).resolves.toEqual(receipt);
     const invocation = run.mock.calls[0]![0];
+    const receiptExample = invocation.prompt.split("Return only JSON: ").at(-1)!.replace(/\.$/, "");
+    expect(JSON.parse(receiptExample).destination).toBe(destination);
     expect(invocation.prompt).toContain(YULU_TEST_SHARE_CONTENT);
     expect(invocation.prompt).toContain("no meeting title, transcript, summary, participant, or meeting metadata");
     expect(invocation.connectorToolPolicy).toEqual({
@@ -210,7 +343,7 @@ describe("AgentSharingConnectorAdapter", () => {
     expect(run.mock.calls[1]![0].prompt).toMatch(/Do not write/i);
     expect(run.mock.calls[1]![0].connectorToolPolicy).toEqual({
       connector: "notion",
-      allowedTools: ["notion_search", "notion_fetch", "search", "fetch"],
+      allowedTools: ["notion_search", "notion_fetch", "search", "fetch", "notion_list_recent_pages"],
     });
   });
 

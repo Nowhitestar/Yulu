@@ -695,6 +695,30 @@ def test_overall_health_fails_closed_for_unavailable_or_unverified_agent_connect
     }) is True
 
 
+def test_complete_application_health_does_not_require_a_checkout_or_legacy_hermes():
+    doctor = load_doctor()
+    report = {
+        "checks": [{"name": "python3", "ok": True}],
+        "legacy_processes": [],
+        "source_git": {"is_repo": False},
+        "source_install": {"present": False},
+        "runtime_exists": True,
+        "socket": {"ok": True},
+        "yulu_ui": {
+            "installation_kind": "application", "dist_server_present": True,
+            "dist_web_present": True, "plist_installed": True,
+            "launchctl_loaded": True, "healthz_ok": True,
+        },
+        "agent_pipeline": {"enabled": True, "ok": False, "reasons": ["hermes_cli"]},
+        "agent_connections": {"ok": True, "connections": []},
+    }
+    assert doctor._overall_ok(report) is True
+    for key in ("dist_server_present", "dist_web_present", "plist_installed", "launchctl_loaded", "healthz_ok"):
+        assert doctor._overall_ok({**report, "yulu_ui": {**report["yulu_ui"], key: False}}) is False
+    assert doctor._overall_ok({**report, "socket": {"ok": False}}) is False
+    assert doctor._overall_ok({**report, "agent_connections": {"ok": False}}) is False
+
+
 def test_hermes_contract_probes_required_command_surfaces(monkeypatch):
     doctor = load_doctor()
     outputs = {
@@ -900,6 +924,45 @@ def test_check_yulu_ui_reads_log_size(tmp_path):
     report = doctor.check_yulu_ui(tmp_path, config_dir)
     assert report["log_present"] is True
     assert report["log_size_bytes"] == len("line one\nline two\n")
+
+
+def test_app_doctor_checks_bundled_owner_and_redacts_health_authority(tmp_path, monkeypatch):
+    import io
+    import urllib.request
+
+    doctor = load_doctor()
+    app = tmp_path / "Yulu.app"
+    scripts = app / "Contents/Resources/runtime/yulu/scripts"
+    scripts.mkdir(parents=True)
+    for name in ("Contents/Resources/Host/server.js", "Contents/Resources/Host/web/index.html",
+                 "Contents/Library/LaunchAgents/com.yulu.ui.plist"):
+        file = app / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text("fixture")
+    commands = []
+    monkeypatch.setattr(doctor, "_run", lambda args, **_kwargs: (
+        commands.append(args) or (0, "  pid = 1234\n", "")
+    ))
+    payload = {"status": "ok", "pid": 1234, "serviceOwner": "com.yulu.app.host",
+               "instanceNonce": "secret-nonce", "instanceLockToken": "secret-lock"}
+
+    def response(*_args, **_kwargs):
+        result = io.BytesIO(json.dumps(payload).encode())
+        result.status = 200
+        return result
+
+    monkeypatch.setattr(urllib.request, "urlopen", response)
+    report = doctor.check_yulu_ui(scripts, tmp_path / "logs")
+    assert report["installation_kind"] == "application"
+    assert report["healthz_ok"] is True
+    assert report["plist_installed"] is True
+    assert commands == [["launchctl", "print", f"gui/{os.geteuid()}/com.yulu.app.host"]]
+    assert "secret" not in report["healthz_response"]
+    payload["serviceOwner"] = "com.yulu.ui"
+    assert doctor.check_yulu_ui(scripts, tmp_path / "logs")["healthz_ok"] is False
+    payload["serviceOwner"] = "com.yulu.app.host"
+    payload["pid"] = 9999
+    assert doctor.check_yulu_ui(scripts, tmp_path / "logs")["healthz_ok"] is False
 
 
 def test_collect_report_includes_yulu_ui(tmp_path):
