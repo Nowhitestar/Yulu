@@ -106,6 +106,17 @@ describe("deterministic Codex Notion connector", () => {
     expect(session.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call")).toHaveLength(1);
   });
 
+  it("budgets runtime discovery separately without extending the tool-call timeout", async () => {
+    await run({ type: "recent", limit: 1 });
+    expect(session.options[0]!.rpcTimeoutMs).toBe(1_000);
+    expect(session.request).toHaveBeenCalledWith("mcpServerStatus/list", {
+      threadId: "thread-qa", detail: "toolsAndAuthOnly", limit: 100, cursor: null,
+    }, 60_000);
+    expect(session.request).toHaveBeenLastCalledWith("mcpServer/tool/call", {
+      threadId: "thread-qa", server: "codex_apps", tool: "notion.notion-list-recent-pages", arguments: { limit: 1 },
+    });
+  });
+
   it("writes exactly one fixed-title page with the confirmed parent and unchanged summary", async () => {
     const result = await run({ type: "create", destination, content: summary });
     expect(result.code).toBe(0);

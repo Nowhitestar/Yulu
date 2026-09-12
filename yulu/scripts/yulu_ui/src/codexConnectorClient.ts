@@ -142,7 +142,12 @@ export async function runCodexNotionOperation(input: {
     const cursors = new Set<string>();
     let cursor: string | null = null;
     for (let page = 0; page < 10; page += 1) {
-      const inventory = record(await session.request("mcpServerStatus/list", { threadId, detail: "toolsAndAuthOnly", limit: 100, cursor }));
+      // Inventory waits for startup of the runtime's configured MCP servers.
+      // Its observed startup can exceed a short read probe's tool-call timeout.
+      // Keep startup separately bounded; do not extend the actual tool timeout.
+      const inventory = record(await session.request("mcpServerStatus/list", {
+        threadId, detail: "toolsAndAuthOnly", limit: 100, cursor,
+      }, 60_000));
       if (!Array.isArray(inventory.data)) throw new Error("Codex returned an invalid connector inventory");
       for (const value of inventory.data) {
         const server = record(value);

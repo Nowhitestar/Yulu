@@ -71,6 +71,9 @@ for await (const line of createInterface({ input: process.stdin })) {
       .map((name) => ({ name, enabled: mode === "enabled-feature" && name === "hooks" })),
     nextCursor: null,
   } });
+  if (message.method === "mcpServerStatus/list" && mode === "slow-discovery") {
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
   if (message.method === "mcpServerStatus/list") send({ id: message.id, result: {
     data: (
       (mode === "global-mcp" && !message.params.threadId) ||
@@ -133,6 +136,22 @@ afterEach(() => {
 });
 
 describe("Codex app-server stdio client", () => {
+  it("allows a bounded discovery override while retaining the default for later requests", async () => {
+    const fake = fakeCodexRuntime("slow-discovery");
+    const session = new AppServerSession({
+      executable: fake.executable, cwd: fake.root,
+      env: { YULU_FAKE_CODEX_AUDIT: fake.audit, YULU_FAKE_CODEX_MODE: fake.mode },
+      rpcTimeoutMs: 50,
+    });
+    try {
+      await session.request("initialize", {}, 1_000);
+      await expect(session.request("mcpServerStatus/list", {}, 1_000)).resolves.toMatchObject({ data: [] });
+      await expect(session.request("mcpServer/tool/call", {})).rejects.toThrow("mcpServer/tool/call timed out");
+    } finally {
+      session.close();
+    }
+  });
+
   it("explicitly rejects unsolicited server authority requests in connector-only sessions", async () => {
     const fake = fakeCodexRuntime("server-requests");
     const session = new AppServerSession({
@@ -143,6 +162,9 @@ describe("Codex app-server stdio client", () => {
     try {
       await session.initialize();
       await session.request("thread/start", { model: "gpt-5.6-sol" });
+      // Flush a runtime round trip so its audit has consumed all denial replies
+      // before close() terminates the fixture process.
+      await session.request("model/list", {});
     } finally {
       session.close();
     }

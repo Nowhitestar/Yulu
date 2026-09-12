@@ -2,23 +2,52 @@
 
 ## Current checkpoint
 
-- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34671438759`, build 1614,
-  source `a1dcdc79475799a09b261e6b1684b9f69031e28e`. Finder replaced the whole
+- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34674597952`, build 1618,
+  source `d26957462dfddef794a08eed05df7b894a29be19`. Finder replaced the whole
   App; its installed CodeResources digest matches the verified CI artifact.
-  Migration attempt 7 remains committed without replay; Host PID 47531 and
-  Capture PID 47533 report the new version. Both native audio inputs are ready,
-  idle, and database quick-check is healthy.
-- The latest native shell transitioned from Starting Yulu to a white window;
-  one normal Navigate > Open Yulu did not restore it. The same Host's browser
-  Sharing page renders and functions. The previous build 1612 passed automatic
-  entry and native Select All / Paste, but that is not a pass for build 1614.
-  The two artifacts' HTML and JavaScript are byte-identical; there is no evidence
-  yet that a new frontend bundle caused this white window. No speculative cache
-  clearing, service reset or installed-App patch was made. Native control later
-  became available: one ordinary quit/reopen reproduced the white window, while
-  one normal window zoom restored the DOM and paint. Restoring the original size
-  kept the page usable. This localizes the failure to initial native layout/paint,
-  but does not establish that ordinary launch is fixed in the installed build.
+  Migration transaction `f65ccc2e04a04b11b3d5f308d1460858` remains committed,
+  with its original `2026-09-11T03:39:13.906530+00:00` timestamp. Initial Host
+  PID 55627 and Capture PID 55630 report the new version; both native audio
+  inputs become ready, idle, and database quick-check is healthy.
+- The native layout/paint repair now passes installed verification. Both first
+  entry after replacement and one normal quit/reopen automatically rendered the
+  complete Agent Console without zoom, resizing, cache clearing, service resets
+  or installed-App patches. Screenshots and the accessible HTML tree agree.
+  Build 1614's white-window failure and temporary zoom workaround are historical
+  evidence, not the current installed state. The exact synthetic QA task remains
+  completed on attempt 1 with no error; its 227-character transcript and
+  1,110-character, non-stale summary retain the original content/hash. No new
+  recording Share has been submitted.
+- The installed direct-RPC adapter successfully reconciled the **original** Test
+  Share action `f53297b2-f5d3-42b2-a9a2-a37a04faaec1` by fetching its exact receipt
+  once. The Host no longer offers Unknown reconciliation, retains the same
+  receipt and reports `duplicateWarningRequired=true`. No second Test Share was
+  created. Overall Sharing Readiness is still fenced by a separate access-probe
+  timeout, not by receipt validation.
+- A read-only timing diagnostic measured Codex `mcpServerStatus/list` at
+  30,968 ms. The short access probe incorrectly used its 30,000 ms tool budget
+  for runtime discovery too. The working source gives discovery a separate
+  60,000 ms bound, retaining the actual tool timeout and overall deadline. Its
+  real `AgentSharingConnectorAdapter.probe` passed in 38,460 ms, with one read,
+  no model turn and no external write. The two affected suites pass all 45
+  tests; typecheck and Host build pass. A pre-existing fixture audit race was
+  repaired with a protocol round-trip barrier, not a production permission change.
+  This small follow-up is not yet installed; preserve build 1618's passed native
+  and receipt evidence rather than rebuilding unrelated code or issuing an RC.
+- The latest normal xAI UI/API read now reports the original OAuth connected
+  and readable. No password, credential helper, reauthorization or source/model
+  change was performed. Real transcription and `grok-4.6` conversation capability
+  probes pass. The first new summary probe ended Unknown; unauthenticated network
+  checks and the same-source conversation succeeded afterward. One explicit new
+  summary capability attempt then passed too. All three current capabilities
+  are ready; the initial Unknown result remains in history. No existing recording
+  was replayed, and no xAI source-code change was needed for this recovery.
+
+### Earlier diagnosis and retained implementation evidence
+
+The following records describe prior candidates and the basis of the repairs;
+the current installed results above supersede their live-state assertions.
+
 - Sharing now uses the explicitly selected, already-installed ChatGPT desktop
   Codex CLI 0.153.4 and retains `gpt-5.6-sol`. Installed target discovery returned
   10 recent Notion pages on dev8; the CI App's separate read-only access probe
@@ -62,7 +91,7 @@
   Unknown action. No external write or model request was made. The first batch
   passed 113 tests across five affected files; the final incremental checks passed
   79 tests across three changed files (115 distinct related tests in total).
-  Node 24 typecheck and the production build pass. This source is not installed;
+  Node 24 typecheck and the production build pass. This source is now installed;
   do not build another App merely to experiment with runtime flags.
 - Source repair `c83f76d` is committed and pushed to the existing PR branch.
   Its real source read-back succeeded without modifying the installed Host.
@@ -75,6 +104,16 @@
   behavior. A small synthetic probe showed that a zero final frame alone did not
   explain the old bug; do not claim that as its proven cause. Proceed with one
   combined internal signed-App validation of these two repaired boundaries.
+- The combined candidate is built and installed: `d269574`,
+  `0.23.0-dev.ci.34674597952`, build 1618. Complete source CI `34674599889`
+  and signed-App run `34674597952` both passed. Artifact `10291669409` is
+  downloaded and extracted at `/private/tmp/yulu-phase13-combined-ci.pyAfKM`;
+  its inner archive checksum, deep/strict signature, notarization staple and
+  Gatekeeper assessment pass. CodeResources SHA-256 is
+  `85ae98484aef2d9f0f44a198434b33dff90530affa2ed880cde59821f87fe8a3`.
+  The replacement desktop-control skill (`node_repl` + Sky) restored supported
+  UI access. Finder whole-App replacement completed without any password or
+  permission-store access. Do not regenerate this already verified candidate.
 - The installed General About query now correctly returns the App version and
   `Yulu.app` install source. Guard errors precede incidental stderr; genuine
   failed-turn and timeout errors retain their priority. Those repairs remain.
@@ -319,9 +358,9 @@ Host's public MCP readback, not just old checkboxes. Reuse only the stated scope
 | Requirement | Retained evidence | What it does not establish |
 |---|---|---|
 | Self-contained drag-to-Applications baseline | RC14 `b2c554c`, build 1568, macOS 26.5 arm64: fresh preflight passed with host dependencies absent, browser provenance verified, bundle observation matched, and first-launch Host/database healthy. | The baseline explicitly has `coreCompleted=false` and no Share receipt. Its old `com.yulu.ui` owner cannot prove the newly separated service registration path. |
-| Current physical migration and App takeover | CI validation App `a1dcdc7`, build 1614: committed attempt 7 retained, new Host/Capture own the runtime, native inputs ready. Automatic native UI entry passed on build 1612, not 1614; the latest browser UI works but native window is white. | Native UI acceptance is unresolved. This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
+| Current physical migration and App takeover | CI validation App `d269574`, build 1618: original committed migration transaction retained, new Host/Capture own the runtime, native inputs ready. Both first entry and one ordinary quit/reopen render automatically without zoom. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
 | Committed artifacts survive whole-App replacement | Current MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. `sendToNotion=false`, no legacy delivery, and zero Share Actions. | This verifies preservation of dev6's successful synthetic result, not a new xAI request while the credential is unreadable. |
-| Sharing setup and external write | Discovery and independent access probes passed with desktop Codex 0.153.4 / `gpt-5.6-sol`. The approved private parent and one Test Share child exist. The new source adapter verifies its exact parent/content through direct runtime RPC without a model turn. | The installed code-mode invocation is still broken. Keep the original action Unknown Outcome until the new source is installed and the same receipt is verified. No positive recording Share exists yet; do not resend or choose an unrelated business page. |
+| Sharing setup and external write | The approved private parent and one Test Share child exist. Build 1618 successfully reconciled the original Host action through direct runtime RPC without a model turn. | A separate 30 s discovery/probe budget error prevents current Sharing Readiness. The source fix's real probe passes; it still needs installation. No positive recording Share exists yet; do not resend the Test Share or choose an unrelated business page. |
 | Public distribution | RC19's retained receipt binds anonymous asset sizes/hashes to `fb2be51` and explicitly has `installedAcceptance=false`; signature/notary/site checks are retained for those bytes. | It cannot accept the later internal App or establish stable promotion. |
 | Supported v0.22.2 upgrade and public update/rollback | Relevant source regressions are retained; the reviewed checkpoints continue to identify complete installed journeys as unearned. | Source tests, prepared harnesses and temporary fixture directories are not completed real-install receipts. |
 
@@ -335,20 +374,21 @@ store inspection is not permission to inspect the user's password store now.
 
 ### Required outcomes
 
-1. Verify the native layout/paint repair in the complete internal App: ordinary
-   automatic entry must work without the window-zoom workaround. The one
-   pre-repair quit/reopen already reproduced the bug; do not repeat it unchanged.
-   Do not reset services or clear user data speculatively.
-   Current xAI account availability separately remains an unresolved live-access
-   blocker. Do not repeat signing, installation or credential probes without new evidence.
-   Keep the original grant/source/models and the no-password-access boundary.
-   Preserve dev6's successful pipeline evidence separately from current readiness.
-2. Install the complete CI-signed connector/native-window batch
-   containing the proven direct-RPC repair, then reconcile the existing
-   Test Share receipt read-only. Only after Host verification succeeds, manually
+1. Retain build 1618's passed ordinary launch/reopen and migration evidence.
+   Current OAuth access, realtime transcription, summary and conversation probes
+   have recovered without changing the original grant/source/models; the initial
+   summary Unknown result remains recorded. Preserve dev6's successful pipeline evidence
+   separately from current readiness. No password-store access is authorized.
+2. Install the separately validated discovery-budget correction in one complete
+   CI-signed App, then prove current connector access. The original Test Share
+   was already reconciled successfully; do not resend or reconcile it again.
+   Only after overall Sharing Readiness is ready, manually
    share the existing synthetic QA summary once to the same private test parent
    and verify its durable receipt. Native paste/select-all already passed;
    do not patch the installed signed App or repeat the external Test Share.
+   Build 1618 is installed and its passed outcomes stand. Existing authorization remains
+   effective; no new password access, OAuth flow or public release is authorized
+   by this handoff.
 3. Reconcile #170's existing applicable acceptance evidence, then make the one
    consolidated public candidate and complete distribution/stable closure. Keep
    #145/#170/#171 open until their actual remaining outcomes are verified.

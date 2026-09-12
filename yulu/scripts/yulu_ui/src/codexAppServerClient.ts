@@ -90,7 +90,7 @@ export class AppServerSession {
     this.notify("initialized");
   }
 
-  request(method: string, params: unknown): Promise<unknown> {
+  request(method: string, params: unknown, timeoutMs = this.rpcTimeoutMs): Promise<unknown> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const pending: PendingRequest = {
@@ -103,7 +103,7 @@ export class AppServerSession {
             requestPosted: true,
             terminalResponse: false,
           }));
-        }, this.rpcTimeoutMs),
+        }, timeoutMs),
       };
       this.pending.set(id, pending);
       try {
