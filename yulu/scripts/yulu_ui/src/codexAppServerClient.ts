@@ -50,7 +50,7 @@ function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-class AppServerSession {
+export class AppServerSession {
   private readonly process: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly notifications: JsonRecord[] = [];
@@ -58,13 +58,15 @@ class AppServerSession {
   private nextId = 1;
   private closed = false;
 
-  constructor(options: { executable: string; cwd: string; env?: NodeJS.ProcessEnv; rpcTimeoutMs: number }) {
+  constructor(options: { executable: string; cwd: string; env?: NodeJS.ProcessEnv; rpcTimeoutMs: number; rejectServerRequests?: boolean }) {
+    this.rejectServerRequests = options.rejectServerRequests === true;
     this.process = spawn(options.executable, ["app-server", "--stdio"], {
       cwd: options.cwd,
       env: envWithFallbackPath(options.env ?? process.env),
       stdio: ["pipe", "pipe", "pipe"],
     });
     const lines = createInterface({ input: this.process.stdout });
+    this.process.stderr.resume();
     lines.on("line", (line) => this.onLine(line));
     this.process.on("error", (error) => this.fail(error));
     this.process.on("close", () => {
@@ -74,6 +76,7 @@ class AppServerSession {
   }
 
   private readonly rpcTimeoutMs: number;
+  private readonly rejectServerRequests: boolean;
 
   async initialize(): Promise<void> {
     await this.request("initialize", {
@@ -192,6 +195,10 @@ class AppServerSession {
       return;
     }
     if (typeof message.method !== "string") return;
+    if (this.rejectServerRequests && (typeof message.id === "number" || typeof message.id === "string")) {
+      this.write({ id: message.id, error: { code: -32601, message: "Yulu connector calls do not authorize server requests" } });
+      return;
+    }
     this.notifications.push(message);
     for (const waiter of [...this.waiters]) {
       if (waiter.method === message.method && waiter.predicate(message)) waiter.resolve(message);

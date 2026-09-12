@@ -2,18 +2,20 @@
 
 ## Current checkpoint
 
-- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34669706049`, build 1612,
-  source `c967199ad4258c3e44d36d84cb503615c7795e20`. Finder replaced the whole
+- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34671438759`, build 1614,
+  source `a1dcdc79475799a09b261e6b1684b9f69031e28e`. Finder replaced the whole
   App; its installed CodeResources digest matches the verified CI artifact.
-  Migration attempt 7 remains committed without replay; Host PID 5785 and
-  Capture PID 5786 report the new version. Both native audio inputs are ready,
+  Migration attempt 7 remains committed without replay; Host PID 47531 and
+  Capture PID 47533 report the new version. Both native audio inputs are ready,
   idle, and database quick-check is healthy.
-- The new native shell automatically rendered the main page after replacement,
-  without Navigate > Open Yulu or a service retry. The prior CI App's ordinary
-  quit/reopen evidence is retained below, not re-claimed for this build. The new
-  Edit menu's Select All and Paste were verified with two representations of the
-  same approved private destination, then restored without saving a change.
-  This is functional validation, not public-DMG acceptance.
+- The latest native shell transitioned from Starting Yulu to a white window;
+  one normal Navigate > Open Yulu did not restore it. The same Host's browser
+  Sharing page renders and functions. The previous build 1612 passed automatic
+  entry and native Select All / Paste, but that is not a pass for build 1614.
+  The two artifacts' HTML and JavaScript are byte-identical; there is no evidence
+  yet that a new frontend bundle caused this white window. No speculative cache
+  clearing, service reset or installed-App patch was made. Native investigation
+  is paused because CUA reports the Mac locked and automatic unlock unavailable.
 - Sharing now uses the explicitly selected, already-installed ChatGPT desktop
   Codex CLI 0.153.4 and retains `gpt-5.6-sol`. Installed target discovery returned
   10 recent Notion pages on dev8; the CI App's separate read-only access probe
@@ -26,8 +28,10 @@
   failure: current Codex wraps successful Notion calls inside code-mode `exec`,
   without the per-tool guard evidence required by Yulu. The two exact Yulu-owned
   CLI session traces show successful reads; unrelated stderr authentication and
-  skill-scan warnings were not the cause. The Host correctly retained Unknown
-  Outcome. No second write or recording Share was sent; do not abandon or resend.
+  skill-scan warnings were not the cause. Build 1614's attempt to disable the
+  wrapper was insufficient: the model still tried `exec` and received
+  `code-mode host is disabled`. The Host correctly retained Unknown Outcome.
+  No second write or recording Share was sent; do not abandon or resend.
 - The installed source batch repairs Notion receipt parsing, UUID/link presentation
   and empty paragraph separator handling while checking the actual tool result,
   direct parent and full content. It rejects changed/omitted content, conflicting
@@ -39,21 +43,33 @@
   Edit menu first-responder shortcuts after its absent paste/select-all bindings
   blocked target entry. Parser source tests and actual-response replay pass;
   positive installed receipt verification remains blocked by the code-mode path.
-- The next bounded repair disables code-mode wrappers only for guarded connector
-  invocations, retaining direct MCP hooks, exact payload checks, the one-write
-  limit and Unknown Outcome fences. Both installed Codex versions advertise these
-  flags; no global Codex config, OAuth or selected model is changed. Guard failures
-  now precede incidental stderr warnings, while real failed-turn/timeout reasons
-  retain priority. The General About block also uses the installed App identity
-  instead of an absent checkout VERSION. These changes pass 83 related tests and
-  Node 24 typecheck and the production build, but are not installed yet. The initially failed General host
-  capability read passed on a bounded read-only refresh; no speculative collector
-  rewrite or repeated broad test run was added.
-- Local repair commit: `a147d66`. On 2026-09-12 the user explicitly approved
+- The failed code-mode flag workaround is removed in the working source. Codex
+  Notion operations now use the runtime's observed `mcpServer/tool/call` protocol,
+  never `turn/start`: the Host constructs one exact request, and the selected
+  Codex runtime still owns connector discovery, transport and credentials. Only
+  the fixed recent-page read, exact receipt fetch, and single-page create are
+  admitted. Tool namespace/schema, selected runtime/model, destination, fixed
+  title and immutable content are checked before dispatch; an uncertain write
+  is never retried. Unsolicited authority/token-refresh requests are rejected.
+  Claude, Zulip and Calendar retain their existing guarded paths; there is no
+  fallback to them. No global CLI config, credential source or model was changed.
+- The real source adapter now successfully verifies the existing Test Share's
+  complete content and exact parent through the selected desktop Codex. This is
+  stronger than a parser-only replay, but it did not mutate the installed Host's
+  Unknown action. No external write or model request was made. The first batch
+  passed 113 tests across five affected files; the final incremental checks passed
+  79 tests across three changed files (115 distinct related tests in total).
+  Node 24 typecheck and the production build pass. This source is not installed;
+  do not build another App merely to experiment with runtime flags.
+- The installed General About query now correctly returns the App version and
+  `Yulu.app` install source. Guard errors precede incidental stderr; genuine
+  failed-turn and timeout errors retain their priority. Those repairs remain.
+- On 2026-09-12 the user explicitly approved
   pushing to the existing `https://github.com/Nowhitestar/Yulu.git` repository
   and running its current CI signing workflow, resolving the earlier platform
   authorization rejection. Continue with one internal complete-App validation
-  build; do not access the local password store or publish another public RC.
+  build when the remaining native-window diagnosis is ready; do not access the
+  local password store or publish another public RC.
   No alternative channel was used to bypass the earlier rejection.
 - xAI's original saved grant remains unreadable in the installed CI App. The
   normal Settings UI and one read-only connection recheck show the new accurate
@@ -259,6 +275,25 @@ candidate is not progress toward that outcome by itself.
   exact-page fetch still confirms the original parent and test message.
   Normal xAI UI recheck still reports the saved grant unreadable without
   changing credentials, Grok OAuth, or either `grok-4.6` selection.
+- Complete source CI `34671398589` and internal signed-App CI `34671438759`
+  passed for `a1dcdc7`. Artifact `10291310382` passed archive checksum,
+  deep/strict signature, notarization staple and Gatekeeper checks. Finder
+  installed the whole App; CodeResources SHA-256 is
+  `e723ae37b5ab27cfdcf47efd264ccdfd183b5d25cb3d62515a0b75bbbd52b0b9`.
+  The migration journal, healthy Host/Capture and synthetic QA summary hash
+  `5d976cbe8756a3f3279c1b5dd1d3346ea1b1f678a5d8bf5f343ffb2749b7f3d4`
+  remained unchanged. No new recording Share exists. The native-window and
+  code-mode failures above prevent treating this build as accepted.
+- The supported direct-RPC read was proven first with an isolated read-only
+  protocol probe, then through the actual source Sharing adapter. The diagnostic
+  initially inherited the supervising Codex app's tool pipe and failed connector
+  initialization; omitting only that pipe reproduced the normal launched-Host
+  environment and succeeded. Sandbox/network restrictions were not altered.
+  Current tool names are `codex_apps` / `notion.fetch`,
+  `notion.notion-list-recent-pages`, and `notion.notion-create-pages`. The recent
+  list response uses `results` / `nextCursor`; its actual shape was verified
+  without printing page titles or bodies. The create contract was inspected but
+  no new live create was attempted.
 
 ## Remaining work in order
 
@@ -270,9 +305,9 @@ Host's public MCP readback, not just old checkboxes. Reuse only the stated scope
 | Requirement | Retained evidence | What it does not establish |
 |---|---|---|
 | Self-contained drag-to-Applications baseline | RC14 `b2c554c`, build 1568, macOS 26.5 arm64: fresh preflight passed with host dependencies absent, browser provenance verified, bundle observation matched, and first-launch Host/database healthy. | The baseline explicitly has `coreCompleted=false` and no Share receipt. Its old `com.yulu.ui` owner cannot prove the newly separated service registration path. |
-| Current physical migration and App takeover | CI validation App `c967199`, build 1612: committed attempt 7 retained, new Host/Capture own the runtime, native inputs ready and automatic UI entry observed. Ordinary quit/reopen passed on prior CI App `5725490`. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
+| Current physical migration and App takeover | CI validation App `a1dcdc7`, build 1614: committed attempt 7 retained, new Host/Capture own the runtime, native inputs ready. Automatic native UI entry passed on build 1612, not 1614; the latest browser UI works but native window is white. | Native UI acceptance is unresolved. This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
 | Committed artifacts survive whole-App replacement | Current MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. `sendToNotion=false`, no legacy delivery, and zero Share Actions. | This verifies preservation of dev6's successful synthetic result, not a new xAI request while the credential is unreadable. |
-| Sharing setup and external write | Discovery and independent access probes passed with desktop Codex 0.153.4 / `gpt-5.6-sol`. A new user-approved private parent is saved, and one fixed Test Share child was independently fetched with the correct parent/content. | The parser repair is installed, but the current code-mode wrapper fails the per-tool guard audit. Keep the original action Unknown Outcome until the invocation repair is installed and the same receipt is verified. No positive recording Share exists yet; do not resend or choose an unrelated business page. |
+| Sharing setup and external write | Discovery and independent access probes passed with desktop Codex 0.153.4 / `gpt-5.6-sol`. The approved private parent and one Test Share child exist. The new source adapter verifies its exact parent/content through direct runtime RPC without a model turn. | The installed code-mode invocation is still broken. Keep the original action Unknown Outcome until the new source is installed and the same receipt is verified. No positive recording Share exists yet; do not resend or choose an unrelated business page. |
 | Public distribution | RC19's retained receipt binds anonymous asset sizes/hashes to `fb2be51` and explicitly has `installedAcceptance=false`; signature/notary/site checks are retained for those bytes. | It cannot accept the later internal App or establish stable promotion. |
 | Supported v0.22.2 upgrade and public update/rollback | Relevant source regressions are retained; the reviewed checkpoints continue to identify complete installed journeys as unearned. | Source tests, prepared harnesses and temporary fixture directories are not completed real-install receipts. |
 
@@ -286,12 +321,15 @@ store inspection is not permission to inspect the user's password store now.
 
 ### Required outcomes
 
-1. Current xAI account availability remains an unresolved live-access blocker. The
-   consolidated CI App is installed and startup/error UI verification is done;
-   do not repeat signing, installation or credential probes without new evidence.
+1. Diagnose the current native white window after native CUA becomes available;
+   start with one ordinary quit/reopen, since the Host/browser work and the two
+   frontend bundles match. Do not reset services or clear user data speculatively.
+   Current xAI account availability separately remains an unresolved live-access
+   blocker. Do not repeat signing, installation or credential probes without new evidence.
    Keep the original grant/source/models and the no-password-access boundary.
    Preserve dev6's successful pipeline evidence separately from current readiness.
-2. Install the complete CI-signed guarded-invocation repair, then reconcile the existing
+2. Once the native-window diagnosis is ready, install a complete CI-signed batch
+   containing the proven direct-RPC repair, then reconcile the existing
    Test Share receipt read-only. Only after Host verification succeeds, manually
    share the existing synthetic QA summary once to the same private test parent
    and verify its durable receipt. Native paste/select-all already passed;

@@ -6,6 +6,7 @@ import {
   type ConnectorToolPolicy,
 } from "./agentCliRunner.js";
 import type { AgentRuntime } from "./agentRuntime.js";
+import type { CodexNotionOperation } from "./codexConnectorClient.js";
 import type { PersistedAgentConnection, SharingConnector } from "./hostStore.js";
 import { notionFetchedSharePage, notionShareContentMatches, notionSharingPageId } from "./notionSharing.js";
 import {
@@ -585,7 +586,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
         'For each Zulip value use canonical JSON: {"type":"stream","to":"stream name","topic":"topic name"} or {"type":"private","to":["user@example.com"]}.',
       ] : []),
       'Return only JSON: {"options":[{"label":"Human label","value":"exact destination"}],"detail":"what was discovered"}.',
-    ].join("\n"), "read");
+    ].join("\n"), "read", { type: "recent", limit: 10 });
     this.requireReadEvidence(result, input.connector, "destination discovery");
     const value = parseObject(result.stdout);
     const rawOptions = Array.isArray(value.options) ? value.options : [];
@@ -612,7 +613,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
       ...(input.connector === "notion" ? ["Prefer a single notion_list_recent_pages call with limit 1; do not use plan-specific search filters or enumerate other page lists."] : []),
       "Do not create, update, or delete any external content.",
       `Return only JSON: {"status":"ready","connector":"${input.connector}","detail":"what access was verified"}.`,
-    ].join("\n"), "read");
+    ].join("\n"), "read", { type: "recent", limit: 1 });
     this.requireReadEvidence(result, input.connector, "Connector Readiness probe");
     const value = parseObject(result.stdout);
     if (boundedString(value.status, 20).toLowerCase() !== "ready" || value.connector !== input.connector) {
@@ -671,7 +672,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
       result = await this.runWithRuntime(runtime, input.connector, 120_000, prompt, "write", {
         destination: input.destination,
         content: input.content,
-      });
+      }, { type: "create", destination: input.destination, content: input.content });
     } catch (error) {
       throw new SharingConnectorUnknownOutcomeError(
         error instanceof Error ? error.message : String(error),
@@ -735,7 +736,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
         ] : []),
         'Return only JSON: {"status":"verified","connector":"' + input.connector +
           '","destination":"observed destination","content":"observed exact content","id":"observed id","url":"observed URL"}.',
-      ].join("\n"), "read");
+      ].join("\n"), "read", { type: "fetch", id: input.receipt.receiptId || input.receipt.receiptUrl });
     } catch (error) {
       throw new SharingConnectorUnknownOutcomeError(error instanceof Error ? error.message : String(error));
     }
@@ -785,8 +786,9 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
     timeoutMs: number,
     prompt: string,
     mode: "read" | "write",
+    operation?: CodexNotionOperation,
   ) {
-    const result = await this.runOperation(connection, connector, timeoutMs, prompt, mode);
+    const result = await this.runOperation(connection, connector, timeoutMs, prompt, mode, operation);
     if (result.code !== 0 || !result.stdout.trim()) {
       throw new Error((result.stderr || result.stdout || `Agent connector exited ${result.code}`).trim());
     }
@@ -799,9 +801,10 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
     timeoutMs: number,
     prompt: string,
     mode: "read" | "write",
+    operation?: CodexNotionOperation,
   ) {
     const runtime = connectionRuntime(connection, this.options.scriptDir);
-    return this.runWithRuntime(runtime, connector, timeoutMs, prompt, mode);
+    return this.runWithRuntime(runtime, connector, timeoutMs, prompt, mode, undefined, operation);
   }
 
   private async runWithRuntime(
@@ -811,6 +814,7 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
     prompt: string,
     mode: "read" | "write",
     writeGuard?: { destination: string; content: string },
+    operation?: CodexNotionOperation,
   ) {
     const result = await this.run({
       runtime,
@@ -820,6 +824,8 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
       timeoutMs,
       yuluSessionId: randomUUID(),
       connectorToolPolicy: operationPolicy(connector, mode, writeGuard),
+      ...(runtime.provider === "codex" && connector === "notion" && operation
+        ? { codexNotionOperation: operation } : {}),
     });
     return result;
   }
@@ -899,12 +905,31 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
   }
 
   private selectedConnectorCalls(result: AgentCliRunResult, connector: SharingConnector) {
-    const calls = extractConnectorToolCalls(result.rawStdout ?? "");
+    // RPC observations are supplied directly by the Host's bounded runtime client,
+    // not reconstructed from a model answer or a code-mode wrapper.
+    const calls = result.runtimeConnectorToolCalls
+      ? result.runtimeConnectorToolCalls.map((call): AuditedConnectorToolCall => ({
+          connector: call.connector, name: call.name,
+          argumentsText: serialized(call.arguments), resultText: serialized(call.result),
+          transportError: asRecord(call.result).isError === true,
+          success: this.runtimeCallSucceeded(call.name, call.result),
+        }))
+      : extractConnectorToolCalls(result.rawStdout ?? "");
     const foreign = calls.filter((call) => !connectorMatches(call.connector, connector));
     if (foreign.length > 0) {
       throw new Error(`Agent used connector ${foreign[0]!.connector} outside selected connector ${connector}`);
     }
     return calls.filter((call) => connectorMatches(call.connector, connector));
+  }
+
+  private runtimeCallSucceeded(name: string, result: unknown): boolean {
+    if (name !== "notion_list_recent_pages") return toolResultSucceeded(serialized(result), asRecord(result).isError === true);
+    // Recent-page titles are document data, not transport error messages. Keep
+    // checking the response envelopes without interpreting those titles as errors.
+    const { results, pages, ...outcome } = asRecord(toolResultPayload(result));
+    const { content: _content, structuredContent: _structured, ...outer } = asRecord(result);
+    return Array.isArray(results ?? pages) && outer.isError !== true &&
+      !hasFailedStatus(outer) && !hasNonSuccessEnvelope(outer) && !hasNonSuccessEnvelope(outcome);
   }
 
   private errorMessage(error: unknown) {

@@ -19,6 +19,8 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { envWithFallbackPath, resolveExecutable } from "./executables.js";
 import { resolveBundledScriptArgs, runLlmCommand } from "./llmCommand.js";
 import type { AgentRuntime } from "./agentRuntime.js";
+import { runCodexNotionOperation, type CodexNotionOperation, type RuntimeConnectorToolCall } from "./codexConnectorClient.js";
+import { NOTION_SHARE_PAGE_TITLE } from "./notionSharing.js";
 
 export interface AgentCliRunResult {
   stdout: string;
@@ -28,6 +30,8 @@ export interface AgentCliRunResult {
   rawStdout?: string;
   timedOut?: boolean;
   connectorWriteState?: "not-started" | "authorized" | "unknown";
+  // Constructed by the Host from an exact app-server RPC, never from model text.
+  runtimeConnectorToolCalls?: RuntimeConnectorToolCall[];
 }
 
 export interface ConnectorToolPolicy {
@@ -41,8 +45,7 @@ export interface ConnectorToolPolicy {
   writeGuard?: { destination: string; content: string };
 }
 
-// Notion requires a page title. It is fixed, not inferred from meeting data.
-export const NOTION_SHARE_PAGE_TITLE = "Yulu Share";
+export { NOTION_SHARE_PAGE_TITLE };
 
 interface CodexSessionIndexEntry {
   id: string;
@@ -522,13 +525,6 @@ export function buildCodexConnectorCommand(
   return [
     ...command,
     "-c", 'model_reasoning_effort="low"',
-    // Code-mode's exec wrapper can invoke nested connector tools without the
-    // lifecycle / PreToolUse evidence required by this operation's guard.
-    // Keep direct, individually guarded MCP calls for Sharing and Calendar;
-    // this invocation-only override must never change the user's CLI config.
-    "--disable", "code_mode_host",
-    "--disable", "code_mode",
-    "--disable", "code_mode_only",
     "-c", `projects.${JSON.stringify(profile.cwd)}.trust_level="trusted"`,
     "-c", `hooks=${hooks}`,
     "--dangerously-bypass-hook-trust",
@@ -804,7 +800,21 @@ export async function runAgentCliCommand(args: {
   hermesToolsets?: readonly string[];
   hermesConnector?: string;
   connectorToolPolicy?: ConnectorToolPolicy;
+  codexNotionOperation?: CodexNotionOperation;
 }): Promise<AgentCliRunResult> {
+  if (isCodexRuntime(args.runtime) && args.codexNotionOperation) {
+    if (!args.connectorToolPolicy || args.nativeSessionId) return {
+      code: 1, stdout: "", stderr: "A Notion operation requires fresh, explicit connector authorization", connectorWriteState: "not-started",
+    };
+    const modelIndex = args.runtime.command.indexOf("--model");
+    return runCodexNotionOperation({
+      executable: args.runtime.command[0] ?? "",
+      model: modelIndex >= 0 ? args.runtime.command[modelIndex + 1] ?? "" : "",
+      operation: args.codexNotionOperation,
+      policy: args.connectorToolPolicy,
+      timeoutMs: args.timeoutMs,
+    });
+  }
   if (!args.configDir) {
     return runLlmCommand(args.runtime.command, args.scriptDir, args.prompt, args.timeoutMs, args.runtime.cwd);
   }

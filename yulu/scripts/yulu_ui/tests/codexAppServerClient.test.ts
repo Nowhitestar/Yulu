@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { CodexAppServerRuntimeClient } from "../src/codexAppServerClient.js";
+import { AppServerSession, CodexAppServerRuntimeClient } from "../src/codexAppServerClient.js";
 
 const roots: string[] = [];
 
@@ -43,7 +43,14 @@ for await (const line of createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
   appendFileSync(audit, JSON.stringify(message) + "\\n");
   if (message.method === "initialized") continue;
-  if (message.method === "initialize") send({ id: message.id, result: { userAgent: "fake" } });
+  if (message.method === "initialize") {
+    send({ id: message.id, result: { userAgent: "fake" } });
+    if (mode === "server-requests") {
+      for (const method of ["item/tool/call", "item/permissions/requestApproval", "account/chatgptAuthTokens/refresh", "mcpServer/elicitation/request"]) {
+        send({ id: "unsolicited-" + method, method, params: { reason: "not authorized by this operation" } });
+      }
+    }
+  }
   if (message.method === "account/read" && mode === "hang-account") continue;
   if (message.method === "account/read") send({ id: message.id, result: {
     account: { type: process.env.YULU_FAKE_CODEX_ACCOUNT_TYPE || "chatgpt", email: "private@example.test", accessToken: "never-project-this" },
@@ -126,6 +133,25 @@ afterEach(() => {
 });
 
 describe("Codex app-server stdio client", () => {
+  it("explicitly rejects unsolicited server authority requests in connector-only sessions", async () => {
+    const fake = fakeCodexRuntime("server-requests");
+    const session = new AppServerSession({
+      executable: fake.executable, cwd: fake.root,
+      env: { YULU_FAKE_CODEX_AUDIT: fake.audit, YULU_FAKE_CODEX_MODE: fake.mode },
+      rpcTimeoutMs: 1_000, rejectServerRequests: true,
+    });
+    try {
+      await session.initialize();
+      await session.request("thread/start", { model: "gpt-5.6-sol" });
+    } finally {
+      session.close();
+    }
+    const messages = readFileSync(fake.audit, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const replies = messages.filter((message) => typeof message.id === "string" && message.id.startsWith("unsolicited-"));
+    expect(replies).toHaveLength(4);
+    expect(replies.every((reply) => reply.error?.code === -32601 && reply.result === undefined)).toBe(true);
+  });
+
   it("uses only non-secret account/read plus model/list for runtime inspection", async () => {
     const fake = fakeCodexRuntime();
     const client = new CodexAppServerRuntimeClient({

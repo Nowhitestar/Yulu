@@ -1,5 +1,8 @@
 import { isTrustedNotionUrl, normalizeNotionPageId } from "./notionDelivery.js";
 
+// Notion requires a page title. It is fixed, not inferred from meeting data.
+export const NOTION_SHARE_PAGE_TITLE = "Yulu Share";
+
 /** Compare page identity, not a link's presentation (hyphens, title or pvs query). */
 export function notionSharingPageId(value: unknown): string | null {
   if (typeof value !== "string") return null;

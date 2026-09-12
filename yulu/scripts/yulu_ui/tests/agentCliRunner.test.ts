@@ -123,14 +123,12 @@ describe("agentCliRunner", () => {
     expect(command).toEqual(expect.arrayContaining([
       "codex", "exec",
       "-c", 'model_reasoning_effort="low"',
-      "--disable", "code_mode_host",
-      "--disable", "code_mode",
-      "--disable", "code_mode_only",
       "-c", `projects.${JSON.stringify(profile.cwd)}.trust_level="trusted"`,
       "-c", expect.stringMatching(/^hooks=\{SessionStart=/),
       "--dangerously-bypass-hook-trust",
     ]));
     expect(command.join(" ")).toContain(profile.guardPath);
+    expect(command).not.toContain("code_mode_host");
     expect(command).not.toContain("--ignore-user-config");
     expect(command).not.toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(readFileSync(join(profile.cwd, ".codex", "config.toml"), "utf8")).toBe("");
