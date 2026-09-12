@@ -14,8 +14,11 @@
   entry and native Select All / Paste, but that is not a pass for build 1614.
   The two artifacts' HTML and JavaScript are byte-identical; there is no evidence
   yet that a new frontend bundle caused this white window. No speculative cache
-  clearing, service reset or installed-App patch was made. Native investigation
-  is paused because CUA reports the Mac locked and automatic unlock unavailable.
+  clearing, service reset or installed-App patch was made. Native control later
+  became available: one ordinary quit/reopen reproduced the white window, while
+  one normal window zoom restored the DOM and paint. Restoring the original size
+  kept the page usable. This localizes the failure to initial native layout/paint,
+  but does not establish that ordinary launch is fixed in the installed build.
 - Sharing now uses the explicitly selected, already-installed ChatGPT desktop
   Codex CLI 0.153.4 and retains `gpt-5.6-sol`. Installed target discovery returned
   10 recent Notion pages on dev8; the CI App's separate read-only access probe
@@ -61,6 +64,17 @@
   79 tests across three changed files (115 distinct related tests in total).
   Node 24 typecheck and the production build pass. This source is not installed;
   do not build another App merely to experiment with runtime flags.
+- Source repair `c83f76d` is committed and pushed to the existing PR branch.
+  Its real source read-back succeeded without modifying the installed Host.
+  The same batch now gives WebKit a constraint-laid-out native container,
+  displays loading status until navigation completes, starts its first paint
+  with an explicit visibility/layout transition, and reports navigation/process
+  failures. Reopening a route also reattaches a reused WebView. Two focused
+  native contracts and the compiled WebView navigation smoke pass, including
+  initial viewport, visible completion, reattachment and unchanged external-link
+  behavior. A small synthetic probe showed that a zero final frame alone did not
+  explain the old bug; do not claim that as its proven cause. Proceed with one
+  combined internal signed-App validation of these two repaired boundaries.
 - The installed General About query now correctly returns the App version and
   `Yulu.app` install source. Guard errors precede incidental stderr; genuine
   failed-turn and timeout errors retain their priority. Those repairs remain.
@@ -68,7 +82,7 @@
   pushing to the existing `https://github.com/Nowhitestar/Yulu.git` repository
   and running its current CI signing workflow, resolving the earlier platform
   authorization rejection. Continue with one internal complete-App validation
-  build when the remaining native-window diagnosis is ready; do not access the
+  build for the now-combined connector/native-window batch; do not access the
   local password store or publish another public RC.
   No alternative channel was used to bypass the earlier rejection.
 - xAI's original saved grant remains unreadable in the installed CI App. The
@@ -321,14 +335,15 @@ store inspection is not permission to inspect the user's password store now.
 
 ### Required outcomes
 
-1. Diagnose the current native white window after native CUA becomes available;
-   start with one ordinary quit/reopen, since the Host/browser work and the two
-   frontend bundles match. Do not reset services or clear user data speculatively.
+1. Verify the native layout/paint repair in the complete internal App: ordinary
+   automatic entry must work without the window-zoom workaround. The one
+   pre-repair quit/reopen already reproduced the bug; do not repeat it unchanged.
+   Do not reset services or clear user data speculatively.
    Current xAI account availability separately remains an unresolved live-access
    blocker. Do not repeat signing, installation or credential probes without new evidence.
    Keep the original grant/source/models and the no-password-access boundary.
    Preserve dev6's successful pipeline evidence separately from current readiness.
-2. Once the native-window diagnosis is ready, install a complete CI-signed batch
+2. Install the complete CI-signed connector/native-window batch
    containing the proven direct-RPC repair, then reconcile the existing
    Test Share receipt read-only. Only after Host verification succeeds, manually
    share the existing synthetic QA summary once to the same private test parent

@@ -4025,8 +4025,10 @@ final class SparkleUpdateAdapter: NSObject, SPUUpdaterDelegate {
 }
 #endif
 
-final class ApplicationWebContent: NSObject, WKUIDelegate {
+final class ApplicationWebContent: NSObject, WKUIDelegate, WKNavigationDelegate {
     let webView: WKWebView
+    private let container = NSView()
+    private let statusLabel = NSTextField(wrappingLabelWithString: "Opening Yulu…")
     private let port: Int
     private let openExternalURL: (URL) -> Bool
 
@@ -4039,8 +4041,76 @@ final class ApplicationWebContent: NSObject, WKUIDelegate {
         self.port = port
         self.openExternalURL = openExternalURL
         super.init()
-        webView.autoresizingMask = [.width, .height]
+        container.autoresizingMask = [.width, .height]
+        statusLabel.alignment = .center
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        webView.isHidden = true
+        container.addSubview(statusLabel)
+        container.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            statusLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            statusLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 32),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -32),
+        ])
         webView.uiDelegate = self
+        webView.navigationDelegate = self
+    }
+
+    func attach(to window: NSWindow) {
+        // Give WebKit a laid-out host before loading. Replacing the window's root
+        // directly with a zero-frame WKWebView could leave its first paint blank
+        // until a user resized the window, even though its document had loaded.
+        container.frame = NSRect(origin: .zero, size: window.contentLayoutRect.size)
+        if window.contentView !== container { window.contentView = container }
+        container.needsLayout = true
+        container.layoutSubtreeIfNeeded()
+    }
+
+    func load(_ url: URL, in window: NSWindow) {
+        attach(to: window)
+        statusLabel.stringValue = "Opening Yulu…"
+        statusLabel.isHidden = false
+        webView.isHidden = true
+        webView.load(URLRequest(url: url))
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView === self.webView else { return }
+        // A visibility/layout transition starts the initial compositing pass
+        // without requiring a window resize or changing any user preferences.
+        statusLabel.isHidden = true
+        webView.isHidden = false
+        container.needsLayout = true
+        container.layoutSubtreeIfNeeded()
+        webView.needsDisplay = true
+    }
+
+    private func showLoadFailure(_ detail: String) {
+        webView.isHidden = true
+        statusLabel.stringValue = "Yulu could not display its page. \(detail) Choose Navigate > Open Yulu to retry."
+        statusLabel.isHidden = false
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard webView === self.webView, (error as NSError).code != NSURLErrorCancelled else { return }
+        showLoadFailure("Navigation error \((error as NSError).code).")
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard webView === self.webView, (error as NSError).code != NSURLErrorCancelled else { return }
+        showLoadFailure("Navigation error \((error as NSError).code).")
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard webView === self.webView else { return }
+        showLoadFailure("The web content process stopped.")
     }
 
     func webView(
@@ -4082,7 +4152,12 @@ func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
         contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
         styleMask: [.titled], backing: .buffered, defer: false
     )
-    window.contentView = content.webView
+    content.attach(to: window)
+    guard content.webView.frame.size == window.contentLayoutRect.size,
+          content.webView.frame.width > 0, content.webView.frame.height > 0 else {
+        throw NSError(domain: "WebNavigationSmoke", code: 5,
+                      userInfo: [NSLocalizedDescriptionKey: "initial WebView viewport was not laid out"])
+    }
     let origin = URL(string: "http://127.0.0.1:17891/")!
     content.webView.loadHTMLString("<html><body>Yulu web navigation fixture</body></html>", baseURL: origin)
     let loadDeadline = Date().addingTimeInterval(10)
@@ -4092,6 +4167,19 @@ func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
     guard !content.webView.isLoading else {
         throw NSError(domain: "WebNavigationSmoke", code: 1,
                       userInfo: [NSLocalizedDescriptionKey: "local WebView fixture did not load"])
+    }
+    guard !content.webView.isHidden else {
+        throw NSError(domain: "WebNavigationSmoke", code: 6,
+                      userInfo: [NSLocalizedDescriptionKey: "completed page did not become visible without resizing"])
+    }
+    // A native service/status view must not permanently detach a reused WebView.
+    window.contentView = NSView()
+    content.attach(to: window)
+    guard content.webView.window === window,
+          content.webView.frame.size == window.contentLayoutRect.size,
+          !content.webView.isHidden else {
+        throw NSError(domain: "WebNavigationSmoke", code: 7,
+                      userInfo: [NSLocalizedDescriptionKey: "reused WebView did not reattach"])
     }
     let authorizationURL = "https://accounts.x.ai/oauth2/device?user_code=YULU-TEST"
     let manualURL = "https://accounts.x.ai/oauth2/device?user_code=MANUAL-TEST"
@@ -4890,18 +4978,16 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     }
 
     private func open(route: String) {
-        let web: WKWebView
-        if let webView {
-            web = webView
+        let content: ApplicationWebContent
+        if let webContent {
+            content = webContent
         } else {
-            let content = ApplicationWebContent(port: port)
+            content = ApplicationWebContent(port: port)
             webContent = content
-            web = content.webView
-            window?.contentView = web
         }
-        guard let url = URL(string: "http://127.0.0.1:\(port)\(route)") else { return }
-        web.load(URLRequest(url: url))
-        window?.makeKeyAndOrderFront(nil)
+        guard let window, let url = URL(string: "http://127.0.0.1:\(port)\(route)") else { return }
+        content.load(url, in: window)
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 }

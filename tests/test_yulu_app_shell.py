@@ -81,6 +81,26 @@ def test_shell_edit_shortcuts_use_the_webview_first_responder():
     assert "NSPasteboard" not in edit
 
 
+def test_shell_webview_has_initial_layout_and_explicit_loading_outcomes():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    web = source.split("final class ApplicationWebContent:", 1)[1].split(
+        "#if YULU_DEVELOPMENT_SMOKE", 1
+    )[0]
+    assert "WKNavigationDelegate" in web
+    assert "webView.navigationDelegate = self" in web
+    assert "window.contentLayoutRect.size" in web
+    assert "container.layoutSubtreeIfNeeded()" in web
+    assert "webView.isHidden = false" in web
+    assert "didFailProvisionalNavigation" in web
+    assert "webViewWebContentProcessDidTerminate" in web
+    assert "NSURLErrorCancelled" in web
+    assert "removeData" not in web
+    assert "nonPersistent" not in web
+    opening = source.split("private func open(route: String)", 1)[1]
+    assert "content.load(url, in: window)" in opening
+    assert "window?.contentView = web" not in opening
+
+
 def compile_audio_daemon_inspector(tmp_path: Path) -> Path:
     binary = tmp_path / "audio_daemon"
     result = subprocess.run(
