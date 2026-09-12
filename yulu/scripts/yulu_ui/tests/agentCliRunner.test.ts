@@ -123,11 +123,17 @@ describe("agentCliRunner", () => {
     expect(command).toEqual(expect.arrayContaining([
       "codex", "exec",
       "-c", 'model_reasoning_effort="low"',
+      "--disable", "code_mode_host",
+      "--disable", "code_mode",
+      "--disable", "code_mode_only",
       "-c", `projects.${JSON.stringify(profile.cwd)}.trust_level="trusted"`,
       "-c", expect.stringMatching(/^hooks=\{SessionStart=/),
       "--dangerously-bypass-hook-trust",
     ]));
     expect(command.join(" ")).toContain(profile.guardPath);
+    expect(command).not.toContain("--ignore-user-config");
+    expect(command).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(readFileSync(join(profile.cwd, ".codex", "config.toml"), "utf8")).toBe("");
   });
 
   it("fails closed before connector execution unless a project hook authorizes the exact tool input", () => {
@@ -324,6 +330,7 @@ describe("agentCliRunner", () => {
     expect(run("mcp__codex_apps__notion__notion_create_pages").status).toBe(2);
     expect(run("mcp__codex_apps__other_app__notion_list_recent_pages").status).toBe(2);
     expect(run("mcp__codex_apps__notion_fake__notion_list_recent_pages").status).toBe(2);
+    expect(run("exec").status).toBe(2);
   });
 
   it("fails a Codex connector run when the CLI does not execute the project hook", async () => {
@@ -333,6 +340,7 @@ describe("agentCliRunner", () => {
     writeFileSync(executable, [
       "#!/bin/sh",
       "if [ \"$1\" = 'features' ]; then printf '%s\\n' 'hooks stable true'; exit 0; fi",
+      "printf '%s\\n' 'Non-fatal startup warning from an unrelated MCP server' >&2",
       "previous=''",
       "for argument in \"$@\"; do",
       "  if [ \"$previous\" = '-o' ]; then printf '%s' '{\"status\":\"ready\"}' > \"$argument\"; fi",
@@ -360,6 +368,8 @@ describe("agentCliRunner", () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toMatch(/guard did not execute/i);
+    expect(result.stderr.split("\n")[0]).toMatch(/guard did not execute/i);
+    expect(result.stderr).toContain("Non-fatal startup warning");
     expect(result.connectorWriteState).toBe("unknown");
   });
 

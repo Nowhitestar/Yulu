@@ -121,11 +121,14 @@ export const systemRouter = router({
     uptimeSec: Math.floor(process.uptime()),
   })),
 
-  // The PRODUCT version (repo-root VERSION file), not the yulu_ui package
-  // version above. Read-only; never throws — a missing/unreadable VERSION
-  // degrades to "unknown" and a missing install file → installSource: null, so
-  // the About block always renders.
+  // The signed App injects its product identity into its Host. Only legacy /
+  // checkout runs use the repo-root VERSION and install file. Never label an
+  // installed App with an unrelated or missing development checkout's version.
   yuluVersion: publicProcedure.query(({ ctx }): { version: string; installSource: string | null } => {
+    const applicationVersion = process.env.YULU_PRODUCT_VERSION?.trim();
+    if (process.env.YULU_SERVICE_OWNER === "com.yulu.app.host" && applicationVersion) {
+      return { version: applicationVersion, installSource: "Yulu.app" };
+    }
     let version = "unknown";
     try {
       const raw = readFileSync(ctx.paths.versionFile, "utf8").trim();

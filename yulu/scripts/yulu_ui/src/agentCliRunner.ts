@@ -522,6 +522,13 @@ export function buildCodexConnectorCommand(
   return [
     ...command,
     "-c", 'model_reasoning_effort="low"',
+    // Code-mode's exec wrapper can invoke nested connector tools without the
+    // lifecycle / PreToolUse evidence required by this operation's guard.
+    // Keep direct, individually guarded MCP calls for Sharing and Calendar;
+    // this invocation-only override must never change the user's CLI config.
+    "--disable", "code_mode_host",
+    "--disable", "code_mode",
+    "--disable", "code_mode_only",
     "-c", `projects.${JSON.stringify(profile.cwd)}.trust_level="trusted"`,
     "-c", `hooks=${hooks}`,
     "--dangerously-bypass-hook-trust",
@@ -934,7 +941,11 @@ export async function runAgentCliCommand(args: {
       result = { ...result, connectorWriteState: audit.writeState };
       if (audit.error) result = {
         ...result,
-        stderr: [result.stderr.trim(), audit.error].filter(Boolean).join("\n"),
+        // A failed turn/timeout is authoritative. Otherwise the guard explains
+        // this failure, not incidental MCP startup warnings in stderr.
+        stderr: (failure || result.timedOut
+          ? [result.stderr.trim(), audit.error]
+          : [audit.error, result.stderr.trim()]).filter(Boolean).join("\n"),
         code: 1,
       };
     }
