@@ -1,4 +1,4 @@
-# Phase 13 closeout — active scope, updated 2026-09-11
+# Phase 13 closeout — active scope, updated 2026-09-12
 
 ## Current checkpoint
 
@@ -34,12 +34,12 @@
   before sending, and shows in-flight progress. The native shell adds standard
   Edit menu first-responder shortcuts after its absent paste/select-all bindings
   blocked target entry. These changes are source-validated, not installed yet.
-- Local repair commit: `a147d66`. The push to the existing
-  `https://github.com/Nowhitestar/Yulu.git` remote was rejected by platform review
-  for insufficient destination-specific push authorization. The remote was
-  verified read-only; no alternative channel or retry bypass was used, and no
-  CI validation run was started for this commit. Obtain the specific push/CI
-  authorization before continuing the password-free whole-App path.
+- Local repair commit: `a147d66`. On 2026-09-12 the user explicitly approved
+  pushing to the existing `https://github.com/Nowhitestar/Yulu.git` repository
+  and running its current CI signing workflow, resolving the earlier platform
+  authorization rejection. Continue with one internal complete-App validation
+  build; do not access the local password store or publish another public RC.
+  No alternative channel was used to bypass the earlier rejection.
 - xAI's original saved grant remains unreadable in the installed CI App. The
   normal Settings UI and one read-only connection recheck show the new accurate
   unavailable-credential explanation, not a missing-login claim. Grok OAuth and
@@ -221,6 +221,14 @@ candidate is not progress toward that outcome by itself.
   the production Host/frontend build, and two native-shell checks including
   compilation. The large frontend chunk warning remains non-blocking and is not
   a reason for an unrelated refactor or another public RC.
+- A fresh connector fetch of that exact Test Share child was replayed offline
+  through the current adapter and passed. The captured response SHA-256 is
+  `1147e222c259a48f8d04a14bed488e1c9413145c71557e3f14f694784a134b88`.
+  This used no CLI execution, new external write or Host mutation; it is actual-
+  format parser evidence, not an installed Share receipt. Fresh public MCP
+  readback still shows the synthetic QA summary at 1,110 characters, not stale,
+  with zero recording Share Actions. The existing Test Share remains fenced in
+  the installed Host until the repair can be installed and reconciled normally.
 
 ## Remaining work in order
 
