@@ -38,6 +38,10 @@ Yulu 面向会议和语音输入，不是通用音频编辑器。
 
 Yulu Host 提供 loopback-only、bearer-authenticated MCP。优先调用已注册的 MCP 工具，不要读取或打印 `~/Library/Application Support/Yulu/mcp-token.json`，也不要直接编辑 `host.sqlite`。
 
+DMG 不会安装全局 `yulu` 命令。本指南中的 CLI 回退只适用于已有源码／CLI
+安装；不要因为找不到命令就重装产品、创建全局链接或修改签名 App。DMG 用户
+使用原生界面或已注册的 MCP；注册方式见「开发和安装」。
+
 主要工具：
 
 | 工具 | 用途 |
@@ -185,7 +189,9 @@ yulu logs ui
 yulu repair-permissions
 ```
 
-若 `sysReady=false` 或 `micReady=false`，使用 `yulu repair-permissions`，并在系统设置中为 `Yulu.app` 启用“麦克风”和“屏幕与系统音频录制”。
+若 `sysReady=false` 或 `micReady=false`，先在系统设置中为 `Yulu.app` 启用
+“麦克风”和“屏幕与系统音频录制”。`yulu repair-permissions` 仅供已有 CLI
+安装且确实需要修复权限时使用；不要默认重置权限。
 
 ## 隐私和安全
 
@@ -197,12 +203,19 @@ yulu repair-permissions
 
 ## 开发和安装
 
-本 skill 只是 Agent 契约，不能单独安装原生录音和 Host。稳定版安装：从
+本 skill 只是 Agent 契约，不能单独安装原生录音和 Host。App 安装：从
 [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases) 下载
-`yulu-macos-arm64-vX.Y.Z.dmg`，打开后将 `Yulu.app` 拖入 `/Applications`，再运行：
+当前公告版本的 `yulu-macos-arm64-vX.Y.Z.dmg`，打开后将 `Yulu.app` 拖入
+`/Applications`，启动并完成 App 引导即可录音，无需 CLI。
+
+需要让外部 Agent 控制 Yulu 时，通过 App 内置的 MCP 注册工具连接该 Agent，
+再用 Agent 自己的 skill 安装方式添加本 skill；见
+[DMG 与 CLI 入口说明](https://github.com/Nowhitestar/Yulu/blob/main/docs/operations.md#dmg-and-cli-entry-points)。
+已有源码／CLI 安装才使用以下命令：
 
 ```bash
 yulu skill install --agent codex
+yulu mcp install --agent codex
 yulu mcp status
 yulu mcp test
 ```
