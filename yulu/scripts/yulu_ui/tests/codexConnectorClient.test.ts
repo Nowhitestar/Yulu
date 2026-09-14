@@ -123,7 +123,7 @@ describe("deterministic Codex Notion connector", () => {
     expect(result.connectorWriteState).toBe("authorized");
     expect(session.request).toHaveBeenLastCalledWith("mcpServer/tool/call", {
       threadId: "thread-qa", server: "codex_apps", tool: "notion.notion-create-pages",
-      arguments: { parent: { page_id: parentId }, pages: [{ properties: { title: "Yulu Share" }, content: summary }] },
+      arguments: { parent: { page_id: parentId }, pages: [{ properties: { title: "Yulu Share" }, content: `<empty-block/>\n${summary}` }] },
     });
     expect(JSON.parse(result.stdout)).toMatchObject({ status: "sent", destination, id: pageId, url });
   });
@@ -197,6 +197,30 @@ describe("deterministic Codex Notion connector", () => {
     const adapter = new AgentSharingConnectorAdapter({ scriptDir: "/app/scripts", configDir: "/unused/config" });
     await expect(adapter.verifyReceipt({ connection, connector: "notion", destination, content: summary, receipt })).rejects.toBeInstanceOf(SharingConnectorUnknownOutcomeError);
     expect(session.request).toHaveBeenLastCalledWith("mcpServer/tool/call", expect.objectContaining({ tool: "notion.fetch" }));
+  });
+
+  it("preserves the full heading through create/read-back and does not hide a dropped heading", async () => {
+    let observed = "";
+    session.request.mockImplementation((method, params) => {
+      if (method === "mcpServer/tool/call" && params.tool === "notion.notion-create-pages") {
+        const wire = params.arguments.pages[0].content as string;
+        // Observed connector behavior: an initial H1 is consumed as page title.
+        observed = wire.replace(/^# [^\n]+\n*/, "");
+        return envelope({ pages: [{ id: pageId, url }] });
+      }
+      if (method === "mcpServer/tool/call" && params.tool === "notion.fetch") {
+        return envelope({ ...fetched(), text: fetched().text.replace(summary, observed) });
+      }
+      return respond(method, params);
+    });
+    const adapter = new AgentSharingConnectorAdapter({ scriptDir: "/app/scripts", configDir: "/unused/config" });
+    await expect(adapter.share({ connection, connector: "notion", destination, content: summary })).resolves.toEqual(receipt);
+    expect(observed).toBe(`<empty-block/>\n${summary}`);
+    await expect(adapter.verifyReceipt({ connection, connector: "notion", destination, content: summary, receipt })).resolves.toEqual(receipt);
+    observed = summary.split("\n").slice(1).join("\n");
+    await expect(adapter.verifyReceipt({ connection, connector: "notion", destination, content: summary, receipt }))
+      .rejects.toThrow(/page exists.*content does not match.*Do not resend/);
+    expect(session.request.mock.calls.filter(([method, params]) => method === "mcpServer/tool/call" && params.tool === "notion.notion-create-pages")).toHaveLength(1);
   });
 
   it("does not interpret recent-page titles as connector transport failures", async () => {

@@ -147,6 +147,14 @@ describe("Notion fetch receipt envelopes", () => {
     await expect(verifier(fetched()).adapter.verifyReceipt({ ...input, receipt: { ...receipt, receiptUrl: parentUrl } }))
       .rejects.toBeInstanceOf(SharingConnectorUnknownOutcomeError);
   });
+
+  it("reports content mismatch explicitly when Notion dropped the first summary heading", async () => {
+    const payload = fetched();
+    payload.text = payload.text.replace("# QA summary\n", "");
+    const { adapter, run } = verifier(payload);
+    await expect(adapter.verifyReceipt(input)).rejects.toThrow(/page exists.*content does not match.*Do not resend/);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("AgentSharingConnectorAdapter", () => {

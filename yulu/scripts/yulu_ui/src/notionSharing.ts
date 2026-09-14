@@ -36,6 +36,14 @@ export function normalizeNotionShareDestination(value: string): string {
   throw new Error("Paste a Notion page link or page ID, or select a discovered destination; a page title alone is not a destination");
 }
 
+/** Keep a leading summary H1 in the body instead of Notion treating it as a page title.
+ * The documented empty paragraph carries no meeting data; the snapshot is unchanged.
+ */
+export function notionShareWriteContent(content: string): string {
+  return /^(?:[\t ]*\r?\n)* {0,3}#[\t ]+\S/.test(content)
+    ? `<empty-block/>\n${content}` : content;
+}
+
 /** Notion discards empty paragraph separators, but never discard code whitespace. */
 export function notionShareContentMatches(observed: string, expected: string): boolean {
   const normalize = (markdown: string) => {
@@ -50,7 +58,10 @@ export function notionShareContentMatches(observed: string, expected: string): b
       return fence !== null || line !== "";
     }).join("\n");
   };
-  return normalize(observed) === normalize(expected);
+  const actual = normalize(observed);
+  // Permit only our exact, leading transport paragraph (or its removal), not
+  // arbitrary tags, missing headings, changed body text or code normalization.
+  return actual === normalize(expected) || actual === normalize(notionShareWriteContent(expected));
 }
 
 export interface NotionFetchedSharePage {

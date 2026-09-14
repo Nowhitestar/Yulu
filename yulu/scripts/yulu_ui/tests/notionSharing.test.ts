@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeNotionShareDestination, notionFetchedSharePage, notionShareContentMatches, notionSharingPageId } from "../src/notionSharing.js";
+import { normalizeNotionShareDestination, notionFetchedSharePage, notionShareContentMatches, notionSharingPageId, notionShareWriteContent } from "../src/notionSharing.js";
 
 const id = "01234567-89ab-cdef-0123-456789abcdef";
 const compact = id.replaceAll("-", "");
@@ -43,5 +43,27 @@ describe("Notion sharing formats", () => {
   it("never treats model prose as a fetched page", () => {
     expect(notionFetchedSharePage({ status: "verified", content: "approved" })).toBeNull();
     expect(notionFetchedSharePage("I verified the page")).toBeNull();
+  });
+
+  it("protects a leading H1 with exactly one documented empty paragraph", () => {
+    for (const content of ["# QA summary\n\nDecision.", "\n# QA summary\nDecision.", " \n# QA summary\nDecision.", "# QA summary\r\nDecision."]) {
+      const wire = notionShareWriteContent(content);
+      expect(wire).toBe(`<empty-block/>\n${content}`);
+      expect(notionShareWriteContent(wire)).toBe(wire);
+      expect(notionShareContentMatches(wire, content)).toBe(true);
+      expect(notionShareContentMatches(content, content)).toBe(true);
+    }
+    for (const content of ["Test Share", "## Section\nDecision.", "```md\n# Literal heading\n```", "#hashtag"]) {
+      expect(notionShareWriteContent(content)).toBe(content);
+    }
+  });
+
+  it("still rejects the observed dropped-H1 defect and any other content change", () => {
+    const summary = "# QA summary\n\n## Decision\nKeep sharing manual.";
+    expect(notionShareContentMatches("## Decision\nKeep sharing manual.", summary)).toBe(false);
+    expect(notionShareContentMatches(`<empty-block/>\n${summary.replace("# QA summary", "# Different")}`, summary)).toBe(false);
+    expect(notionShareContentMatches(`<empty-block/>\n<empty-block/>\n${summary}`, summary)).toBe(false);
+    expect(notionShareContentMatches(`${summary}\n<empty-block/>`, summary)).toBe(false);
+    expect(notionShareContentMatches("```\n<empty-block/>\nx\n```", "```\nx\n```")).toBe(false);
   });
 });

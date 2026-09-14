@@ -8,7 +8,7 @@ import {
 import type { AgentRuntime } from "./agentRuntime.js";
 import type { CodexNotionOperation } from "./codexConnectorClient.js";
 import type { PersistedAgentConnection, SharingConnector } from "./hostStore.js";
-import { notionFetchedSharePage, notionShareContentMatches, notionSharingPageId } from "./notionSharing.js";
+import { notionFetchedSharePage, notionShareContentMatches, notionSharingPageId, notionShareWriteContent } from "./notionSharing.js";
 import {
   SharingConnectorUnknownOutcomeError,
   YULU_TEST_SHARE_CONTENT,
@@ -216,7 +216,7 @@ function exactWriteContent(value: unknown, connector: SharingConnector, expected
         hasExactKeys(page, ["content", "properties"]) &&
         hasExactKeys(page.properties, ["title"]) &&
         asRecord(page.properties).title === NOTION_SHARE_PAGE_TITLE
-      )) && page.content === expected;
+      )) && (page.content === expected || page.content === notionShareWriteContent(expected));
   }
   const keys = record.type === "stream"
     ? ["type", "to", "topic", "content"]
@@ -900,6 +900,15 @@ export class AgentSharingConnectorAdapter implements SharingConnectorAdapter {
         );
     });
     if (!matched) {
+      if (connector === "notion" && reads.some((call) => {
+        const args = decodedValue(call.argumentsText);
+        const resultValue = decodedValue(call.resultText);
+        return exactReceiptReadArgument(args, connector, input.receipt.receiptId, input.receipt.receiptUrl) &&
+          exactReceiptIdentity(resultValue, connector, input.receipt.receiptId, input.receipt.receiptUrl) &&
+          exactReceiptDestination(resultValue, connector, input.destination);
+      })) {
+        throw new Error("Notion page exists at the confirmed destination, but its content does not match the complete confirmed snapshot. Do not resend; inspect the existing receipt.");
+      }
       throw new Error("Receipt verification returned no successful matching selected-connector read tool-call evidence");
     }
   }

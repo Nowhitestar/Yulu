@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AppServerSession } from "./codexAppServerClient.js";
-import { NOTION_SHARE_PAGE_TITLE, normalizeNotionShareDestination, notionSharingPageId } from "./notionSharing.js";
+import { NOTION_SHARE_PAGE_TITLE, normalizeNotionShareDestination, notionSharingPageId, notionShareWriteContent } from "./notionSharing.js";
 import type { AgentCliRunResult, ConnectorToolPolicy } from "./agentCliRunner.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -43,7 +43,7 @@ function operationArguments(operation: CodexNotionOperation, policy: ConnectorTo
     }
     return {
       parent: JSON.parse(normalizeNotionShareDestination(operation.destination)),
-      pages: [{ properties: { title: NOTION_SHARE_PAGE_TITLE }, content: operation.content }],
+      pages: [{ properties: { title: NOTION_SHARE_PAGE_TITLE }, content: notionShareWriteContent(operation.content) }],
     };
   }
   if (policy.writeGuard) throw new Error("A Notion read must not carry write authorization");

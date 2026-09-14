@@ -1,29 +1,34 @@
-# Phase 13 closeout — active scope, updated 2026-09-12
+# Phase 13 closeout — active scope, updated 2026-09-14
 
 ## Current checkpoint
 
-- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34674597952`, build 1618,
-  source `d26957462dfddef794a08eed05df7b894a29be19`. Finder replaced the whole
+- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34676677582`, build 1620,
+  source `929789596f059b4c4bf251477e11418ca1b0206a`. Finder replaced the whole
   App; its installed CodeResources digest matches the verified CI artifact.
   Migration transaction `f65ccc2e04a04b11b3d5f308d1460858` remains committed,
   with its original `2026-09-11T03:39:13.906530+00:00` timestamp. Initial Host
-  PID 55627 and Capture PID 55630 report the new version; both native audio
+  PID 35996 and Capture PID 35999 report the new version; both native audio
   inputs become ready, idle, and database quick-check is healthy.
-- The native layout/paint repair now passes installed verification. Both first
+- The native layout/paint repair passes installed verification. Build 1618's first
   entry after replacement and one normal quit/reopen automatically rendered the
   complete Agent Console without zoom, resizing, cache clearing, service resets
   or installed-App patches. Screenshots and the accessible HTML tree agree.
+  Build 1620 also entered the complete UI automatically after whole-App replacement.
   Build 1614's white-window failure and temporary zoom workaround are historical
   evidence, not the current installed state. The exact synthetic QA task remains
   completed on attempt 1 with no error; its 227-character transcript and
-  1,110-character, non-stale summary retain the original content/hash. No new
-  recording Share has been submitted.
+  1,110-character, non-stale summary retain the original content/hash. One fresh,
+  manually confirmed Share of that synthetic QA summary was submitted on
+  2026-09-14 to the already approved private Notion parent. The connector returned
+  a real page receipt, but its body is missing the snapshot's first H1; the Host
+  correctly retains Unknown Outcome. Do not submit another write.
 - The installed direct-RPC adapter successfully reconciled the **original** Test
   Share action `f53297b2-f5d3-42b2-a9a2-a37a04faaec1` by fetching its exact receipt
   once. The Host no longer offers Unknown reconciliation, retains the same
   receipt and reports `duplicateWarningRequired=true`. No second Test Share was
-  created. Overall Sharing Readiness is still fenced by a separate access-probe
-  timeout, not by receipt validation.
+  created. Build 1620's single installed read-only access probe now passes and
+  overall Sharing Readiness is ready. The earlier discovery timeout is resolved;
+  no second Test Share or repeated receipt reconciliation was needed.
 - A read-only timing diagnostic measured Codex `mcpServerStatus/list` at
   30,968 ms. The short access probe incorrectly used its 30,000 ms tool budget
   for runtime discovery too. The working source gives discovery a separate
@@ -32,8 +37,32 @@
   no model turn and no external write. The two affected suites pass all 45
   tests; typecheck and Host build pass. A pre-existing fixture audit race was
   repaired with a protocol round-trip barrier, not a production permission change.
-  This small follow-up is not yet installed; preserve build 1618's passed native
+  This small follow-up is now installed; preserve build 1618's passed native
   and receipt evidence rather than rebuilding unrelated code or issuing an RC.
+  It is committed/pushed as `929789596f059b4c4bf251477e11418ca1b0206a`.
+  Complete source CI `34676642675` and internal signed-App run `34676677582`
+  both passed. Artifact `10292078809` was downloaded to
+  `/private/tmp/yulu-phase13-discovery-ci.1ZfwGM`; archive checksum, deep/strict
+  signature, notarization staple and normal Gatekeeper assessment all pass.
+  Sandbox-only signing assessment errors were superseded by normal read-only
+  verification, not by re-signing or a trust-policy change. Finder whole-App
+  replacement completed on 2026-09-14; installed CodeResources SHA-256 is
+  `f624657177f09f708c757e4654f321eabed73de94a7b8c01891896e4e896efc2`.
+- The one actual recording Share is action
+  `7a29bf02-2377-4fa3-bd76-138bc24788b0`, receipt
+  `3db56559-55cc-8177-adaa-e570b0223dee`. An independent exact-page fetch confirms
+  the approved direct parent and all body text after the missing first heading;
+  it does **not** confirm the complete 1,110-character snapshot. The connector
+  consumed the leading H1 instead of retaining it in the body; the fixed page
+  title remains `Yulu Share`. Recording Share counts are total 1, verified 0.
+  The recording task is still completed on attempt 1, `sendToNotion=false`.
+  The local follow-up protects a leading H1 with Notion's documented empty
+  paragraph, retains complete-content comparison (missing headings still fail),
+  and replaces the generic audit error with an explicit content-mismatch detail
+  when the exact page/parent were read. Four targeted suites pass all 99 tests;
+  typecheck, Host build and diff checks pass. The transport repair remains unverified against a new live
+  write; do not call it installed or accepted. No existing page has been edited,
+  no action abandoned, and no new external write or RC has been made.
 - The latest normal xAI UI/API read now reports the original OAuth connected
   and readable. No password, credential helper, reauthorization or source/model
   change was performed. Real transcription and `grok-4.6` conversation capability
@@ -358,9 +387,9 @@ Host's public MCP readback, not just old checkboxes. Reuse only the stated scope
 | Requirement | Retained evidence | What it does not establish |
 |---|---|---|
 | Self-contained drag-to-Applications baseline | RC14 `b2c554c`, build 1568, macOS 26.5 arm64: fresh preflight passed with host dependencies absent, browser provenance verified, bundle observation matched, and first-launch Host/database healthy. | The baseline explicitly has `coreCompleted=false` and no Share receipt. Its old `com.yulu.ui` owner cannot prove the newly separated service registration path. |
-| Current physical migration and App takeover | CI validation App `d269574`, build 1618: original committed migration transaction retained, new Host/Capture own the runtime, native inputs ready. Both first entry and one ordinary quit/reopen render automatically without zoom. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
-| Committed artifacts survive whole-App replacement | Current MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. `sendToNotion=false`, no legacy delivery, and zero Share Actions. | This verifies preservation of dev6's successful synthetic result, not a new xAI request while the credential is unreadable. |
-| Sharing setup and external write | The approved private parent and one Test Share child exist. Build 1618 successfully reconciled the original Host action through direct runtime RPC without a model turn. | A separate 30 s discovery/probe budget error prevents current Sharing Readiness. The source fix's real probe passes; it still needs installation. No positive recording Share exists yet; do not resend the Test Share or choose an unrelated business page. |
+| Current physical migration and App takeover | CI validation App `9297895`, build 1620: original committed migration transaction retained, new Host/Capture own the runtime, native inputs ready and first entry rendered automatically. Reuse build 1618's first-entry and ordinary quit/reopen evidence for the unchanged native repair. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
+| Committed artifacts survive whole-App replacement | Current MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. `sendToNotion=false`, no legacy delivery. One separate manual Share is Unknown. | This preserves dev6's successful full pipeline. Build 1618's separate xAI capability probes also pass; neither claim is a new recording on build 1620. |
+| Sharing setup and external write | The approved private parent and original Test Share child exist. Build 1618 reconciled the original Host action through direct runtime RPC without a model turn; build 1620's installed access probe passes and Sharing Readiness is ready. The one manual recording Share returned a real receipt. | The new page lacks the summary's first H1, so the complete-content check correctly fails. Source remediation is under verification; do not resend either write or choose an unrelated business page. |
 | Public distribution | RC19's retained receipt binds anonymous asset sizes/hashes to `fb2be51` and explicitly has `installedAcceptance=false`; signature/notary/site checks are retained for those bytes. | It cannot accept the later internal App or establish stable promotion. |
 | Supported v0.22.2 upgrade and public update/rollback | Relevant source regressions are retained; the reviewed checkpoints continue to identify complete installed journeys as unearned. | Source tests, prepared harnesses and temporary fixture directories are not completed real-install receipts. |
 
@@ -379,16 +408,18 @@ store inspection is not permission to inspect the user's password store now.
    have recovered without changing the original grant/source/models; the initial
    summary Unknown result remains recorded. Preserve dev6's successful pipeline evidence
    separately from current readiness. No password-store access is authorized.
-2. Install the separately validated discovery-budget correction in one complete
-   CI-signed App, then prove current connector access. The original Test Share
-   was already reconciled successfully; do not resend or reconcile it again.
-   Only after overall Sharing Readiness is ready, manually
-   share the existing synthetic QA summary once to the same private test parent
-   and verify its durable receipt. Native paste/select-all already passed;
-   do not patch the installed signed App or repeat the external Test Share.
-   Build 1618 is installed and its passed outcomes stand. Existing authorization remains
-   effective; no new password access, OAuth flow or public release is authorized
-   by this handoff.
+2. The discovery-budget correction is installed in complete CI-signed build
+   1620, and its connector access probe passes. The original Test Share was
+   already reconciled successfully; do not resend or reconcile it again.
+   The existing synthetic QA summary has been manually shared once to the
+   approved private parent after Sharing Readiness became ready. Its exact-page
+   readback found a missing first H1, not a false positive in content comparison.
+   Preserve the Unknown action and original receipt; complete the transport
+   correction, then resolve this content loss before claiming positive Share
+   acceptance. An uncertain result must never trigger another automatic write.
+   Native paste/select-all already passed; do not patch the installed signed
+   App. Existing authorization remains effective; no new password access,
+   OAuth flow or public release is authorized by this handoff.
 3. Reconcile #170's existing applicable acceptance evidence, then make the one
    consolidated public candidate and complete distribution/stable closure. Keep
    #145/#170/#171 open until their actual remaining outcomes are verified.
