@@ -100,9 +100,12 @@ Interrupted writes remain an **Unknown outcome** until you reconcile a verified
 receipt or abandon that attempt; Yulu does not retry them automatically. Yulu
 requires successful selected-connector tool-call evidence for discovery, access,
 the write, and receipt read-back, and one client action ID cannot create two writes.
-Codex uses a temporary project-scoped pre-tool guard while retaining its normal
-runtime-owned auth; the guard blocks foreign tools and mismatched write inputs
-before execution without copying connector credentials.
+Codex Notion sharing uses bounded direct connector RPC through the selected
+runtime. Yulu checks the exact tool, destination and immutable content before
+dispatch; the runtime retains its own connector credentials. Other supported
+connectors retain their scoped pre-tool authorization guards. An uncertain
+recording Share can be checked from its Share dialog using the original receipt;
+this read-only reconciliation does not create another page or regenerate a summary.
 
 <p align="center">
   <img src="assets/demos/recordings-reader.png" alt="Yulu recording library with audio playback and transcript reader" />
@@ -150,16 +153,17 @@ return to Yulu to test each selected capability; login alone does not prove read
 
 ### Install
 
-Known RC14 limitation: on a fresh install, opening a recording can fail with
-`unable to open database file`. The RC15 candidate includes the initialization repair;
-see [fresh-install database preparation](docs/operations.md#fresh-install-database-preparation).
-Keep your data and do not create empty databases as a workaround.
+The consolidated [RC20 release candidate](https://github.com/Nowhitestar/Yulu/releases/tag/v0.23.0-rc.20)
+includes the migration, initialization, capture-package, native-startup and
+manual-sharing repairs. Final fresh-install and supported-upgrade acceptance
+remain in progress; it is not yet an accepted stable release.
 
-Known RC15 limitation: fresh-install acceptance found all-zero recorded audio
-because macOS rejected permissions attributed to the containing App. The RC16
-candidate includes the package repair, but installed acceptance remains incomplete;
-see [silent capture](docs/operations.md#wav-exists-but-capture-is-silent).
-Successful xAI connection tests do not prove the recording contains sound.
+For an older candidate's database or silent-capture failure, see
+[database preparation](docs/operations.md#fresh-install-database-preparation) and
+[silent capture](docs/operations.md#wav-exists-but-capture-is-silent). Preserve
+your data: do not create empty databases, edit migration journals or clear
+permissions as a workaround. A successful provider connection test does not
+prove that a recording contains sound or has committed transcript and summary.
 
 Open [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases), choose the
 currently advertised stable release or public release candidate, download its

@@ -2,6 +2,47 @@
 
 ## Current checkpoint
 
+- Public `v0.23.0-rc.20` is published and independently verified. Its exact
+  source is `edb5a7a4b932db7ceccd1cfa12b8611aa11f41d8`, build **1636**.
+  PRs #209 and #210 are merged; this is the consolidated release, not a new
+  candidate per individual repair. Stable promotion has not happened.
+- The physical Mac now runs that public RC20 after ordinary Finder whole-App
+  replacement from the verified DMG. Installed and mounted CodeResources
+  SHA-256 both equal
+  `3e5b77a896b8472af6159b2f24292ec815799acb65d177a1aa6362cf1221ead6`;
+  the installed deep/strict signature is valid. First launch automatically
+  rendered the complete Agent Console without resizing or patching the App.
+  Host PID 15765 and Capture PID 15766 report RC20/build 1636; the database
+  quick-check and both native inputs pass, with no active recording.
+- The original migration transaction and timestamp are unchanged. MCP readback
+  confirms the same completed attempt-1 synthetic task, error null and
+  `sendToNotion=false`. Its 227-character transcript and 1,110-character,
+  non-stale summary are byte-for-byte equal to the pre-install MCP snapshot.
+  The summary/snapshot hashes and both verified manual Share Actions are
+  retained. No recording was regenerated or Notion page created for this update.
+  One ordinary read-only access probe in the new Host passed and restored
+  current Sharing Readiness. It reused the original September 12 Test Share
+  receipt; recording Share counts remain total 2 / verified 2.
+- Remaining: genuine fresh public installation, a real supported v0.22.2
+  upgrade baseline, current public download guidance, then conditional
+  same-source stable publication and its normal RC-to-stable update. This
+  physical development-to-public replacement does not establish those separate
+  journeys. The overall goal is **not complete**.
+- The current goal API still reports its pre-existing blocked status and offers
+  no resume operation. Work resumed under the user's explicit instruction;
+  this limitation was not worked around by falsely completing/recreating the
+  goal or editing application-internal state. The objective itself is unchanged.
+- RC20 README/install guidance and issue-template corrections are prepared on
+  `codex/phase13-release-closeout`; all 14 release-line tests passed. No product
+  rebuild is required. The live landing page and its exact source
+  `Nowhitestar/tingfengji:content/yulu/index.html` still advertise RC19. The
+  necessary CTA/footer replacement is prepared locally; it has not been deployed.
+
+### Retained internal-App validation before public RC20
+
+The following evidence is version-specific history. It does not describe the
+currently installed App or current-process connector readiness.
+
 - Installed: complete CI-signed/notarized `0.23.0-dev.ci.34796306098`, build 1626,
   source `18b988e1c8ae4e5224309d3c19617b5ec48efb56`. Finder replaced the whole
   App; its installed CodeResources digest matches the verified CI artifact.
@@ -256,9 +297,9 @@ candidate is not progress toward that outcome by itself.
    candidate and perform the necessary final public-artifact checks. Complete
    same-source stable promotion and live distribution readback under #170/#171.
 
-## Current evidence
+## Earlier repair and acceptance evidence
 
-- Public RC19 / build 1592 remains the published candidate. It was installed and
+- Before the consolidated release, RC19 / build 1592 was the public candidate. It was installed and
   verified, but migration failed. A same-Team local development App
   `0.23.0-dev.phase13.1` then replaced it as a whole App for diagnosis; this is not
   a new RC or public-artifact acceptance.
@@ -453,10 +494,10 @@ Host's public MCP readback, not just old checkboxes. Reuse only the stated scope
 | Requirement | Retained evidence | What it does not establish |
 |---|---|---|
 | Self-contained drag-to-Applications baseline | RC14 `b2c554c`, build 1568, macOS 26.5 arm64: fresh preflight passed with host dependencies absent, browser provenance verified, bundle observation matched, and first-launch Host/database healthy. | The baseline explicitly has `coreCompleted=false` and no Share receipt. Its old `com.yulu.ui` owner cannot prove the newly separated service registration path. |
-| Current physical migration and App takeover | CI validation App `18b988e`, build 1626: original committed migration transaction retained, new Host/Capture own the runtime, native inputs ready and first entry rendered automatically. Reuse build 1618's first-entry and ordinary quit/reopen evidence for the unchanged native repair. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
-| Committed artifacts survive whole-App replacement | Current MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. `sendToNotion=false`, no legacy delivery. The two separate manual Share actions are verified. | This preserves dev6's successful full pipeline. Build 1618's separate xAI capability probes also pass; neither claim is a new recording on build 1626. |
+| Current physical migration and App takeover | Public RC20 `edb5a7a`, build 1636: Finder whole-App replacement retains the original committed migration transaction, new Host/Capture own the runtime, native inputs are ready and first entry renders automatically. Reuse build 1618's ordinary quit/reopen evidence for the unchanged native repair. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
+| Committed artifacts survive whole-App replacement | RC20 MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. Both contents match the pre-install MCP snapshot exactly. `sendToNotion=false`, no legacy delivery. The two separate manual Share actions are verified. | This preserves dev6's successful full pipeline. Build 1618's separate xAI capability probes also pass; neither claim is a new recording on RC20. |
 | Sharing setup and external write | The original Test Share verification is retained. Build 1626 verified the repaired original recording receipt read-only, then a fresh explicitly confirmed manual QA Share passed create-and-read-back with the full first heading. Independent fetch confirmed the exact private parent and full summary. | This is installed build 1626 evidence. No more QA writes are needed for these unchanged paths. Do not silently resend or choose a business page. |
-| Public distribution | RC19's retained receipt binds anonymous asset sizes/hashes to `fb2be51` and explicitly has `installedAcceptance=false`; signature/notary/site checks are retained for those bytes. | It cannot accept the later internal App or establish stable promotion. |
+| Public distribution | RC20 anonymous downloads match the four-asset inventory, sizes and hashes. The DMG/App signature, notarization, Gatekeeper, layout and runtime checks pass; all three payloads have exact-source SLSA attestations. The physical Mac has installed the same whole App. The stable feed is unchanged. | This does not establish a clean installation, supported v0.22.2 upgrade or stable promotion. The public landing page still points to RC19. |
 | Supported v0.22.2 upgrade and public update/rollback | Relevant source regressions are retained; the reviewed checkpoints continue to identify complete installed journeys as unearned. | Source tests, prepared harnesses and temporary fixture directories are not completed real-install receipts. |
 
 RC14 retained collector digests are: preflight
@@ -505,36 +546,62 @@ store inspection is not permission to inspect the user's password store now.
    repeat permission request were not user constraints and are withdrawn. This
    does not authorize edits to other business pages or use of real meeting data.
    Native paste/select-all already passed; do not patch the installed signed
-   App. Existing authorization remains effective; no new password access,
-   OAuth flow or public release is authorized by this handoff.
+   App. Existing authorization remains effective; these QA results do not
+   authorize password access or a new OAuth flow. The later public-release
+   authorization is recorded separately below.
 3. Reconcile #170's existing applicable acceptance evidence, then make the one
    consolidated public candidate and complete distribution/stable closure. Keep
    #145/#170/#171 open until their actual remaining outcomes are verified.
 
-### Prepared publication path (not executed)
+### Consolidated RC20 published and independently verified
 
-The complete installed repair batch has passed. The remaining public step needs
-the scoped merge/publication confirmation requested after this acceptance; the
-last explicit permission covered repository push and internal CI signing, not
-a new Release. The next candidate is proposed as `v0.23.0-rc.20`; that tag was
-absent at the last GitHub read. Preparation does not authorize public publication.
+The user explicitly authorized merging #209, publishing `v0.23.0-rc.20`, and
+publishing `v0.23.0` from the identical accepted source only after final
+acceptance. This supersedes the earlier internal-CI-only publication boundary;
+it does not permit password access, credential copying or new virtual machines.
+The complete installed repair batch has passed. Exact-head CI `34799026924`
+passed, and #209 merged as `518d8d1e8c2f74b9e9ab027f9d8a47280d988b8b`.
+
+Release Please generated #210 with only VERSION, its manifest and CHANGELOG
+changes. Its CI `34800559197` and title check passed. The reviewed release PR
+merged as `edb5a7a4b932db7ceccd1cfa12b8611aa11f41d8`; the RC20 tag resolves
+to that exact commit. The existing identity guard derives build **1636**, with
+**1637** reserved for an eventual same-source stable promotion. Publisher
+`34801526648` passed; RC20 became public at `2026-09-14T03:29:30Z` as a
+prerelease, not a draft or stable release. Exact-source CI `34801526499` passed.
+
+All four assets were independently downloaded anonymously to
+`/private/tmp/yulu-rc20-public.7UJ3gn`. Their exact inventory, sizes, API digests
+and published checksum rows match. The DMG SHA-256 is
+`a1ef47e756523db202da1eff9d667a0f7dba642b29cfb8db3949b2fe45c282b5`.
+The released body matches its generated changelog plus versioned release notes.
+The DMG and containing App pass deep/strict signatures, Developer ID Team,
+notarization staples and normal Gatekeeper assessment. Read-only mounted layout
+and complete self-contained runtime verification pass. The release appcast
+matches the exact DMG URL/size, macOS `13.0.0`, signature presence and no-delta
+policy. Each of the three payloads has a verified SLSA attestation, pinned to
+the exact RC20 source and official reusable publisher; self-hosted runners are
+rejected. The signed stable channel remains byte-identical to its pre-publication
+snapshot, SHA-256
+`ee1553ba6af63e62ee826015346d53af331b075a0950319ded778c161a3973b7`.
+These are public-artifact checks. The separate physical replacement result is
+recorded in the current checkpoint; no clean-target installation is implied.
 
 Release notes for the consolidated batch are prepared, and the same-source
 stable promotion allowlist/guidance is aligned to RC20 rather than the failed
-RC19 source. This alignment is not acceptance or a tag publication. VERSION,
-the release-please manifest, generated changelog and public feed remain on the
-existing release until the authorized release-please sequence advances them.
+RC19 source. This alignment is not acceptance. Release Please has advanced
+VERSION, its manifest and generated changelog to RC20; the stable public feed
+must remain unchanged for this prerelease.
 The internal App does not need rebuilding for publication-only files.
 The release-line identity, Sparkle feed promotion and appcast suites pass all
 28 tests, including refusal of RC19 promotion, mismatched tags/source and
 non-increasing build identities. These isolated fixtures do not publish tags
 or prove the future public artifacts.
 
-After authorization, follow the normal fix-PR / release-please flow, inspect the
-generated RC20 metadata and CI, then publish one complete signed/notarized DMG
-candidate. Resolve its source and increasing build identity from the final Git
-graph, not build 1626 or an old stable reservation. Validate the exact downloaded
-public bytes and update only the live public surfaces that changed.
+Do not rebuild or republish the verified RC20 bytes. Update only the live public
+surfaces that changed. Final fresh public install,
+supported-upgrade and update acceptance remain unearned; the goal is unchanged
+and must not be marked complete from successful source CI or tag creation alone.
 
 Use the following proof boundaries for final installed acceptance:
 
@@ -557,6 +624,19 @@ Use the following proof boundaries for final installed acceptance:
   feed and changed guidance, and the normal whole-App RC-to-stable update before
   closing #170/#171. The historical RC19 collector is not a required workflow for
   this candidate, and its receipts remain immutable historical evidence.
+
+### Isolated-target limitation on September 14
+
+Only the existing Clean Host Validation VM was started; no VM was created.
+Read-only preflight found macOS 26.5 and an existing build-1548 App/data, not a
+demonstrated v0.22.2 baseline. A later guest Finder inspection was rejected by
+the platform as outside the currently accepted VM scope. That rejection was
+not bypassed through a guest shell, another VM or a different control surface.
+The target is suspended, and the unrelated Windows VM was left untouched.
+No guest data, credential store or permissions were changed. Fresh-install and
+supported-upgrade acceptance remain unearned until an appropriate isolated
+target is available within the allowed scope; do not downgrade the working
+physical Mac or manufacture baseline receipts to remove this gap.
 
 ## Verification budget
 

@@ -74,8 +74,9 @@ Agent Console 是默认工作台。你可以在同一个页面开始或停止录
 测试分享，并由所选 Agent 读回外部回执后，分享才会就绪。写入中断会保留为「结果未知」，直到
 用户核验回执并完成对账或放弃该次操作；Yulu 不会自动重试。目标发现、访问探测、写入与回执
 读回都必须带有成功的所选连接器工具调用证据，同一个客户端操作 ID 也不能产生两次写入。
-Codex 会在临时项目中加载仅属于 Yulu 的调用前守卫，同时继续使用其原有的运行时认证；守卫会在
-执行前阻止外部工具和不匹配的写入参数，且不会复制连接器凭据。
+Codex 的 Notion 分享通过所选运行时执行有界的直接连接器 RPC。Yulu 会在发送前核对准确工具、
+目标与固定内容，连接器凭据仍由运行时保管；其他受支持的连接器继续使用各自的调用前授权守卫。
+录音分享结果未知时，可在分享弹窗中核对原有回执；这项只读对账不会另建页面，也不会重新生成纪要。
 
 <p align="center">
   <img src="assets/demos/recordings-reader.png" alt="包含录音播放、转录阅读和独立处理动作的 Yulu 录音资料库" />
@@ -116,14 +117,14 @@ Grok OAuth 会在系统默认浏览器中打开。在浏览器中完成账号登
 
 ### 安装
 
-RC14 已知限制：全新安装后，打开录音可能报 `unable to open database file`。
-RC15 候选版包含初始化修复，详见[首次安装数据库准备](docs/operations.md#fresh-install-database-preparation)。
-请保留现有数据，不要手动创建空数据库来绕过错误。
+[RC20 整批修复候选版](https://github.com/Nowhitestar/Yulu/releases/tag/v0.23.0-rc.20)
+包含迁移、初始化、采集打包、原生窗口启动及手动分享修复。最终全新安装与受支持旧版升级验收
+仍在进行，它尚不是已验收的稳定版。
 
-RC15 已知限制：全新安装验收发现录音全为零采样，原因是 macOS 拒绝了归属到主 App 的
-采集权限。RC16 候选版包含打包修复，但安装态验收尚未完成；详见
-[无声录音排查](docs/operations.md#wav-exists-but-capture-is-silent)。
-xAI 连接测试成功不代表实际录音包含声音。
+旧候选版遇到数据库或无声录音问题时，请查看
+[首次安装数据库准备](docs/operations.md#fresh-install-database-preparation)及
+[无声录音排查](docs/operations.md#wav-exists-but-capture-is-silent)。请保留数据，不要创建空数据库、
+修改迁移日志或清空权限来绕过错误。服务连接测试成功，不代表录音包含声音或转写与纪要已完成提交。
 
 打开 [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases)，选择当前公告的
 稳定版或公开候选版，下载对应的 `yulu-macos-arm64-vX.Y.Z.dmg`，打开后把
