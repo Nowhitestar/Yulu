@@ -67,14 +67,16 @@
   paragraph, retains complete-content comparison (missing headings still fail),
   and replaces the generic audit error with an explicit content-mismatch detail
   when the exact page/parent were read. Four targeted suites pass all 99 tests;
-  typecheck, Host build and diff checks pass. The transport repair remains
-  unverified against a new live write; it is installed, not Share-accepted.
+  typecheck, Host build and diff checks pass. The transport repair was still
+  awaiting a live create check in build 1622; the later build 1626 manual Share
+  acceptance below supersedes that limitation.
   On September 14 at 01:19 UTC, only the missing H1 plus the documented leading
   empty paragraph was inserted into this same QA page. Fresh read-back matched
   the full original summary and parent; the original action and receipt remain
   intact. This repair validates the insert transport, not a new create. The later
   product reconciliation establishes the original action's verified Host status.
-  No action was abandoned and no extra page or public RC was created.
+  No action was abandoned and no extra page or public RC was created during the
+  in-place repair/reconciliation; the later fresh manual Share is recorded below.
 - This follow-up is committed/pushed as `6446a6a8e74deb8039823ffad717df222a2ec1a1`.
   Internal signing run `34794255762` passed and produced build 1622,
   `0.23.0-dev.ci.34794255762`. Artifact `10328937856` is downloaded to
@@ -478,7 +480,7 @@ store inspection is not permission to inspect the user's password store now.
    The existing synthetic QA summary has been manually shared once to the
    approved private parent after Sharing Readiness became ready. Its exact-page
    readback found a missing first H1, not a false positive in content comparison.
-   Build 1622 with the transport fix is installed. On September 14 the original
+   Build 1626 now includes the transport and reconciliation fixes. On September 14 the original
    QA child `3db56559-55cc-8177-adaa-e570b0223dee` was repaired in place by inserting
    only `<empty-block/>` and its missing first H1; fresh exact-page fetch proved
    the complete original summary at the same private parent. No recording was
@@ -508,6 +510,53 @@ store inspection is not permission to inspect the user's password store now.
 3. Reconcile #170's existing applicable acceptance evidence, then make the one
    consolidated public candidate and complete distribution/stable closure. Keep
    #145/#170/#171 open until their actual remaining outcomes are verified.
+
+### Prepared publication path (not executed)
+
+The complete installed repair batch has passed. The remaining public step needs
+the scoped merge/publication confirmation requested after this acceptance; the
+last explicit permission covered repository push and internal CI signing, not
+a new Release. The next candidate is proposed as `v0.23.0-rc.20`; that tag was
+absent at the last GitHub read. Preparation does not authorize public publication.
+
+Release notes for the consolidated batch are prepared, and the same-source
+stable promotion allowlist/guidance is aligned to RC20 rather than the failed
+RC19 source. This alignment is not acceptance or a tag publication. VERSION,
+the release-please manifest, generated changelog and public feed remain on the
+existing release until the authorized release-please sequence advances them.
+The internal App does not need rebuilding for publication-only files.
+The release-line identity, Sparkle feed promotion and appcast suites pass all
+28 tests, including refusal of RC19 promotion, mismatched tags/source and
+non-increasing build identities. These isolated fixtures do not publish tags
+or prove the future public artifacts.
+
+After authorization, follow the normal fix-PR / release-please flow, inspect the
+generated RC20 metadata and CI, then publish one complete signed/notarized DMG
+candidate. Resolve its source and increasing build identity from the final Git
+graph, not build 1626 or an old stable reservation. Validate the exact downloaded
+public bytes and update only the live public surfaces that changed.
+
+Use the following proof boundaries for final installed acceptance:
+
+- Fresh public install: one existing isolated target without developer runtime
+  dependencies; ordinary DMG drag/install, native permissions, Host/Capture
+  readiness, one synthetic recording through committed artifacts and lifecycle.
+- Supported upgrade: an actual public v0.22.2 baseline with representative local
+  data, observed through normal product/status surfaces before and after the
+  update. Do not relabel the physical development migration as that baseline.
+  Preserve a recoverable baseline for the necessary rollback/retry check; never
+  roll back the user's working physical installation to manufacture a fixture.
+- Credentials: no password-store or Keychain metadata collectors, credential
+  copying, or new permissions. Compare non-secret product connection status and
+  permitted functional outcomes. Do not claim byte-for-byte credential custody
+  from availability probes; document any remaining narrower evidence gap.
+- Reuse unchanged manual-sharing evidence, optional capability decisions and
+  accepted external provider limitations. No further QA Notion writes are
+  required by the publication label alone.
+- Promote only the exact accepted RC20 source. Validate the stable public DMG,
+  feed and changed guidance, and the normal whole-App RC-to-stable update before
+  closing #170/#171. The historical RC19 collector is not a required workflow for
+  this candidate, and its receipts remain immutable historical evidence.
 
 ## Verification budget
 
