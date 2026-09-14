@@ -498,6 +498,45 @@ export class SharingConfiguration {
     return this.recordingShareView(input);
   }
 
+  async reconcileRecordingUnknown(input: { actionId: string; receiptId: string; receiptUrl: string }) {
+    const { action, connection } = this.requireUnknownRecordingShare(input.actionId);
+    const connectionRevision = agentConnectionRevision(connection);
+    const receipt = {
+      destination: action.destination,
+      receiptId: input.receiptId.trim() || action.receiptId || "",
+      receiptUrl: input.receiptUrl.trim() || action.receiptUrl || "",
+    };
+    if (
+      (action.receiptId && receipt.receiptId !== action.receiptId) ||
+      (action.receiptUrl && receipt.receiptUrl !== action.receiptUrl)
+    ) {
+      throw new Error("The recorded Share Action receipt cannot be replaced during reconciliation");
+    }
+    if (!receipt.receiptId && !receipt.receiptUrl) {
+      throw new Error("Enter an external receipt ID or URL before reconciling this Unknown Outcome");
+    }
+    // Read only: verify the original confirmed content, never the current summary
+    // or Test Share message, and never create another external write.
+    const verified = await this.options.adapter.verifyReceipt({
+      connection,
+      connector: action.connector,
+      destination: action.destination,
+      content: action.summary,
+      receipt,
+    });
+    this.assertReceipt(verified, action.destination, receipt);
+    const current = this.requireUnknownRecordingShare(action.id);
+    if (agentConnectionRevision(current.connection) !== connectionRevision) {
+      throw new Error("The original Agent Connection changed during Share Action reconciliation");
+    }
+    this.options.host.markRecordingShareActionVerified(action.id, {
+      receiptId: verified.receiptId,
+      receiptUrl: verified.receiptUrl,
+      detail: "Existing receipt reconciled by connector read-back of the exact original Share Action snapshot; no new write",
+    });
+    return this.recordingShareView({ recordingStem: action.recordingStem, summary: action.summary });
+  }
+
   abandonRecordingUnknown(input: { actionId: string }) {
     const action = this.options.host.getRecordingShareAction(input.actionId);
     if (!action || action.status !== "unknown") {
@@ -656,6 +695,23 @@ export class SharingConfiguration {
       action: null,
       duplicateWarningRequired,
     };
+  }
+
+  private requireUnknownRecordingShare(actionId: string) {
+    const action = this.options.host.getRecordingShareAction(actionId);
+    if (!action || action.status !== "unknown") {
+      throw new Error("Only an Unknown Outcome Share Action can be reconciled");
+    }
+    const { persisted, connection } = this.requireSelection();
+    if (
+      !persisted.destinationSavedAt || persisted.destination !== action.destination ||
+      persisted.connector !== action.connector || connection.id !== action.connectionId ||
+      connection.adapter !== action.connectionAdapter || connection.label !== action.connectionLabel ||
+      connection.updatedAt !== action.connectionUpdatedAt
+    ) {
+      throw new Error("Reconciliation requires the original unchanged Agent Connection and Share Destination; no service was switched");
+    }
+    return { action, connection };
   }
 
   private requireCurrentUnknown(actionId: string, persisted: PersistedSharingConfiguration) {

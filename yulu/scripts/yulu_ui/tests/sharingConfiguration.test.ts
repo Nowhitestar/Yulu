@@ -54,6 +54,133 @@ describe("SharingConfiguration", () => {
     };
   }
 
+  async function setupUnknownRecording(withReceipt = true) {
+    const context = setup();
+    const { adapter, sharing } = context;
+    vi.mocked(adapter.probe).mockResolvedValue({ detail: "ready" });
+    vi.mocked(adapter.testShare).mockResolvedValue({ destination, receiptId: "test-page", receiptUrl: "" });
+    vi.mocked(adapter.verifyReceipt).mockImplementation(async (input) => input.receipt);
+    sharing.select({ connectionId: "codex", connector: "notion" });
+    await sharing.probe();
+    sharing.saveDestination({ destination });
+    await sharing.testShare(testAction(false));
+    const receipt = { destination, receiptId: "original-page", receiptUrl: "https://notion.so/original-page" };
+    const uncertain = new SharingConnectorUnknownOutcomeError("Read-back timed out; do not resend");
+    if (withReceipt) {
+      vi.mocked(adapter.share).mockResolvedValue(receipt);
+      vi.mocked(adapter.verifyReceipt).mockRejectedValueOnce(uncertain);
+    } else {
+      vi.mocked(adapter.share).mockRejectedValue(uncertain);
+    }
+    const recording = { recordingStem: "QA_20260914_010000", summary: "# Complete original heading\n\nOriginal confirmed body." };
+    const preview = sharing.recordingShareView(recording);
+    const input = { ...recording, ...testAction(false), snapshotHash: preview.snapshot!.hash };
+    await sharing.shareRecording(input);
+    vi.mocked(adapter.verifyReceipt).mockClear();
+    return { ...context, input, receipt };
+  }
+
+  it("reconciles the original recording snapshot read-only across a Host restart, preserving the action and receipt", async () => {
+    const { host: currentHost, adapter, input, receipt } = await setupUnknownRecording();
+    const before = currentHost.getRecordingShareAction(input.actionId)!;
+    const restarted = new SharingConfiguration({ host: currentHost, adapter });
+    const result = await restarted.reconcileRecordingUnknown({ actionId: input.actionId, receiptId: "", receiptUrl: "" });
+    expect(adapter.verifyReceipt).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      connection: expect.objectContaining({ id: "codex", adapter: "codex" }),
+      connector: "notion", destination, content: input.summary, receipt,
+    }));
+    expect(adapter.share).toHaveBeenCalledTimes(1);
+    expect(adapter.testShare).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      actionCounts: { total: 1, verified: 1 }, duplicateWarningRequired: true,
+      latestAction: { id: input.actionId, status: "verified", receiptId: receipt.receiptId, receiptUrl: receipt.receiptUrl },
+    });
+    expect(currentHost.getRecordingShareAction(input.actionId)).toMatchObject({
+      summary: before.summary, summarySha256: before.summarySha256, snapshotSha256: before.snapshotSha256,
+      confirmedAt: before.confirmedAt, createdAt: before.createdAt, duplicateConfirmed: false,
+      destination: before.destination, connectionUpdatedAt: before.connectionUpdatedAt,
+    });
+    await expect(restarted.reconcileRecordingUnknown({ actionId: input.actionId, receiptId: "", receiptUrl: "" }))
+      .rejects.toThrow(/Only an Unknown Outcome/);
+    expect(adapter.verifyReceipt).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires a receipt when none was recorded and can verify a supplied URL without writing", async () => {
+    const { sharing, adapter, input } = await setupUnknownRecording(false);
+    await expect(sharing.reconcileRecordingUnknown({ actionId: input.actionId, receiptId: "", receiptUrl: " " }))
+      .rejects.toThrow(/Enter an external receipt/);
+    expect(adapter.verifyReceipt).not.toHaveBeenCalled();
+    await expect(sharing.reconcileRecordingUnknown({
+      actionId: input.actionId, receiptId: "", receiptUrl: " https://notion.so/original-page ",
+    })).resolves.toMatchObject({ latestAction: { status: "verified", receiptUrl: "https://notion.so/original-page" } });
+    expect(adapter.verifyReceipt).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      content: input.summary, receipt: { destination, receiptId: "", receiptUrl: "https://notion.so/original-page" },
+    }));
+    expect(adapter.share).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["receiptId", "receiptUrl"] as const)("rejects replacement of the recorded %s before any read", async (field) => {
+    const { host: currentHost, sharing, adapter, input } = await setupUnknownRecording();
+    const before = currentHost.getRecordingShareAction(input.actionId);
+    await expect(sharing.reconcileRecordingUnknown({ actionId: input.actionId, receiptId: "", receiptUrl: "", [field]: "different" }))
+      .rejects.toThrow(/receipt cannot be replaced/);
+    expect(adapter.verifyReceipt).not.toHaveBeenCalled();
+    expect(currentHost.getRecordingShareAction(input.actionId)).toEqual(before);
+  });
+
+  it.each(["timeout", "destination", "receiptId", "receiptUrl"])("keeps the original unknown action intact when read-back fails: %s", async (failure) => {
+    const { host: currentHost, sharing, adapter, input, receipt } = await setupUnknownRecording();
+    const before = currentHost.getRecordingShareAction(input.actionId);
+    if (failure === "timeout") vi.mocked(adapter.verifyReceipt).mockRejectedValueOnce(new Error("Read timed out"));
+    else vi.mocked(adapter.verifyReceipt).mockResolvedValueOnce({ ...receipt, [failure]: "different" });
+    await expect(sharing.reconcileRecordingUnknown({ actionId: input.actionId, receiptId: "", receiptUrl: "" })).rejects.toThrow();
+    expect(currentHost.getRecordingShareAction(input.actionId)).toEqual(before);
+    expect(adapter.share).toHaveBeenCalledTimes(1);
+    expect(adapter.testShare).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["before", "during"])("refuses a changed Agent Connection %s read-back", async (when) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-14T01:00:00Z"));
+    const { host: currentHost, sharing, adapter, input, receipt } = await setupUnknownRecording();
+    const changeConnection = () => {
+      vi.setSystemTime(new Date("2026-09-14T01:00:01Z"));
+      const connection = currentHost.listAgentConnectionRecords()[0]!;
+      currentHost.upsertAgentConnectionRecord({ ...connection, settings: { executablePath: "/different/codex" } });
+    };
+    if (when === "before") changeConnection();
+    else vi.mocked(adapter.verifyReceipt).mockImplementationOnce(async () => { changeConnection(); return receipt; });
+    await expect(sharing.reconcileRecordingUnknown({ actionId: input.actionId, receiptId: "", receiptUrl: "" }))
+      .rejects.toThrow(/original unchanged Agent Connection/);
+    expect(adapter.verifyReceipt).toHaveBeenCalledTimes(when === "before" ? 0 : 1);
+    expect(currentHost.getRecordingShareAction(input.actionId)?.status).toBe("unknown");
+    expect(adapter.share).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["before", "during"])("refuses a different selected destination %s read-back", async (when) => {
+    const { host: currentHost, sharing, adapter, input, receipt } = await setupUnknownRecording();
+    const changeDestination = () => sharing.saveDestination({ destination: '{"page_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}' });
+    if (when === "before") changeDestination();
+    else vi.mocked(adapter.verifyReceipt).mockImplementationOnce(async () => { changeDestination(); return receipt; });
+    await expect(sharing.reconcileRecordingUnknown({ actionId: input.actionId, receiptId: "", receiptUrl: "" }))
+      .rejects.toThrow(/original unchanged Agent Connection and Share Destination/);
+    expect(adapter.verifyReceipt).toHaveBeenCalledTimes(when === "before" ? 0 : 1);
+    expect(currentHost.getRecordingShareAction(input.actionId)?.status).toBe("unknown");
+    expect(adapter.share).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not overwrite an abandoned action when a late read succeeds", async () => {
+    const { host: currentHost, sharing, adapter, input, receipt } = await setupUnknownRecording();
+    vi.mocked(adapter.verifyReceipt).mockImplementationOnce(async () => {
+      sharing.abandonRecordingUnknown({ actionId: input.actionId });
+      return receipt;
+    });
+    await expect(sharing.reconcileRecordingUnknown({ actionId: input.actionId, receiptId: "", receiptUrl: "" }))
+      .rejects.toThrow(/Only an Unknown Outcome/);
+    expect(currentHost.getRecordingShareAction(input.actionId)?.status).toBe("abandoned");
+    expect(adapter.share).toHaveBeenCalledTimes(1);
+  });
+
   it("saves a pasted page link as an explicit parent and rejects a title before any write", async () => {
     const { adapter, sharing } = setup();
     sharing.select({ connectionId: "codex", connector: "notion" });

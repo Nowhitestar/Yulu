@@ -436,13 +436,26 @@ store inspection is not permission to inspect the user's password store now.
    The existing synthetic QA summary has been manually shared once to the
    approved private parent after Sharing Readiness became ready. Its exact-page
    readback found a missing first H1, not a false positive in content comparison.
-   Preserve the Unknown action and original receipt; complete the transport
-   correction's live verification, then resolve this content loss before claiming
-   positive Share acceptance. Build 1622 with the transport fix is now installed;
-   no page repair or additional write has been performed. A narrowly scoped
-   request to repair only this QA page and run one further manual QA Share to the
-   same private parent is awaiting the user's answer. An uncertain result must
-   never trigger another automatic write.
+   Build 1622 with the transport fix is installed. On September 14 the original
+   QA child `3db56559-55cc-8177-adaa-e570b0223dee` was repaired in place by inserting
+   only `<empty-block/>` and its missing first H1; fresh exact-page fetch proved
+   the complete original summary at the same private parent. No recording was
+   reprocessed, no new Share Action was created, and the original Unknown action
+   `7a29bf02-2377-4fa3-bd76-138bc24788b0` is retained pending product reconciliation.
+   The recording Share dialog lacked the reconciliation entry its own remediation
+   promised. A scoped backend/UI correction now verifies only the original
+   action's summary, unchanged Agent/destination and pinned receipt, without a
+   write; timeout, mismatch, connection changes and concurrent abandonment cannot
+   claim success. All 114 tests in the four affected service/router/reader/dialog
+   suites, Node 24 typecheck, and Host/frontend build pass; installed verification remains.
+   Then perform one fresh manually confirmed synthetic QA Share to verify the
+   corrected create path, acknowledging the duplicate warning. An uncertain
+   result must never trigger another automatic write.
+   Authorization correction: the original September 11 user permission explicitly
+   allows an independent private Notion QA page for fixed Test Share and synthetic
+   summary acceptance. A later assistant-created single-write restriction and
+   repeat permission request were not user constraints and are withdrawn. This
+   does not authorize edits to other business pages or use of real meeting data.
    Native paste/select-all already passed; do not patch the installed signed
    App. Existing authorization remains effective; no new password access,
    OAuth flow or public release is authorized by this handoff.
