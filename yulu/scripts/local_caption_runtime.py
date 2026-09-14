@@ -157,7 +157,7 @@ def _verify_pack_payload(pack: Path, definition: dict[str, Any]) -> None:
             raise RuntimeError(f"Runtime Pack payload hash mismatch: {relative}")
 
 
-def _codesign_metadata(path: Path) -> tuple[str, str]:
+def _codesign_metadata(path: Path, *, arm64_only: bool = False) -> tuple[str, str]:
     result = subprocess.run(
         ["/usr/bin/codesign", "--display", "--verbose=2", str(path)],
         capture_output=True,
@@ -168,11 +168,20 @@ def _codesign_metadata(path: Path) -> tuple[str, str]:
     output = result.stdout + result.stderr
     identifier = ""
     team = ""
+    code_format = ""
     for line in output.splitlines():
         if line.startswith("Identifier="):
             identifier = line.split("=", 1)[1].strip()
         elif line.startswith("TeamIdentifier="):
             team = line.split("=", 1)[1].strip()
+        elif line.startswith("Format="):
+            code_format = line.split("=", 1)[1].strip()
+    # codesign is part of macOS; lipo is an Xcode/CLT shim on a clean machine.
+    # Its Format lists the complete architecture set, including fat binaries.
+    if arm64_only and code_format not in {
+        "Mach-O thin (arm64)", "Mach-O universal (arm64)",
+    }:
+        raise RuntimeError(f"Runtime Pack native code is not arm64-only: {path.name}")
     return identifier, team
 
 
@@ -206,11 +215,6 @@ def _verify_pack_code_signatures(pack: Path, definition: dict[str, Any]) -> None
         )
         if description.returncode != 0 or "Mach-O" not in description.stdout:
             continue
-        architecture = subprocess.run(
-            ["/usr/bin/lipo", "-archs", str(path)], capture_output=True, text=True
-        )
-        if architecture.returncode != 0 or architecture.stdout.strip() != "arm64":
-            raise RuntimeError(f"Runtime Pack native code is not arm64-only: {path.name}")
         signature = subprocess.run(
             ["/usr/bin/codesign", "--verify", "--strict", str(path)],
             capture_output=True,
@@ -218,7 +222,7 @@ def _verify_pack_code_signatures(pack: Path, definition: dict[str, Any]) -> None
         )
         if signature.returncode != 0:
             raise RuntimeError(f"Runtime Pack native signature is invalid: {path.name}")
-        _, native_team = _codesign_metadata(path)
+        _, native_team = _codesign_metadata(path, arm64_only=True)
         if pack_team and pack_team != "not set" and native_team != pack_team:
             raise RuntimeError(f"Runtime Pack native code has the wrong signing Team: {path.name}")
 
