@@ -2,18 +2,18 @@
 
 ## Current checkpoint
 
-- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34794255762`, build 1622,
-  source `6446a6a8e74deb8039823ffad717df222a2ec1a1`. Finder replaced the whole
+- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34796306098`, build 1626,
+  source `18b988e1c8ae4e5224309d3c19617b5ec48efb56`. Finder replaced the whole
   App; its installed CodeResources digest matches the verified CI artifact.
   Migration transaction `f65ccc2e04a04b11b3d5f308d1460858` remains committed,
   with its original `2026-09-11T03:39:13.906530+00:00` timestamp. Initial Host
-  PID 82285 and Capture PID 82286 report the new version; both native audio
+  PID 32194 and Capture PID 32195 report the new version; both native audio
   inputs become ready, idle, and database quick-check is healthy.
 - The native layout/paint repair passes installed verification. Build 1618's first
   entry after replacement and one normal quit/reopen automatically rendered the
   complete Agent Console without zoom, resizing, cache clearing, service resets
   or installed-App patches. Screenshots and the accessible HTML tree agree.
-  Builds 1620 and 1622 also entered the complete UI automatically after whole-App
+  Builds 1620, 1622 and 1626 also entered the complete UI automatically after whole-App
   replacement.
   Build 1614's white-window failure and temporary zoom workaround are historical
   evidence, not the current installed state. The exact synthetic QA task remains
@@ -21,8 +21,12 @@
   1,110-character, non-stale summary retain the original content/hash. One fresh,
   manually confirmed Share of that synthetic QA summary was submitted on
   2026-09-14 to the already approved private Notion parent. The connector returned
-  a real page receipt, but its body is missing the snapshot's first H1; the Host
-  correctly retains Unknown Outcome. Do not submit another write.
+  a real page receipt, but initially omitted the snapshot's first H1; the Host
+  correctly retained Unknown Outcome. The existing private QA page was repaired
+  in place and its full content independently read back on September 14.
+  Build 1626's new product reconciliation now verified that same action without
+  another write. A fresh manually confirmed QA Share then passed the complete
+  create-and-read-back path, including the first H1, at the same private parent.
 - The installed direct-RPC adapter successfully reconciled the **original** Test
   Share action `f53297b2-f5d3-42b2-a9a2-a37a04faaec1` by fetching its exact receipt
   once. The Host no longer offers Unknown reconciliation, retains the same
@@ -52,11 +56,12 @@
   `f624657177f09f708c757e4654f321eabed73de94a7b8c01891896e4e896efc2`.
 - The one actual recording Share is action
   `7a29bf02-2377-4fa3-bd76-138bc24788b0`, receipt
-  `3db56559-55cc-8177-adaa-e570b0223dee`. An independent exact-page fetch confirms
-  the approved direct parent and all body text after the missing first heading;
-  it does **not** confirm the complete 1,110-character snapshot. The connector
+  `3db56559-55cc-8177-adaa-e570b0223dee`. The initial exact-page fetch confirmed
+  the approved direct parent but found the missing first heading, so it did not
+  establish the complete 1,110-character snapshot. The connector
   consumed the leading H1 instead of retaining it in the body; the fixed page
-  title remains `Yulu Share`. Recording Share counts are total 1, verified 0.
+  title remains `Yulu Share`. Initial Share counts were total 1, verified 0;
+  after build 1626's exact original-receipt reconciliation they are 1 and 1.
   The recording task is still completed on attempt 1, `sendToNotion=false`.
   The local follow-up protects a leading H1 with Notion's documented empty
   paragraph, retains complete-content comparison (missing headings still fail),
@@ -64,8 +69,12 @@
   when the exact page/parent were read. Four targeted suites pass all 99 tests;
   typecheck, Host build and diff checks pass. The transport repair remains
   unverified against a new live write; it is installed, not Share-accepted.
-  No existing page has been edited,
-  no action abandoned, and no new external write or RC has been made.
+  On September 14 at 01:19 UTC, only the missing H1 plus the documented leading
+  empty paragraph was inserted into this same QA page. Fresh read-back matched
+  the full original summary and parent; the original action and receipt remain
+  intact. This repair validates the insert transport, not a new create. The later
+  product reconciliation establishes the original action's verified Host status.
+  No action was abandoned and no extra page or public RC was created.
 - This follow-up is committed/pushed as `6446a6a8e74deb8039823ffad717df222a2ec1a1`.
   Internal signing run `34794255762` passed and produced build 1622,
   `0.23.0-dev.ci.34794255762`. Artifact `10328937856` is downloaded to
@@ -85,6 +94,39 @@
   The pre-push scanner's
   three medium matches were reviewed: all are numerical CI/artifact IDs in
   this file, not phone numbers or credentials. No scan bypass was used.
+- Recording receipt reconciliation was missing from both backend and dialog,
+  despite the displayed instruction to reconcile. Source `18b988e` adds the
+  authenticated, explicit read-only operation and receipt controls, pinned to
+  the original action. All 114 affected service/router/reader/dialog tests,
+  Node 24 typecheck and complete UI/Host build pass. Full CI `34796285053` and
+  internal signed-App run `34796306098` both pass; no new public RC.
+  Artifact `10329987042` was downloaded to
+  `/private/tmp/yulu-phase13-reconcile-ci.jlHPfH`; inner checksum, exact source,
+  deep/strict signature, staple and Gatekeeper all pass. Build 1626 was installed
+  by whole-App Finder replacement; installed CodeResources SHA-256 matches:
+  `e69e3b1bf4275fb47d7bedaa5e65d614c9f1a6f1ff2f9d79fce59596bf0168f5`.
+  The complete UI rendered automatically and both bundled owners became healthy.
+  The original migration transaction and timestamp are unchanged. In the new
+  dialog, the original receipt ID and URL are read-only; one explicit read-only
+  check changed action `7a29bf02-2377-4fa3-bd76-138bc24788b0` to verified with
+  total 1 / verified 1. The original snapshot hash and summary hash are unchanged;
+  duplicate confirmation is now required. The new-Host one-read access probe
+  passed and retained the original September 12 Test Share verification.
+- On build 1626, a fresh manual Share was explicitly confirmed after reviewing
+  the same synthetic QA summary, Agent, private destination and duplicate
+  warning. Action `0a729648-22d7-4e99-b3d8-0cbd91449ea3` completed verified, with
+  receipt `3db56559-55cc-81ab-8f42-fff874d02810`. An independent exact-page fetch
+  at `2026-09-14T02:00:28.183Z` confirmed the direct private parent and the full
+  original summary, including its first H1 protected by the documented empty
+  paragraph. Only ordinary paragraph separation differs. Recording Share counts
+  are now total 2 / verified 2; no automatic retry or further write was performed.
+  Summary SHA-256 remains
+  `5d976cbe8756a3f3279c1b5dd1d3346ea1b1f678a5d8bf5f343ffb2749b7f3d4`.
+  The original task remains completed on attempt 1, error null, `sendToNotion=false`;
+  transcript and summary were not regenerated. The installed App's signature
+  manifest digest is unchanged after both connector operations.
+  This closes the installed manual-sharing repair acceptance, not public DMG,
+  supported-upgrade or stable-release acceptance. Do not repeat either QA write.
 - The latest normal xAI UI/API read now reports the original OAuth connected
   and readable. No password, credential helper, reauthorization or source/model
   change was performed. Real transcription and `grok-4.6` conversation capability
@@ -409,9 +451,9 @@ Host's public MCP readback, not just old checkboxes. Reuse only the stated scope
 | Requirement | Retained evidence | What it does not establish |
 |---|---|---|
 | Self-contained drag-to-Applications baseline | RC14 `b2c554c`, build 1568, macOS 26.5 arm64: fresh preflight passed with host dependencies absent, browser provenance verified, bundle observation matched, and first-launch Host/database healthy. | The baseline explicitly has `coreCompleted=false` and no Share receipt. Its old `com.yulu.ui` owner cannot prove the newly separated service registration path. |
-| Current physical migration and App takeover | CI validation App `6446a6a`, build 1622: original committed migration transaction retained, new Host/Capture own the runtime, native inputs ready and first entry rendered automatically. Reuse build 1618's first-entry and ordinary quit/reopen evidence for the unchanged native repair. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
-| Committed artifacts survive whole-App replacement | Current MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. `sendToNotion=false`, no legacy delivery. One separate manual Share is Unknown. | This preserves dev6's successful full pipeline. Build 1618's separate xAI capability probes also pass; neither claim is a new recording on build 1622. |
-| Sharing setup and external write | The approved private parent and original Test Share child exist. Build 1618 reconciled the original Host action through direct runtime RPC without a model turn; build 1622's installed access probe passes and Sharing Readiness is ready. The one manual recording Share returned a real receipt. | The new page lacks the summary's first H1, so the complete-content check correctly fails. The transport correction is installed but still needs actual-write verification; do not resend either write or choose an unrelated business page. |
+| Current physical migration and App takeover | CI validation App `18b988e`, build 1626: original committed migration transaction retained, new Host/Capture own the runtime, native inputs ready and first entry rendered automatically. Reuse build 1618's first-entry and ordinary quit/reopen evidence for the unchanged native repair. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
+| Committed artifacts survive whole-App replacement | Current MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. `sendToNotion=false`, no legacy delivery. The two separate manual Share actions are verified. | This preserves dev6's successful full pipeline. Build 1618's separate xAI capability probes also pass; neither claim is a new recording on build 1626. |
+| Sharing setup and external write | The original Test Share verification is retained. Build 1626 verified the repaired original recording receipt read-only, then a fresh explicitly confirmed manual QA Share passed create-and-read-back with the full first heading. Independent fetch confirmed the exact private parent and full summary. | This is installed build 1626 evidence. No more QA writes are needed for these unchanged paths. Do not silently resend or choose a business page. |
 | Public distribution | RC19's retained receipt binds anonymous asset sizes/hashes to `fb2be51` and explicitly has `installedAcceptance=false`; signature/notary/site checks are retained for those bytes. | It cannot accept the later internal App or establish stable promotion. |
 | Supported v0.22.2 upgrade and public update/rollback | Relevant source regressions are retained; the reviewed checkpoints continue to identify complete installed journeys as unearned. | Source tests, prepared harnesses and temporary fixture directories are not completed real-install receipts. |
 
@@ -440,17 +482,21 @@ store inspection is not permission to inspect the user's password store now.
    QA child `3db56559-55cc-8177-adaa-e570b0223dee` was repaired in place by inserting
    only `<empty-block/>` and its missing first H1; fresh exact-page fetch proved
    the complete original summary at the same private parent. No recording was
-   reprocessed, no new Share Action was created, and the original Unknown action
-   `7a29bf02-2377-4fa3-bd76-138bc24788b0` is retained pending product reconciliation.
+   reprocessed or new Share Action created during repair/reconciliation. Original
+   action `7a29bf02-2377-4fa3-bd76-138bc24788b0` is now verified by build 1626's
+   explicit product read-back, retaining its original receipt and snapshot.
    The recording Share dialog lacked the reconciliation entry its own remediation
    promised. A scoped backend/UI correction now verifies only the original
    action's summary, unchanged Agent/destination and pinned receipt, without a
    write; timeout, mismatch, connection changes and concurrent abandonment cannot
    claim success. All 114 tests in the four affected service/router/reader/dialog
-   suites, Node 24 typecheck, and Host/frontend build pass; installed verification remains.
-   Then perform one fresh manually confirmed synthetic QA Share to verify the
-   corrected create path, acknowledging the duplicate warning. An uncertain
-   result must never trigger another automatic write.
+   suites, Node 24 typecheck, and Host/frontend build pass; the installed original
+   receipt reconciliation also passes.
+   The one fresh manually confirmed synthetic QA Share also passed the corrected
+   create path after duplicate acknowledgment. Both original and new recording
+   receipts are now verified, with no further writes required. Preserve this
+   acceptance for unchanged code. An uncertain result must never trigger another
+   automatic write.
    Authorization correction: the original September 11 user permission explicitly
    allows an independent private Notion QA page for fixed Test Share and synthetic
    summary acceptance. A later assistant-created single-write restriction and
