@@ -6,6 +6,15 @@
   source is `edb5a7a4b932db7ceccd1cfa12b8611aa11f41d8`, build **1636**.
   PRs #209 and #210 are merged; this is the consolidated release, not a new
   candidate per individual repair. Stable promotion has not happened.
+- Final clean-application-state testing has now found a release blocker:
+  RC20's default local-transcription Runtime Pack verifier calls `lipo`, which
+  is an unavailable developer-tool shim on this no-CLT target. The correctly
+  signed arm64 library is reported as non-arm64. The subsequent component audit
+  also found that the import self-test writes bytecode into the signed Runtime
+  Pack, invalidating its next inventory check. Both repairs and passing source/
+  component checks are recorded below. RC20 is **not accepted for
+  stable promotion**. The
+  below; the published and installed App bytes have not been patched.
 - The physical Mac now runs that public RC20 after ordinary Finder whole-App
   replacement from the verified DMG. Installed and mounted CodeResources
   SHA-256 both equal
@@ -23,20 +32,34 @@
   One ordinary read-only access probe in the new Host passed and restored
   current Sharing Readiness. It reused the original September 12 Test Share
   receipt; recording Share counts remain total 2 / verified 2.
-- Remaining: genuine fresh public installation, a real supported v0.22.2
-  upgrade baseline, current public download guidance, then conditional
-  same-source stable publication and its normal RC-to-stable update. This
+- Remaining: finish the fresh public-install journey after the local-runtime
+  repair, a real supported v0.22.2
+  upgrade baseline, then conditional
+  accepted-source stable publication and its normal RC-to-stable update. The
+  user's later explicit approval authorizes pushing the repair, tests and
+  acceptance record to public `Nowhitestar/Yulu`, running existing CI, and
+  publishing a consolidated candidate and stable release from the repaired
+  source only after the remaining issues are resolved and acceptance passes.
+  It supersedes the old RC20-same-source restriction, not the acceptance gate. This
   physical development-to-public replacement does not establish those separate
   journeys. The overall goal is **not complete**.
 - The current goal API still reports its pre-existing blocked status and offers
   no resume operation. Work resumed under the user's explicit instruction;
   this limitation was not worked around by falsely completing/recreating the
   goal or editing application-internal state. The objective itself is unchanged.
-- RC20 README/install guidance and issue-template corrections are prepared on
-  `codex/phase13-release-closeout`; all 14 release-line tests passed. No product
-  rebuild is required. The live landing page and its exact source
-  `Nowhitestar/tingfengji:content/yulu/index.html` still advertise RC19. The
-  necessary CTA/footer replacement is prepared locally; it has not been deployed.
+- RC20 README/install guidance and issue-template corrections passed all 14
+  release-line tests and complete PR CI. PR #211 merged on September 14 at
+  `05:32:24Z` as `c9651bc5693509aa6a505324cd54a5a27cf9ee91`.
+  No new signed-App build or public release was requested for this documentation
+  change; normal source CI remains separate from artifact publication.
+- The website's `Nowhitestar/tingfengji:content/yulu/index.html` CTA and footer
+  now advertise RC20. Only those two lines changed; an exact-content comparison
+  verifies all other page content is unchanged. Website PR #8 passed its Vercel
+  preview and merged at `05:39:49Z` as
+  `05120ab0276c52867fa74f36bfbe1ef2d8bb8ddc`. Its production Vercel deployment
+  succeeded, and anonymous read-back of `https://liao.uno/yulu/` confirms both
+  the RC20 release URL/download label and RC20 footer. Website synchronization
+  is complete, not pending deployment.
 
 ### Retained internal-App validation before public RC20
 
@@ -497,7 +520,7 @@ Host's public MCP readback, not just old checkboxes. Reuse only the stated scope
 | Current physical migration and App takeover | Public RC20 `edb5a7a`, build 1636: Finder whole-App replacement retains the original committed migration transaction, new Host/Capture own the runtime, native inputs are ready and first entry renders automatically. Reuse build 1618's ordinary quit/reopen evidence for the unchanged native repair. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
 | Committed artifacts survive whole-App replacement | RC20 MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. Both contents match the pre-install MCP snapshot exactly. `sendToNotion=false`, no legacy delivery. The two separate manual Share actions are verified. | This preserves dev6's successful full pipeline. Build 1618's separate xAI capability probes also pass; neither claim is a new recording on RC20. |
 | Sharing setup and external write | The original Test Share verification is retained. Build 1626 verified the repaired original recording receipt read-only, then a fresh explicitly confirmed manual QA Share passed create-and-read-back with the full first heading. Independent fetch confirmed the exact private parent and full summary. | This is installed build 1626 evidence. No more QA writes are needed for these unchanged paths. Do not silently resend or choose a business page. |
-| Public distribution | RC20 anonymous downloads match the four-asset inventory, sizes and hashes. The DMG/App signature, notarization, Gatekeeper, layout and runtime checks pass; all three payloads have exact-source SLSA attestations. The physical Mac has installed the same whole App. The stable feed is unchanged. | This does not establish a clean installation, supported v0.22.2 upgrade or stable promotion. The public landing page still points to RC19. |
+| Public distribution | RC20 anonymous downloads match the four-asset inventory, sizes and hashes. The DMG/App signature, notarization, Gatekeeper, layout and runtime checks pass; all three payloads have exact-source SLSA attestations. The physical Mac has installed the same whole App. PR #211 guidance is merged, and the production landing-page CTA/footer now point to RC20 after website PR #8. The stable feed is unchanged. | This does not establish a clean installation, supported v0.22.2 upgrade or stable promotion. |
 | Supported v0.22.2 upgrade and public update/rollback | Relevant source regressions are retained; the reviewed checkpoints continue to identify complete installed journeys as unearned. | Source tests, prepared harnesses and temporary fixture directories are not completed real-install receipts. |
 
 RC14 retained collector digests are: preflight
@@ -632,11 +655,161 @@ Read-only preflight found macOS 26.5 and an existing build-1548 App/data, not a
 demonstrated v0.22.2 baseline. A later guest Finder inspection was rejected by
 the platform as outside the currently accepted VM scope. That rejection was
 not bypassed through a guest shell, another VM or a different control surface.
-The target is suspended, and the unrelated Windows VM was left untouched.
+The target was then suspended, and the unrelated Windows VM was left untouched.
 No guest data, credential store or permissions were changed. Fresh-install and
 supported-upgrade acceptance remain unearned until an appropriate isolated
 target is available within the allowed scope; do not downgrade the working
 physical Mac or manufacture baseline receipts to remove this gap.
+
+The user's later instruction to perform final acceptance and release closeout
+authorizes the stated existing-target acceptance work. The exact Clean Host
+Validation VM resumed successfully and its read-only `sw_vers` returned macOS
+26.5 / 25F71. Subsequently its guest channel returned `PRL_ERR_IO_STOPPED`.
+The user confirmed that they had not switched virtual machines. Host logs show
+the original guest stopped itself at `13:36:15` local time; its exact shutdown
+cause is not established. The agent's subsequent generic macVM window lookup
+at `13:36:57` restored RC11 Fresh Acceptance instead. This was not a user switch
+and RC11 was not adopted as the acceptance target. RC11 was safely suspended,
+then the original target was cold-started at `13:51:03`. Its exact UUID
+`1652d2fc-af43-4cb3-a417-ad5bbca0728a`, sole running macVM process and window
+title were checked before further actions. It reached the logged-in test
+desktop. Future window lookups must first verify that this exact VM is running;
+the generic app resolver may otherwise launch another registered guest.
+
+The cold-started guest's initial read-only checks confirmed the test user, build 1548,
+an empty `Movies/Yulu` recording directory and 604 KB of existing Yulu state.
+Homebrew, common external Node/Python installations, Xcode and Command Line
+Tools are absent; legacy bundled service labels `com.yulu.ui` and
+`com.yulu.audiodaemon` are still registered. This is not yet a fresh App baseline
+or an installed v0.22.2 baseline.
+
+Guest Chrome reached the public RC20 release page. The first scheme-less direct
+download attempt was blocked with an insecure-connection warning. The agent did
+not choose its unsafe-download override. After explicitly entering HTTPS,
+Chrome confirmed a secure connection; clicking the official page's HTTPS asset
+link completed the ordinary download. The guest DMG
+`Downloads/yulu-macos-arm64-v0.23.0-rc.20 (1).dmg` matches the public SHA-256
+`a1ef47e756523db202da1eff9d667a0f7dba642b29cfb8db3949b2fe45c282b5`.
+Its browser quarantine and HTTPS GitHub release referrer are retained; strict
+signature verification and Gatekeeper both pass as Notarized Developer ID.
+Do not preserve signed asset URL query parameters in public evidence.
+
+The two exact legacy test services were then stopped and confirmed absent.
+The complete old App, Application Support state, caches, logs, empty recordings
+directory and App preferences were moved without deletion into
+`/Users/yuluvalidation/Downloads/yulu-pre-rc20.FGXTNv` inside the same guest.
+This is a recoverable test-state archive, not a backup or change to the physical
+Mac. No password store or TCC state was inspected, copied or reset.
+Fresh-path preflight confirms the installed App/current and legacy data roots,
+all ten known Yulu service labels, and external developer runtimes are absent.
+The only PATH Python/Pip entries are Apple-signed `xcode_select` tool shims,
+not installed Python; Command Line Tools remain absent. Existing OS permission
+history is retained and must not be described as a virgin TCC environment.
+Finder opened the quarantined public DMG. The computer-use drag did not copy
+the App, so ordinary Finder Copy/Paste menus completed the same whole-App
+installation into Applications; do not claim a successful drag gesture.
+The installed build is 1636, and CodeResources SHA-256 is
+`3e5b77a896b8472af6159b2f24292ec815799acb65d177a1aa6362cf1221ead6`,
+identical to the public App. Deep/strict signature verification passes and the
+Chrome quarantine is retained. The ordinary first-open prompt reports Apple's
+malware check, and the App automatically opens new onboarding without resizing
+or a developer install. The expected microphone permission was granted for this
+authorized isolated recording test. Host PID 1711 reports RC20/build 1636 under
+`com.yulu.app.host`, database quick-check passes, and native status reports
+RC20/build 1636, both inputs ready and no active recording. Core Activation
+correctly still requires audio-engine and Summary Provider readiness.
+
+### Final clean-target local Runtime Pack repair
+
+The first normal local-model installation stops with
+`Runtime Pack native code is not arm64-only: libsherpa-onnx-c-api.dylib`.
+The target still has no CLT. The public package's actual library header is
+little-endian 64-bit arm64 (`feedfacf`, CPU `0100000c`, subtype `0`), and its
+signature/inventory are valid. The runtime verifier incorrectly depends on
+`/usr/bin/lipo`; its nonzero missing-developer-tools result is misclassified as
+the architecture error. Build-time `lipo` use is separate and remains valid.
+
+The source repair uses the existing OS `codesign` metadata's complete `Format`
+architecture set instead. It accepts arm64-only thin or single-architecture fat
+code, rejects x86/mixed/arm64e/unknown formats, and retains payload hashes,
+strict bundle/native signatures and matching Developer ID Team checks. Nine
+new regression cases protect the no-developer-tools boundary and architecture/
+Team rejection. The runtime suite passes all 19 tests and the worker suite all
+4 tests. A real same-Team public Runtime Pack also passes the repaired source
+verifier and imports sherpa 1.13.2 through the installed signed Python 3.13,
+with a guard allowing only Python, OS `file` and OS `codesign`; no developer tool
+is invoked. The initial sandbox-only signature failure was resolved by normal
+read-only system verification, not a signature or trust-policy change.
+
+These are source/component results, not a patched or accepted installed App.
+The physical App remains public RC20 and the guest retains the observed failure.
+No new public RC, stable tag, permission-store access or developer dependency
+installation was used to hide the failure. The new guest's normal provider
+status reports no connected xAI source; a real summary needs normal user-owned
+authorization, not copied credentials or an implicit alternate provider.
+
+The repair is locally committed as
+`616756911b189d527e6ad46e984ba34cb26ee154`. The first public push was rejected
+for missing publication-specific authorization. The user then explicitly
+approved publishing these source/test/checkpoint changes to `Nowhitestar/Yulu`,
+running the existing CI, and eventually using the repaired, accepted source for
+the consolidated candidate and stable release. Publication permission is now
+settled; this does not permit publishing before acceptance.
+
+Initially after that approval, the normal branch push and its one permitted retry both
+timed out in automatic action review **before execution**. Read-only GitHub
+readback confirms the remote branch remains at
+`f188a996dd1018f8ead25f7aff2bf64b11089844`, with no open PR. Its latest passing
+CI is still the older documentation run `34804734960`, not a test of this
+repair. No alternate upload channel, new PR, CI dispatch or release was used.
+That interruption was platform execution availability, not missing user
+permission or a source-test failure. After the user's next continuation, the
+normal push succeeded at `7aee7215f54a2a2583c550d29c5019bca96c730b` and
+PR #212 opened. Its own CI is `34817404912`; no release was triggered.
+
+A separate no-CLT component experiment was prepared in the same existing VM,
+using an empty temporary directory and the reviewed repair only in an isolated
+Python process, without patching the signed App. The directory was created,
+but the execution request was rejected because the action-review model was at
+capacity; no package/model installation or warmup from that experiment ran.
+That rejected attempt is not a passing check. After execution recovered, the
+same no-CLT target and temporary directory ran the reviewed source in memory:
+official Runtime Pack and model downloads, signature/architecture checks,
+installation and a real `CaptionWorker` model warmup succeeded in 317.72 seconds.
+Only App Python, OS `file` and OS `codesign` were invoked. This is still a
+component test, not an installed repaired-App acceptance.
+
+The follow-up immutability audit found six new `.pyc` files in that temporary
+Runtime Pack. The import self-test started Python with `-I -S` but without `-B`;
+isolated Python ignores the inherited `PYTHONDONTWRITEBYTECODE` setting. Thus
+the first install could report ready while the next inventory check rejected
+its own bytecode files. A real-subprocess regression reproduced the extra file
+before the fix. The probe now explicitly uses `-B`; the actual installer and
+caption-worker launchers already did. The runtime suite now passes 20 tests and
+the worker suite retains its 4 passes. No signature/inventory exception or
+permission change was added.
+
+The same guest then confirmed `previousRuntimeReady=false`, six cache files,
+and an intact model. The repaired normal installer replaced only this temporary
+Runtime Pack and reused the model. With source SHA-256
+`890f49e62ad2f3cdf6d060a69d396f8064e339f1c51d200f3f3ad85e7c5e95ed`,
+installation, repeated status, real model warmup and subsequent full Runtime
+Pack verification all pass; no bytecode files appear. The complete installed
+RC20 App also passes deep/strict signature verification. This 23.28-second
+component check did not patch the App, install developer tools or alter TCC.
+Both fixes belong in PR #212 before one consolidated candidate; do not publish
+an RC for this one-argument follow-up.
+
+The guest remains open at its normal xAI connection settings and still visibly
+shows disconnected. The requested user-owned login is not established by the
+publication approval; no login material is requested in chat. A corrected
+source must still pass installed acceptance before stable promotion.
+
+The official v0.22.2 baseline artifacts remain available and were independently
+downloaded for inspection only, not executed on the physical Mac. The public
+tag resolves to `2d01fa2989c1a9ae1a95266438bb278c72fac8c3`; the installer and
+archive match their published checksums and the retained baseline digests.
+Availability of these real bytes does not establish an installed baseline.
 
 ## Verification budget
 

@@ -247,6 +247,72 @@ def test_adhoc_pack_bypass_rejects_mixed_team_identities(
         runtime._verify_pack_code_signatures(pack, pack_definition())
 
 
+def mock_signed_native_pack(monkeypatch, tmp_path, native_format, *, native_team="WMU9678ZQL"):
+    pack = tmp_path / "YuluLocalCaptionRuntime.bundle"
+    native = pack / "Contents/Resources/site-packages/sherpa_onnx/lib/fixture.dylib"
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"signed native fixture")
+    calls = []
+
+    def run(arguments, **_kwargs):
+        calls.append(arguments)
+        executable = arguments[0]
+        # A clean Mac provides these OS tools, but lipo/xcrun are developer-tool
+        # shims. Never install developer tools to make runtime verification pass.
+        assert executable in ("/usr/bin/file", "/usr/bin/codesign"), arguments
+        if executable == "/usr/bin/file":
+            return SimpleNamespace(returncode=0, stdout="Mach-O native fixture\n", stderr="")
+        if "--display" in arguments:
+            target = Path(arguments[-1])
+            identifier = "com.yulu.runtime.local-caption" if target == pack else target.name
+            team = native_team if target == native else "WMU9678ZQL"
+            code_format = native_format if target == native else "Mach-O thin (arm64)"
+            return SimpleNamespace(
+                returncode=0,
+                stdout="",
+                stderr=f"Identifier={identifier}\nFormat={code_format}\nTeamIdentifier={team}\n",
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    return pack, native, calls
+
+
+@pytest.mark.parametrize("code_format", ["Mach-O thin (arm64)", "Mach-O universal (arm64)"])
+def test_runtime_pack_native_validation_works_without_developer_tools(monkeypatch, tmp_path, code_format):
+    pack, native, calls = mock_signed_native_pack(monkeypatch, tmp_path, code_format)
+
+    runtime._verify_pack_code_signatures(pack, pack_definition())
+
+    assert ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(pack)] in calls
+    assert ["/usr/bin/codesign", "--verify", "--strict", str(native)] in calls
+    assert ["/usr/bin/codesign", "--display", "--verbose=2", str(native)] in calls
+
+
+@pytest.mark.parametrize("code_format", [
+    "Mach-O thin (x86_64)",
+    "Mach-O thin (arm64e)",
+    "Mach-O thin (arm64v8)",
+    "Mach-O universal (x86_64 arm64)",
+    "Mach-O universal (arm64 x86_64)",
+    "",
+])
+def test_runtime_pack_native_validation_rejects_non_arm64_formats(monkeypatch, tmp_path, code_format):
+    pack, _native, _calls = mock_signed_native_pack(monkeypatch, tmp_path, code_format)
+
+    with pytest.raises(RuntimeError, match="not arm64-only"):
+        runtime._verify_pack_code_signatures(pack, pack_definition())
+
+
+def test_runtime_pack_native_validation_still_rejects_a_different_signing_team(monkeypatch, tmp_path):
+    pack, _native, _calls = mock_signed_native_pack(
+        monkeypatch, tmp_path, "Mach-O thin (arm64)", native_team="OTHERTEAM1",
+    )
+
+    with pytest.raises(RuntimeError, match="wrong signing Team"):
+        runtime._verify_pack_code_signatures(pack, pack_definition())
+
+
 def test_sherpa_import_probe_does_not_run_pack_sitecustomize(tmp_path):
     site_packages = tmp_path / "site-packages"
     package = site_packages / "sherpa_onnx"
@@ -260,3 +326,26 @@ def test_sherpa_import_probe_does_not_run_pack_sitecustomize(tmp_path):
 
     assert runtime._sherpa_import_ok(Path(runtime.sys.executable), site_packages) is True
     assert not marker.exists()
+
+
+def test_sherpa_import_probe_preserves_runtime_pack_bytes(monkeypatch, tmp_path):
+    site_packages = tmp_path / "site-packages"
+    package = site_packages / "sherpa_onnx"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("__version__ = '1.13.2'\n", encoding="utf-8")
+    before = {
+        path.relative_to(site_packages): path.read_bytes()
+        for path in site_packages.rglob("*") if path.is_file()
+    }
+    # Isolated Python ignores this environment setting; the subprocess itself
+    # must disable bytecode writes to keep the signed payload inventory intact.
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
+
+    assert runtime._sherpa_import_ok(Path(runtime.sys.executable), site_packages) is True
+
+    after = {
+        path.relative_to(site_packages): path.read_bytes()
+        for path in site_packages.rglob("*") if path.is_file()
+    }
+    assert after == before
+    assert not list(site_packages.rglob("__pycache__"))
