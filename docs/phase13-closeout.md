@@ -2,18 +2,19 @@
 
 ## Current checkpoint
 
-- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34676677582`, build 1620,
-  source `929789596f059b4c4bf251477e11418ca1b0206a`. Finder replaced the whole
+- Installed: complete CI-signed/notarized `0.23.0-dev.ci.34794255762`, build 1622,
+  source `6446a6a8e74deb8039823ffad717df222a2ec1a1`. Finder replaced the whole
   App; its installed CodeResources digest matches the verified CI artifact.
   Migration transaction `f65ccc2e04a04b11b3d5f308d1460858` remains committed,
   with its original `2026-09-11T03:39:13.906530+00:00` timestamp. Initial Host
-  PID 35996 and Capture PID 35999 report the new version; both native audio
+  PID 82285 and Capture PID 82286 report the new version; both native audio
   inputs become ready, idle, and database quick-check is healthy.
 - The native layout/paint repair passes installed verification. Build 1618's first
   entry after replacement and one normal quit/reopen automatically rendered the
   complete Agent Console without zoom, resizing, cache clearing, service resets
   or installed-App patches. Screenshots and the accessible HTML tree agree.
-  Build 1620 also entered the complete UI automatically after whole-App replacement.
+  Builds 1620 and 1622 also entered the complete UI automatically after whole-App
+  replacement.
   Build 1614's white-window failure and temporary zoom workaround are historical
   evidence, not the current installed state. The exact synthetic QA task remains
   completed on attempt 1 with no error; its 227-character transcript and
@@ -26,8 +27,9 @@
   Share action `f53297b2-f5d3-42b2-a9a2-a37a04faaec1` by fetching its exact receipt
   once. The Host no longer offers Unknown reconciliation, retains the same
   receipt and reports `duplicateWarningRequired=true`. No second Test Share was
-  created. Build 1620's single installed read-only access probe now passes and
-  overall Sharing Readiness is ready. The earlier discovery timeout is resolved;
+  created. Builds 1620 and 1622 each passed one installed read-only access probe
+  in their new Host process; current overall Sharing Readiness is ready.
+  The earlier discovery timeout is resolved;
   no second Test Share or repeated receipt reconciliation was needed.
 - A read-only timing diagnostic measured Codex `mcpServerStatus/list` at
   30,968 ms. The short access probe incorrectly used its 30,000 ms tool budget
@@ -60,9 +62,29 @@
   paragraph, retains complete-content comparison (missing headings still fail),
   and replaces the generic audit error with an explicit content-mismatch detail
   when the exact page/parent were read. Four targeted suites pass all 99 tests;
-  typecheck, Host build and diff checks pass. The transport repair remains unverified against a new live
-  write; do not call it installed or accepted. No existing page has been edited,
+  typecheck, Host build and diff checks pass. The transport repair remains
+  unverified against a new live write; it is installed, not Share-accepted.
+  No existing page has been edited,
   no action abandoned, and no new external write or RC has been made.
+- This follow-up is committed/pushed as `6446a6a8e74deb8039823ffad717df222a2ec1a1`.
+  Internal signing run `34794255762` passed and produced build 1622,
+  `0.23.0-dev.ci.34794255762`. Artifact `10328937856` is downloaded to
+  `/private/tmp/yulu-phase13-heading-ci.XaMLS8`; the inner archive checksum,
+  exact source metadata, deep/strict signature, notarization staple and
+  Gatekeeper assessment all pass. CodeResources SHA-256 is
+  `3400fdc82e7a34edd8842f46af43b236e536d6a01982d565c930791402b43e0f`.
+  Full source CI `34794099373` also passed both the UI/Host and native/Python
+  jobs. Finder whole-App replacement is complete; the installed CodeResources
+  digest matches, the native UI renders automatically, and Host/Capture report
+  build 1622 with database quick-check and both audio inputs ready. The original
+  committed migration timestamp is unchanged. MCP confirms the same completed
+  attempt-1 QA task, byte-identical summary and exactly one Unknown Share Action
+  with the original receipt. The fresh Host required its ordinary one-read
+  access probe; it passed, restoring current Sharing Readiness while reusing
+  the already verified original Test Share. No recording or external write was repeated.
+  The pre-push scanner's
+  three medium matches were reviewed: all are numerical CI/artifact IDs in
+  this file, not phone numbers or credentials. No scan bypass was used.
 - The latest normal xAI UI/API read now reports the original OAuth connected
   and readable. No password, credential helper, reauthorization or source/model
   change was performed. Real transcription and `grok-4.6` conversation capability
@@ -387,9 +409,9 @@ Host's public MCP readback, not just old checkboxes. Reuse only the stated scope
 | Requirement | Retained evidence | What it does not establish |
 |---|---|---|
 | Self-contained drag-to-Applications baseline | RC14 `b2c554c`, build 1568, macOS 26.5 arm64: fresh preflight passed with host dependencies absent, browser provenance verified, bundle observation matched, and first-launch Host/database healthy. | The baseline explicitly has `coreCompleted=false` and no Share receipt. Its old `com.yulu.ui` owner cannot prove the newly separated service registration path. |
-| Current physical migration and App takeover | CI validation App `9297895`, build 1620: original committed migration transaction retained, new Host/Capture own the runtime, native inputs ready and first entry rendered automatically. Reuse build 1618's first-entry and ordinary quit/reopen evidence for the unchanged native repair. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
-| Committed artifacts survive whole-App replacement | Current MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. `sendToNotion=false`, no legacy delivery. One separate manual Share is Unknown. | This preserves dev6's successful full pipeline. Build 1618's separate xAI capability probes also pass; neither claim is a new recording on build 1620. |
-| Sharing setup and external write | The approved private parent and original Test Share child exist. Build 1618 reconciled the original Host action through direct runtime RPC without a model turn; build 1620's installed access probe passes and Sharing Readiness is ready. The one manual recording Share returned a real receipt. | The new page lacks the summary's first H1, so the complete-content check correctly fails. Source remediation is under verification; do not resend either write or choose an unrelated business page. |
+| Current physical migration and App takeover | CI validation App `6446a6a`, build 1622: original committed migration transaction retained, new Host/Capture own the runtime, native inputs ready and first entry rendered automatically. Reuse build 1618's first-entry and ordinary quit/reopen evidence for the unchanged native repair. | This physical installation originated from development/legacy state; it is not a clean machine or a demonstrated real v0.22.2 baseline. |
+| Committed artifacts survive whole-App replacement | Current MCP readback still returns QA task `58245ef5-b2fb-4f23-80ff-04bcaa163f34` completed on attempt 1, error null; its transcript is 227 characters, summary 1,110 characters and not stale. `sendToNotion=false`, no legacy delivery. One separate manual Share is Unknown. | This preserves dev6's successful full pipeline. Build 1618's separate xAI capability probes also pass; neither claim is a new recording on build 1622. |
+| Sharing setup and external write | The approved private parent and original Test Share child exist. Build 1618 reconciled the original Host action through direct runtime RPC without a model turn; build 1622's installed access probe passes and Sharing Readiness is ready. The one manual recording Share returned a real receipt. | The new page lacks the summary's first H1, so the complete-content check correctly fails. The transport correction is installed but still needs actual-write verification; do not resend either write or choose an unrelated business page. |
 | Public distribution | RC19's retained receipt binds anonymous asset sizes/hashes to `fb2be51` and explicitly has `installedAcceptance=false`; signature/notary/site checks are retained for those bytes. | It cannot accept the later internal App or establish stable promotion. |
 | Supported v0.22.2 upgrade and public update/rollback | Relevant source regressions are retained; the reviewed checkpoints continue to identify complete installed journeys as unearned. | Source tests, prepared harnesses and temporary fixture directories are not completed real-install receipts. |
 
@@ -408,15 +430,19 @@ store inspection is not permission to inspect the user's password store now.
    have recovered without changing the original grant/source/models; the initial
    summary Unknown result remains recorded. Preserve dev6's successful pipeline evidence
    separately from current readiness. No password-store access is authorized.
-2. The discovery-budget correction is installed in complete CI-signed build
-   1620, and its connector access probe passes. The original Test Share was
+2. The discovery-budget correction is retained in complete CI-signed build
+   1622, and its connector access probe passes. The original Test Share was
    already reconciled successfully; do not resend or reconcile it again.
    The existing synthetic QA summary has been manually shared once to the
    approved private parent after Sharing Readiness became ready. Its exact-page
    readback found a missing first H1, not a false positive in content comparison.
    Preserve the Unknown action and original receipt; complete the transport
-   correction, then resolve this content loss before claiming positive Share
-   acceptance. An uncertain result must never trigger another automatic write.
+   correction's live verification, then resolve this content loss before claiming
+   positive Share acceptance. Build 1622 with the transport fix is now installed;
+   no page repair or additional write has been performed. A narrowly scoped
+   request to repair only this QA page and run one further manual QA Share to the
+   same private parent is awaiting the user's answer. An uncertain result must
+   never trigger another automatic write.
    Native paste/select-all already passed; do not patch the installed signed
    App. Existing authorization remains effective; no new password access,
    OAuth flow or public release is authorized by this handoff.
