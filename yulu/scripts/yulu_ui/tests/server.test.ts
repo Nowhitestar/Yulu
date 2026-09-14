@@ -7,6 +7,7 @@ import { request as httpRequest } from "node:http";
 import Database from "better-sqlite3";
 import { runServerCommand, startServer, type RunningServer } from "../src/server.js";
 import { HostStore } from "../src/hostStore.js";
+import { defaultYuluConfig } from "../src/config.js";
 import { RecordingPipeline } from "../src/recordingPipeline.js";
 import { AgentUnavailableError } from "../src/agentGateway.js";
 import { RealtimeTranscriptionCoordinator } from "../src/realtimeTranscription.js";
@@ -84,6 +85,45 @@ it("runs application data preparation as a one-shot leaf without starting Host",
   }
 });
 
+it("initializes copied older Host data offline before migration snapshots its schema", async () => {
+  const root = mkdtempSync(join(tmpdir(), "yulu-initialize-leaf-"));
+  const legacy = join(root, "legacy");
+  const durable = join(root, "durable");
+  mkdirSync(legacy, { recursive: true, mode: 0o700 });
+  const config = defaultYuluConfig();
+  const legacyConfig = JSON.stringify({ ...config, agent_pipeline: { ...config.agent_pipeline, auto_send_notion: true } });
+  writeFileSync(join(legacy, "config.json"), legacyConfig, { mode: 0o600 });
+  const oldStore = new HostStore(join(legacy, "host.sqlite"));
+  oldStore.db.exec("ALTER TABLE agent_tasks DROP COLUMN summary_endpoint_identity");
+  oldStore.close();
+  const legacyDatabase = readFileSync(join(legacy, "host.sqlite"));
+  const overrides = {
+    configDir: durable, durableDataDir: durable, legacyReadOnlyDataDir: legacy,
+    scriptDir: join(HERE, "../.."),
+  };
+  try {
+    expect(await runServerCommand(["--prepare-application-data"], overrides)).toBeNull();
+    const copied = new Database(join(durable, "host.sqlite"), { readonly: true });
+    expect(copied.pragma("table_info(agent_tasks)")).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "summary_endpoint_identity" }),
+    ]));
+    copied.close();
+    expect(await runServerCommand(["--initialize-application-data"], overrides)).toBeNull();
+    const initialized = new Database(join(durable, "host.sqlite"), { readonly: true });
+    expect(initialized.pragma("table_info(agent_tasks)")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "summary_endpoint_identity" }),
+    ]));
+    expect(initialized.pragma("quick_check", { simple: true })).toBe("ok");
+    initialized.close();
+    expect(JSON.parse(readFileSync(join(durable, "config.json"), "utf8")).agent_pipeline).not.toHaveProperty("auto_send_notion");
+    expect(readFileSync(join(legacy, "config.json"), "utf8")).toBe(legacyConfig);
+    expect(readFileSync(join(legacy, "host.sqlite"))).toEqual(legacyDatabase);
+    expect(readdirSync(durable)).not.toContain("host-instance.lock");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function pcmWav(): Buffer {
   const wav = Buffer.alloc(45);
   wav.write("RIFF", 0);
@@ -123,7 +163,7 @@ beforeAll(async () => {
   process.env.HOME = root;
   process.env.YULU_UI_PORT = "0";
   process.env.YULU_HOST_NONCE = "server-test-nonce";
-  process.env.YULU_SERVICE_OWNER = "com.yulu.ui";
+  process.env.YULU_SERVICE_OWNER = "com.yulu.app.host";
   process.env.YULU_PRODUCT_VERSION = "0.23.0-test";
   process.env.YULU_BUNDLE_VERSION = "999";
   const server = await startServer({
@@ -161,7 +201,7 @@ describe("server", () => {
     expect(await r.json()).toMatchObject({
       status: "ok",
       instanceNonce: "server-test-nonce",
-      serviceOwner: "com.yulu.ui",
+      serviceOwner: "com.yulu.app.host",
       instanceLockToken: expect.any(String),
       pid: expect.any(Number),
       productVersion: "0.23.0-test",

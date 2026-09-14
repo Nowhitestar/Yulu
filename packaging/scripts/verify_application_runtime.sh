@@ -163,14 +163,19 @@ from pathlib import Path
 
 app = Path(sys.argv[1])
 expected = {
-    "com.yulu.ui": ("Contents/MacOS/yulu_app", ["yulu_app", "--run-host-service"]),
+    "com.yulu.ui": (
+        "com.yulu.app.host", "Contents/MacOS/yulu_app", ["yulu_app", "--run-host-service"],
+    ),
     "com.yulu.audiodaemon": (
+        "com.yulu.app.capture",
         "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
         ["audio_daemon"],
     ),
+    "RetiredHost": ("com.yulu.ui", "Contents/MacOS/yulu_app", ["yulu_app", "--retired-bundled-service"]),
+    "RetiredCapture": ("com.yulu.audiodaemon", "Contents/MacOS/yulu_app", ["yulu_app", "--retired-bundled-service"]),
 }
-for label, (bundle_program, arguments) in expected.items():
-    path = app / f"Contents/Library/LaunchAgents/{label}.plist"
+for plist_stem, (label, bundle_program, arguments) in expected.items():
+    path = app / f"Contents/Library/LaunchAgents/{plist_stem}.plist"
     try:
         payload = plistlib.loads(path.read_bytes())
     except Exception as error:
@@ -187,13 +192,17 @@ for label, (bundle_program, arguments) in expected.items():
         raise SystemExit(
             f"verify_application_runtime.sh: invalid bundle-relative SMAppService agent {label}"
         )
-    if label == "com.yulu.audiodaemon" and (
+    if label == "com.yulu.app.capture" and (
         payload.get("EnvironmentVariables", {}).get("YULU_SERVICE_OWNER")
-        != "com.yulu.audiodaemon"
+        != "com.yulu.app.capture"
     ):
         raise SystemExit(
             "verify_application_runtime.sh: invalid Capture service owner marker"
         )
+    if plist_stem.startswith("Retired") and (
+        payload.get("RunAtLoad") is not False or payload.get("KeepAlive", False) is not False
+    ):
+        raise SystemExit("verify_application_runtime.sh: retired descriptors must never run services")
 PY
 python3 - "$RUNTIME/yulu/scripts/local_caption_runtime_pack.json" <<'PY'
 import json

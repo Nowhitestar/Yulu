@@ -30,19 +30,29 @@ export interface RecordingShareView {
 interface Props {
   view: RecordingShareView | null;
   pending?: boolean;
+  reconciling?: boolean;
+  error?: string;
   onConfirm: (input: { snapshotHash: string; duplicateConfirmed: boolean }) => void;
+  onReconcileUnknown?: (input: { actionId: string; receiptId: string; receiptUrl: string }) => void;
   onAbandonUnknown?: (actionId: string) => void;
   disabled?: boolean;
   className?: string;
 }
 
-export function SharePopover({ view, pending, onConfirm, onAbandonUnknown, disabled, className }: Props) {
+export function SharePopover({ view, pending, reconciling, error, onConfirm, onReconcileUnknown, onAbandonUnknown, disabled, className }: Props) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const [receiptId, setReceiptId] = useState("");
+  const [receiptUrl, setReceiptUrl] = useState("");
   const [style, setStyle] = useState<CSSProperties | null | undefined>(undefined);
   const rootRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    setReceiptId(view?.latestAction?.receiptId ?? "");
+    setReceiptUrl(view?.latestAction?.receiptUrl ?? "");
+  }, [open, view?.latestAction?.id, view?.latestAction?.receiptId, view?.latestAction?.receiptUrl]);
 
   useLayoutEffect(() => {
     if (!open) { setStyle(undefined); return; }
@@ -64,7 +74,7 @@ export function SharePopover({ view, pending, onConfirm, onAbandonUnknown, disab
     window.addEventListener("resize", update);
     window.addEventListener("scroll", update, true);
     return () => { window.removeEventListener("resize", update); window.removeEventListener("scroll", update, true); };
-  }, [open]);
+  }, [open, view?.latestAction?.status, error]);
 
   useEffect(() => {
     if (!open) return;
@@ -137,6 +147,23 @@ export function SharePopover({ view, pending, onConfirm, onAbandonUnknown, disab
             {view?.status === "unknown" && (
               <div className="share-warning" role="alert"><AlertTriangle size={15} /><span>{view.remediation}</span></div>
             )}
+            {view?.latestAction?.status === "unknown" && onReconcileUnknown && (
+              <div className="share-reconciliation">
+                <p>{t("share.confirm.reconcileHelp")}</p>
+                <label>{t("share.confirm.receiptId")}
+                  <input value={receiptId} maxLength={500} readOnly={Boolean(view.latestAction.receiptId)} disabled={pending}
+                    onChange={(event) => setReceiptId(event.target.value)} />
+                </label>
+                <label>{t("share.confirm.receiptUrl")}
+                  <input value={receiptUrl} maxLength={2000} readOnly={Boolean(view.latestAction.receiptUrl)} disabled={pending}
+                    onChange={(event) => setReceiptUrl(event.target.value)} />
+                </label>
+                <button type="button" disabled={pending || (!receiptId.trim() && !receiptUrl.trim())} onClick={() => {
+                  onReconcileUnknown({ actionId: view.latestAction!.id, receiptId: receiptId.trim(), receiptUrl: receiptUrl.trim() });
+                }}>{reconciling ? t("share.confirm.reconciling") : t("share.confirm.reconcile")}</button>
+              </div>
+            )}
+            {error && <div className="share-warning" role="alert">{error}</div>}
             {view?.status === "unavailable" && (
               <div className="share-unavailable">
                 <span>{view.detail}</span>
@@ -148,7 +175,7 @@ export function SharePopover({ view, pending, onConfirm, onAbandonUnknown, disab
             )}
             <div className="share-confirm-actions">
               <button type="button" className="secondary" onClick={() => setOpen(false)}>{t("share.confirm.cancel")}</button>
-              {view?.status === "unknown" && view.latestAction && onAbandonUnknown ? (
+              {view?.latestAction?.status === "unknown" && onAbandonUnknown ? (
                 <button type="button" className="danger" disabled={pending} onClick={() => {
                   onAbandonUnknown(view.latestAction!.id);
                   setOpen(false);
@@ -156,7 +183,7 @@ export function SharePopover({ view, pending, onConfirm, onAbandonUnknown, disab
               ) : null}
               <button type="button" className="primary" disabled={pending || view?.status !== "ready"} onClick={confirmShare}>
                 <Send size={13} />
-                {pending ? t("share.pending") : view?.duplicateWarningRequired ? t("share.confirm.sendAgain") : t("share.confirm.send")}
+                {pending && view?.status !== "unknown" ? t("share.pending") : view?.duplicateWarningRequired ? t("share.confirm.sendAgain") : t("share.confirm.send")}
               </button>
             </div>
           </div>

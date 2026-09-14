@@ -404,6 +404,7 @@ export function RecordingReader() {
   const transcribeMut = trpc.recordings.transcribe.useMutation();
   const summarizeMut = trpc.recordings.summarize.useMutation();
   const shareRecordingMut = trpc.recordings.shareRecording.useMutation();
+  const reconcileRecordingShareMut = trpc.recordings.reconcileRecordingShare.useMutation();
   const abandonRecordingShareMut = trpc.recordings.abandonRecordingShare.useMutation();
   const renameMut = trpc.recordings.rename.useMutation();
   const setTagsMut = trpc.recordings.setTags.useMutation();
@@ -585,6 +586,22 @@ export function RecordingReader() {
     });
   };
 
+  const handleReconcileRecordingShare = (input: { actionId: string; receiptId: string; receiptUrl: string }) => {
+    setCompletedAction(null);
+    setActionError(null);
+    reconcileRecordingShareMut.mutate({ ...input, confirmed: true }, {
+      onSuccess: (result) => {
+        if (result.latestAction?.id === input.actionId && result.latestAction.status === "verified") {
+          setCompletedAction("share");
+        } else {
+          setActionError({ action: "share", message: t("share.confirm.unverified") });
+        }
+      },
+      onError: (err) => setActionError({ action: "share", message: err.message }),
+      onSettled: invalidateBoth,
+    });
+  };
+
   const handleAbandonRecordingShare = (actionId: string) => {
     abandonRecordingShareMut.mutate({ actionId, confirmed: true }, {
       onError: (err) => setActionError({ action: "share", message: err.message }),
@@ -729,7 +746,7 @@ export function RecordingReader() {
   const manualPolicyOverrideAllowed = allowsManualPolicyOverride(agentTask);
   const taskBlocksManualActions = taskActive && !manualPolicyOverrideAllowed;
   const taskDeleteBlocked = taskActive;
-  const manualActionPending = transcribeMut.isPending || summarizeMut.isPending || shareRecordingMut.isPending;
+  const manualActionPending = transcribeMut.isPending || summarizeMut.isPending || shareRecordingMut.isPending || reconcileRecordingShareMut.isPending || abandonRecordingShareMut.isPending;
   const taskActionBlocked = taskBlocksManualActions;
   const actionsDisabledReason = taskActionBlocked
       ? t("reader.disabled.agentTaskActive")
@@ -848,8 +865,11 @@ export function RecordingReader() {
           <SharePopover
             className="reader-action-share"
             view={recordingShare}
-            pending={shareRecordingMut.isPending || abandonRecordingShareMut.isPending}
+            pending={shareRecordingMut.isPending || reconcileRecordingShareMut.isPending || abandonRecordingShareMut.isPending}
+            reconciling={reconcileRecordingShareMut.isPending}
+            error={actionError?.action === "share" ? actionError.message : undefined}
             onConfirm={handleShare}
+            onReconcileUnknown={handleReconcileRecordingShare}
             onAbandonUnknown={handleAbandonRecordingShare}
             disabled={!data.summary || data.summaryStale || taskActionBlocked || manualActionPending}
           />

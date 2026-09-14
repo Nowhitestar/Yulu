@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.yulu.ui</string>
+	<string>com.yulu.app.host</string>
 	<key>BundleProgram</key>
 	<string>Contents/MacOS/yulu_app</string>
 	<key>ProgramArguments</key>

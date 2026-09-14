@@ -226,7 +226,7 @@ function readJson(path, trpc = false) {
 function validateHealth(value) {
   const health = requireRecord(value, "health response schema is invalid");
   if (health.status !== "ok") fail("health status is not ok");
-  if (health.serviceOwner !== "com.yulu.ui") fail("health service owner is not com.yulu.ui");
+  if (health.serviceOwner !== "com.yulu.app.host") fail("health service owner is not com.yulu.app.host");
   const database = requireRecord(health.database, "health database schema is invalid");
   if (database.status !== "ok") fail("health database status is not ok");
   if (!Number.isSafeInteger(database.schemaVersion) || !Number.isSafeInteger(database.minimumReadableVersion)) {
@@ -238,7 +238,7 @@ function validateHealth(value) {
   return {
     health: {
       status: "ok",
-      serviceOwner: "com.yulu.ui",
+      serviceOwner: "com.yulu.app.host",
       databaseStatus: "ok",
       database: {
         schemaVersion: database.schemaVersion,

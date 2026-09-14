@@ -263,6 +263,21 @@ describe("recordings router", () => {
     });
   });
 
+  it("requires a UI bearer and explicit confirmation for read-only recording receipt reconciliation", async () => {
+    const reconcileRecordingUnknown = vi.fn(async () => ({ latestAction: { status: "verified" } }));
+    const ctx = { ...mkCtx({ moviesDir: mvDir }), sharing: { reconcileRecordingUnknown } } as unknown as AppContext;
+    const input = { actionId: "00000000-0000-4000-8000-000000000149", confirmed: true, receiptId: " page-1 ", receiptUrl: "" } as const;
+    await expect(createCaller(recordingsRouter, { ...ctx, uiMutationAuthorized: false }).reconcileRecordingShare(input))
+      .rejects.toThrow("UI mutation bearer required");
+    const caller = createCaller(recordingsRouter, ctx);
+    await expect(caller.reconcileRecordingShare({ ...input, confirmed: false } as never)).rejects.toThrow();
+    await expect(caller.reconcileRecordingShare({ ...input, receiptId: "x".repeat(501) })).rejects.toThrow();
+    await expect(caller.reconcileRecordingShare({ ...input, summary: "client replacement" } as never)).rejects.toThrow();
+    expect(reconcileRecordingUnknown).not.toHaveBeenCalled();
+    await expect(caller.reconcileRecordingShare(input)).resolves.toMatchObject({ latestAction: { status: "verified" } });
+    expect(reconcileRecordingUnknown).toHaveBeenCalledExactlyOnceWith({ actionId: input.actionId, receiptId: "page-1", receiptUrl: "" });
+  });
+
   it("rejects traversal and summary symlinks before recording content reaches Sharing", async () => {
     const shareRecording = vi.fn(async () => ({ status: "ready" }));
     const ctx = {

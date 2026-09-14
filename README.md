@@ -206,6 +206,11 @@ If an upgrade shows migration recovery, use the visible **Cancel Service
 Migration** action to roll back the current attempt, inspect the preserved
 evidence, then choose **Retry Service Migration** after correcting the blocker.
 Do not edit the migration journal or application databases by hand.
+If an attempt already started the new runtime, rollback keeps its new data in
+`~/Library/Application Support/Yulu/application-migration/retained-runtime-data/`
+instead of deleting runtime writes. The original legacy data and recording
+library remain in place. This recovery directory is not an automatic sharing or
+task-replay queue.
 
 ## How Yulu works
 

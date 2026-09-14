@@ -487,13 +487,14 @@ quit Yulu, download the matching DMG from GitHub Releases, open it, drag
 `install.sh`, or pkg as a release bridge. Replacing the immutable App leaves
 configuration, credentials, and recordings outside the bundle unchanged.
 
-After an upgrade:
+After a whole-App upgrade, open **Components → Background Services**. The two
+active owners are `com.yulu.app.host` and `com.yulu.app.capture`; signing and TCC
+continue to use the existing Capture identity. For a read-only diagnostic report
+without installing a separate CLI or Python:
 
 ```bash
-yulu restart
-yulu doctor --json
-launchctl list | rg 'com\.yulu\.'
-curl -fsS http://127.0.0.1:7777/healthz
+"/Applications/Yulu.app/Contents/Resources/runtime/python/bin/python3" \
+  "/Applications/Yulu.app/Contents/Resources/runtime/yulu/scripts/doctor.py" --json
 ```
 
 Expected behavior:
@@ -509,6 +510,20 @@ Expected behavior:
   current recording UI to reprocess a preserved recording explicitly;
 - source archives and migration audit files are preserved for inspection;
 - only the Host coordinates Agent processing.
+
+Data preparation first verifies the exact legacy copy, then performs offline
+configuration and database-schema initialization before starting Host. Final
+health validates the prepared schema; a legitimate schema upgrade is not a
+reason to roll back. An already committed migration is not repeated after a
+manual App replacement: only old App-managed services are retired and current
+owners are registered, with an idle-recording guard.
+
+If an initialized runtime rolls back, its transaction-created data, WAL files,
+configuration archives and recording-event files are moved into the private
+`application-migration/retained-runtime-data/<transaction-id>/` recovery directory
+with an identity manifest. Preexisting standard data and the original legacy
+root are not moved by that recovery. The retained directory is never an automatic
+processing/replay source; keep it until the installed runtime is verified.
 
 Do not delete migration archives until the upgraded runtime and all expected
 artifacts have been verified.

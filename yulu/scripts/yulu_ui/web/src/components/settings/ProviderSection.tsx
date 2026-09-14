@@ -31,6 +31,9 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
   const connection = providers.data?.connection;
   const authorization = connection?.authorization;
   const authorizing = authorization?.status === "starting" || authorization?.status === "running";
+  const credentialReadFailed = !connection?.connected && (
+    connection?.oauthReadSucceeded === false || connection?.apiKeyReadSucceeded === false
+  );
 
   const startAuthorization = () => {
     const authorizationWindow = window.open("about:blank", "_blank");
@@ -190,11 +193,21 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
               ? t("settings.providers.connection.source", {
                   source: connection.source === "oauth" ? "Grok OAuth" : "API Key",
                 })
-              : t("settings.providers.connection.disconnected")}
+              : credentialReadFailed
+                ? t("agentConnections.credentialAccess.unavailable")
+                : t("settings.providers.connection.disconnected")}
           </span>
         </div>
 
         <div className="provider-status-note">{t("settings.providers.connection.oauthHelp")}</div>
+        {credentialReadFailed && (
+          <div className="provider-status-note provider-status-note--bad" role="alert" aria-label={t("agentConnections.credentialAccess.unavailable")}>
+            {t("agentConnections.credentialAccess.help")}
+            <button type="button" className="path-btn" disabled={providers.isFetching} onClick={() => void refresh()}>
+              {t("agentConnections.credentialAccess.retry")}
+            </button>
+          </div>
+        )}
         {authorizing && (
           <div className="provider-status-note" role="status">
             {t("settings.providers.connection.authorizing")}
@@ -216,7 +229,7 @@ export function ProviderSection({ tracker }: { tracker: SettingsRestartTracker }
               {t("settings.providers.connection.cancel")}
             </button>
           ) : (
-            <button type="button" className="path-btn local-caption-primary" disabled={authorize.isPending} onClick={startAuthorization}>
+            <button type="button" className="path-btn local-caption-primary" disabled={authorize.isPending || connection?.oauthReadSucceeded === false} onClick={startAuthorization}>
               {connection?.oauthConnected
                 ? t("settings.providers.connection.reconnect")
                 : t("settings.providers.connection.connect")}

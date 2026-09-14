@@ -258,6 +258,9 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
     ? remediationConnection
     : null;
   const authorizing = connection?.authorization.status === "starting" || connection?.authorization.status === "running";
+  const credentialReadFailed = connection?.authorization.credentialSource === "api-key"
+    ? connection.authorization.apiKeyReadSucceeded === false
+    : connection?.authorization.oauthReadSucceeded === false;
   const startAuthorization = () => {
     const authorizationWindow = window.open("about:blank", "_blank");
     if (authorizationWindow) authorizationWindow.opener = null;
@@ -348,7 +351,9 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             >
               {connection.authorization.connected
                 ? t("agentConnections.connected")
-                : t("agentConnections.disconnected")}
+                : credentialReadFailed
+                  ? t("agentConnections.credentialAccess.unavailable")
+                  : t("agentConnections.disconnected")}
             </span>
           </div>
 
@@ -356,6 +361,10 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             {authorizing ? (
               <button type="button" onClick={() => void run(() => cancelAuthorization.mutateAsync())}>
                 {t("agentConnections.authorization.cancel")}
+              </button>
+            ) : connection.authorization.oauthReadSucceeded === false ? (
+              <button type="button" disabled={view.isFetching} onClick={() => void view.refetch()}>
+                {t("agentConnections.credentialAccess.retry")}
               </button>
             ) : (
               <button type="button" onClick={startAuthorization}>
@@ -370,6 +379,17 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
               </button>
             )}
           </div>
+
+          {credentialReadFailed && (
+            <div className="agent-connection-guidance" role="alert" aria-label={t("agentConnections.credentialAccess.unavailable")}>
+              {t("agentConnections.credentialAccess.help")}
+              {connection.authorization.oauthReadSucceeded !== false && (
+                <button type="button" disabled={view.isFetching} onClick={() => void view.refetch()}>
+                  {t("agentConnections.credentialAccess.retry")}
+                </button>
+              )}
+            </div>
+          )}
 
           <fieldset className="agent-connection-credential-source">
             <legend>{t("agentConnections.credentialSource.legend")}</legend>

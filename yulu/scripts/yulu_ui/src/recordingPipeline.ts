@@ -342,7 +342,7 @@ export class RecordingPipeline {
     if (selection.provider === "xai") {
       const credentialSource = this.options.xaiSummaryCredentialSource?.() ?? null;
       if (!credentialSource) {
-        throw new InvalidRecordingCompletionError("xAI Summary Provider readiness credential source is unavailable");
+        throw new InvalidRecordingCompletionError("Select an xAI Summary credential source in /settings/llm before processing this recording");
       }
       return {
         ...selection,

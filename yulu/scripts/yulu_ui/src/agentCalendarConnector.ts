@@ -64,10 +64,11 @@ function connectorRuntime(connection: PersistedAgentConnection, workDir: string)
   if (!executable) {
     throw new AgentCalendarConnectorProbeError("runtime", `${connection.label} has no executable path`);
   }
+  const model = boundedString(connection.settings.conversationModel, 200);
   const command = connection.adapter === "codex"
-    ? [executable, "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
+    ? [executable, "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--model", model]
     : connection.adapter === "claude-code"
-      ? [executable, "--print", "--output-format", "stream-json", "--verbose"]
+      ? [executable, "--print", "--output-format", "stream-json", "--verbose", "--model", model]
       : [];
   const provider = connection.adapter === "claude-code" ? "claude" : connection.adapter;
   if (command.length === 0 || !["codex", "claude"].includes(provider)) {
@@ -76,6 +77,10 @@ function connectorRuntime(connection: PersistedAgentConnection, workDir: string)
       `${connection.label} does not have a supported read-only Calendar connector adapter`,
     );
   }
+  if (!model) throw new AgentCalendarConnectorProbeError(
+    "runtime",
+    `Choose an explicit Conversation model for ${connection.label} in Settings > Agent Connections before testing Calendar access`,
+  );
   return {
     provider: provider as AgentRuntime["provider"],
     label: connection.label,

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -122,11 +122,16 @@ describe("agentCliRunner", () => {
     const command = buildCodexConnectorCommand(["codex", "exec"], profile);
     expect(command).toEqual(expect.arrayContaining([
       "codex", "exec",
+      "-c", 'model_reasoning_effort="low"',
       "-c", `projects.${JSON.stringify(profile.cwd)}.trust_level="trusted"`,
       "-c", expect.stringMatching(/^hooks=\{SessionStart=/),
       "--dangerously-bypass-hook-trust",
     ]));
     expect(command.join(" ")).toContain(profile.guardPath);
+    expect(command).not.toContain("code_mode_host");
+    expect(command).not.toContain("--ignore-user-config");
+    expect(command).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(readFileSync(join(profile.cwd, ".codex", "config.toml"), "utf8")).toBe("");
   });
 
   it("fails closed before connector execution unless a project hook authorizes the exact tool input", () => {
@@ -190,6 +195,19 @@ describe("agentCliRunner", () => {
       parent: { page_id: "meeting-parent-123" },
       pages: [{ content }],
     }).status).toBe(0);
+
+    expect(run({
+      parent: { page_id: "meeting-parent-123" },
+      pages: [{ content, properties: { title: "Yulu Share" } }],
+    }).status).toBe(0);
+    expect(run({
+      parent: { page_id: "meeting-parent-123" },
+      pages: [{ content, properties: { title: "Private meeting title" } }],
+    }).status).toBe(2);
+    expect(run({
+      parent: { page_id: "meeting-parent-123" },
+      pages: [{ content, properties: { title: "Yulu Share", extra: "Private metadata" } }],
+    }).status).toBe(2);
 
     expect(run({
       parent: { page_id: "wrong-parent" },
@@ -296,6 +314,23 @@ describe("agentCliRunner", () => {
     expect(calendarList.status).toBe(0);
   });
 
+  it("supports only the selected Notion app namespace through Codex's Apps bridge", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu-notion-app-guard-"));
+    tempDirs.push(dir);
+    const guardPath = join(dir, "guard.mjs");
+    writeFileSync(guardPath, buildSharingGuardSource({
+      connector: "notion", allowedTools: ["notion_list_recent_pages"],
+    }, join(dir, "audit.jsonl")));
+    const run = (tool_name: string) => spawnSync(process.execPath, [guardPath], {
+      input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name, tool_input: {} }), encoding: "utf8",
+    });
+    expect(run("mcp__codex_apps__notion__notion_list_recent_pages").status).toBe(0);
+    expect(run("mcp__codex_apps__notion__notion_create_pages").status).toBe(2);
+    expect(run("mcp__codex_apps__other_app__notion_list_recent_pages").status).toBe(2);
+    expect(run("mcp__codex_apps__notion_fake__notion_list_recent_pages").status).toBe(2);
+    expect(run("exec").status).toBe(2);
+  });
+
   it("fails a Codex connector run when the CLI does not execute the project hook", async () => {
     const source = mkdtempSync(join(tmpdir(), "yulu-fake-codex-"));
     tempDirs.push(source);
@@ -303,6 +338,7 @@ describe("agentCliRunner", () => {
     writeFileSync(executable, [
       "#!/bin/sh",
       "if [ \"$1\" = 'features' ]; then printf '%s\\n' 'hooks stable true'; exit 0; fi",
+      "printf '%s\\n' 'Non-fatal startup warning from an unrelated MCP server' >&2",
       "previous=''",
       "for argument in \"$@\"; do",
       "  if [ \"$previous\" = '-o' ]; then printf '%s' '{\"status\":\"ready\"}' > \"$argument\"; fi",
@@ -330,6 +366,8 @@ describe("agentCliRunner", () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toMatch(/guard did not execute/i);
+    expect(result.stderr.split("\n")[0]).toMatch(/guard did not execute/i);
+    expect(result.stderr).toContain("Non-fatal startup warning");
     expect(result.connectorWriteState).toBe("unknown");
   });
 
@@ -368,6 +406,78 @@ describe("agentCliRunner", () => {
       connectorWriteState: "not-started",
     });
     expect(existsSync(turnMarker)).toBe(false);
+  });
+
+  it("gives Codex connector initialization a bounded allowance without relaxing its audit", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu-codex-startup-"));
+    tempDirs.push(dir);
+    const executable = join(dir, "slow-codex");
+    writeFileSync(executable, `#!/bin/sh
+if [ "$1" = features ]; then printf '%s\\n' 'hooks stable true'; exit 0; fi
+printf '%s\\n' YULU_STARTUP_COMPLETED
+`);
+    chmodSync(executable, 0o755);
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const result = await runAgentCliCommand({
+      runtime: { provider: "codex", label: "Codex", source: "configured-command",
+        command: [executable, "exec"], cwd: dir, disabledReason: null },
+      scriptDir: dir, configDir: dir, prompt: "non-sensitive startup fixture",
+      timeoutMs: 5_000,
+      connectorToolPolicy: { connector: "notion", allowedTools: ["notion_search"] },
+    });
+    const deadlines = timeoutSpy.mock.calls.map(call => call[1]);
+    timeoutSpy.mockRestore();
+    expect(deadlines).toContain(65_000);
+    expect(result.rawStdout).toContain("YULU_STARTUP_COMPLETED");
+    expect(result.timedOut).toBeUndefined();
+    expect(result.connectorWriteState).toBe("unknown");
+    expect(result.stderr).toMatch(/guard did not execute/i);
+    expect(result.code).toBe(1);
+  });
+
+  it("keeps ordinary Agent deadlines and reports the timeout before noisy stderr", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu-codex-timeout-"));
+    tempDirs.push(dir);
+    const executable = join(dir, "stalled-codex");
+    writeFileSync(executable, `#!/bin/sh
+printf '%s\\n' 'A non-fatal model-cache warning' >&2
+exec /bin/sleep 10
+`);
+    chmodSync(executable, 0o755);
+    const result = await runAgentCliCommand({
+      runtime: { provider: "codex", label: "Codex", source: "configured-command",
+        command: [executable, "exec"], cwd: dir, disabledReason: null },
+      scriptDir: dir, configDir: dir, prompt: "non-sensitive timeout fixture", timeoutMs: 1_000,
+    });
+    expect(result).toMatchObject({ code: 124, timedOut: true });
+    expect(result.stderr).toMatch(/^Agent command timed out after 1000 ms/);
+    expect(result.stderr).toContain("model-cache warning");
+  });
+
+  it.each([0, 1])("preserves Codex failed-turn API errors ahead of stderr and guard diagnostics (exit %i)", async (exitCode) => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu-codex-failed-turn-"));
+    tempDirs.push(dir);
+    const executable = join(dir, "failed-codex");
+    const message = "The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again.";
+    writeFileSync(executable, `#!${process.execPath}
+if (process.argv[2] === "features") { console.log("hooks stable true"); }
+else {
+  process.stderr.write("A non-fatal model-cache warning\\n");
+  console.log(${JSON.stringify(JSON.stringify({type:"turn.failed",error:{message:JSON.stringify({status:400,error:{message}})}}))});
+  process.exitCode = ${exitCode};
+}
+`);
+    chmodSync(executable, 0o755);
+    const result = await runAgentCliCommand({
+      runtime: { provider: "codex", label: "Codex", source: "configured-command",
+        command: [executable, "exec"], cwd: dir, disabledReason: null },
+      scriptDir: dir, configDir: dir, prompt: "non-sensitive failure fixture", timeoutMs: 5_000,
+      connectorToolPolicy: { connector: "notion", allowedTools: ["notion_search"] },
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr.split("\n")[0]).toBe(message);
+    expect(result.stderr).toMatch(/guard did not execute/i);
+    expect(result.connectorWriteState).toBe("unknown");
   });
 
   it("builds a Hermes one-shot command that can resume a native session", () => {

@@ -17,7 +17,12 @@
 .share-unavailable { justify-content: space-between; background: var(--glass-3); color: var(--fg-2); }
 .share-unavailable a { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); white-space: nowrap; }
 .share-outcome { background: color-mix(in oklch, var(--green) 10%, transparent); color: var(--green); }
-.share-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--edge); }
+.share-reconciliation { display: grid; gap: 8px; margin-top: 11px; color: var(--fg-2); font-size: 11px; }
+.share-reconciliation p { margin: 0; line-height: 1.5; }
+.share-reconciliation label { display: grid; gap: 4px; }
+.share-reconciliation input { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--edge-card); border-radius: var(--radius-control); background: var(--glass-3); color: var(--fg); font-size: 11px; }
+.share-reconciliation button { min-height: 32px; padding: 0 12px; border: 1px solid var(--edge-card); border-radius: var(--radius-control); background: var(--glass-3); color: var(--accent); font-size: 11px; font-weight: 700; }
+.share-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--edge); }
 .share-confirm-actions button { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 12px; border-radius: var(--radius-control); font-size: 11px; font-weight: 700; }
 .share-confirm-actions .primary { background: var(--accent); color: var(--accent-contrast); }
 .share-confirm-actions .secondary { border: 1px solid var(--edge-card); color: var(--fg-2); background: var(--glass-3); }

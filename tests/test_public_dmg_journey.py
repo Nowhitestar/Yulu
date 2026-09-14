@@ -47,7 +47,7 @@ def _trpc(data: object) -> dict[str, object]:
 def _responses(*, core: bool) -> dict[str, object]:
     health = {
         "status": "ok",
-        "serviceOwner": "com.yulu.ui",
+        "serviceOwner": "com.yulu.app.host",
         "productVersion": "0.23.0-rc.19",
         "bundleVersion": "2304",
         "database": {"status": "ok", "schemaVersion": 1, "minimumReadableVersion": 1},
@@ -371,7 +371,7 @@ def test_baseline_uses_only_exact_read_only_gets_and_proves_fresh_zero_state() -
         "releaseTag": TAG,
         "health": {
             "status": "ok",
-            "serviceOwner": "com.yulu.ui",
+            "serviceOwner": "com.yulu.app.host",
             "databaseStatus": "ok",
             "database": {"schemaVersion": 1, "minimumReadableVersion": 1},
         },

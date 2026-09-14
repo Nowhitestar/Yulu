@@ -36,6 +36,25 @@ def read_plist(path: Path) -> dict[str, object]:
         return plistlib.load(handle)
 
 
+def test_shell_late_startup_health_recovers_without_resetting_services():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    observer = source.split("func submitHealth(host: RuntimeOwnerEvidence", 1)[1]
+    observer = observer.split("guard let pendingHealth", 1)[0]
+    assert "freshInstallPhase == .awaitingHealth || freshInstallPhase == .healthBlocked" in observer
+    assert "freshInstallHostReady = runtimeOwnerIsReady(host)" in observer
+    assert "freshInstallCaptureReady = runtimeOwnerIsReady(capture)" in observer
+    assert "retryAvailable = false" in observer
+    assert "freshInstallNeedsServiceReset = false" in observer
+    assert 'onStateChange?("committed", nil)' in observer
+    assert "unregister" not in observer
+    assert "advance(" not in observer
+    slow_poll = source.split("} else if !self.migrationCommitted {", 1)[1]
+    slow_poll = slow_poll.split("} else if self.migrationCommitted {", 1)[0]
+    assert "deadline: .now() + 2" in slow_poll
+    assert "self.pollHost(generation: generation)" in slow_poll
+    assert "retry(" not in slow_poll
+
+
 def compile_yulu_app_inspector(tmp_path: Path) -> Path:
     binary = tmp_path / "yulu_app"
     result = subprocess.run(
@@ -50,6 +69,36 @@ def compile_yulu_app_inspector(tmp_path: Path) -> Path:
     )
     assert result.returncode == 0, result.stderr
     return binary
+
+
+def test_shell_edit_shortcuts_use_the_webview_first_responder():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    menu = source.split("private func installMainMenu()", 1)[1].split("private func addRoute", 1)[0]
+    edit = menu.split('let edit = NSMenu(title: "Edit")', 1)[1].split("editItem.submenu = edit", 1)[0]
+    for action, key in [("cut", "x"), ("copy", "c"), ("paste", "v"), ("selectAll", "a")]:
+        assert f'#selector(NSText.{action}(_:)), keyEquivalent: "{key}"' in edit
+    assert "target =" not in edit
+    assert "NSPasteboard" not in edit
+
+
+def test_shell_webview_has_initial_layout_and_explicit_loading_outcomes():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    web = source.split("final class ApplicationWebContent:", 1)[1].split(
+        "#if YULU_DEVELOPMENT_SMOKE", 1
+    )[0]
+    assert "WKNavigationDelegate" in web
+    assert "webView.navigationDelegate = self" in web
+    assert "window.contentLayoutRect.size" in web
+    assert "container.layoutSubtreeIfNeeded()" in web
+    assert "webView.isHidden = false" in web
+    assert "didFailProvisionalNavigation" in web
+    assert "webViewWebContentProcessDidTerminate" in web
+    assert "NSURLErrorCancelled" in web
+    assert "removeData" not in web
+    assert "nonPersistent" not in web
+    opening = source.split("private func open(route: String)", 1)[1]
+    assert "content.load(url, in: window)" in opening
+    assert "window?.contentView = web" not in opening
 
 
 def compile_audio_daemon_inspector(tmp_path: Path) -> Path:
@@ -81,6 +130,27 @@ def compile_audio_daemon_inspector(tmp_path: Path) -> Path:
     )
     assert result.returncode == 0, result.stderr
     return binary
+
+
+def test_migration_focus_resume_only_consumes_pending_approval(tmp_path: Path):
+    source = (SCRIPTS / "yulu_app.swift").read_text()
+    assert "struct MigrationResumeGate" in source
+    binary = compile_yulu_app_inspector(tmp_path)
+    events = [
+        "register_services", "resume", "verify_health", "resume",
+        "await_approval", "resume", "resume", "observe_services", "resume",
+        "await_approval", "resume", "rolled_back", "resume", "committed", "resume",
+    ]
+    result = subprocess.run(
+        [str(binary), "--inspect-migration-resume-gate", json.dumps(events)],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [False, False, True, False, False, True, False, False]
+    advance = source.split("func advance(event:", 1)[1].split("func retry()", 1)[0]
+    assert 'event == "resume" && !resumeGate.consumeResume()' in advance
+    handle = source.split("private func handle(_ action: ApplicationMigrationAction)", 1)[1]
+    assert "resumeGate.observe(action: action.action)" in handle.split('case "register_services"', 1)[0]
 
 
 def test_application_shell_delivers_native_recording_controls(tmp_path: Path):
@@ -250,7 +320,7 @@ def test_update_health_payload_contains_concrete_runtime_attestation(
         "productVersion": "0.23.0",
         "bundleVersion": "732",
         "hostIPCVersion": 1,
-        "serviceOwner": "com.yulu.ui",
+        "serviceOwner": "com.yulu.app.host",
         "pid": 102,
         "uid": os.geteuid(),
         "generation": "100:2",
@@ -272,7 +342,7 @@ def test_update_health_payload_contains_concrete_runtime_attestation(
         "productVersion": "0.23.0",
         "bundleVersion": "732",
         "captureIPCVersion": 1,
-        "serviceOwner": "com.yulu.audiodaemon",
+        "serviceOwner": "com.yulu.app.capture",
         "pid": 103,
         "uid": os.geteuid(),
         "generation": "100:3",
@@ -581,25 +651,38 @@ def test_bundled_background_owners_use_only_bundle_relative_smappservice_program
     launch_agents = SCRIPTS / "Yulu.app" / "Contents" / "Library" / "LaunchAgents"
     expected = {
         "com.yulu.ui.plist": (
-            "com.yulu.ui",
+            "com.yulu.app.host",
             "Contents/MacOS/yulu_app",
             ["yulu_app", "--run-host-service"],
         ),
         "com.yulu.audiodaemon.plist": (
-            "com.yulu.audiodaemon",
+            "com.yulu.app.capture",
             "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
             ["audio_daemon"],
         ),
     }
 
-    assert {path.name for path in launch_agents.glob("*.plist")} == set(expected)
+    retired = {"RetiredHost.plist": "com.yulu.ui", "RetiredCapture.plist": "com.yulu.audiodaemon"}
+    assert {path.name for path in launch_agents.glob("*.plist")} == set(expected) | set(retired)
+    for filename, label in retired.items():
+        payload = read_plist(launch_agents / filename)
+        assert payload["Label"] == label
+        assert payload["RunAtLoad"] is False
+        assert payload.get("KeepAlive", False) is False
+        assert payload["ProgramArguments"] == ["yulu_app", "--retired-bundled-service"]
+        assert payload["BundleProgram"] == "Contents/MacOS/yulu_app"
+    legacy_labels = {"com.yulu.ui", "com.yulu.audiodaemon"}
     for filename, (label, bundle_program, arguments) in expected.items():
         payload = read_plist(launch_agents / filename)
         assert payload["Label"] == label
+        assert payload["Label"] not in legacy_labels
         assert payload["BundleProgram"] == bundle_program
         assert payload["ProgramArguments"] == arguments
         assert "Program" not in payload
         assert not payload["ProgramArguments"][0].startswith("/")
+    capture = read_plist(launch_agents / "com.yulu.audiodaemon.plist")
+    assert capture["EnvironmentVariables"]["YULU_SERVICE_OWNER"] == "com.yulu.app.capture"
+    assert read_plist(CAPTURE_INFO)["CFBundleIdentifier"] == "com.yulu.audiodaemon"
 
 
 def test_clean_app_output_copies_embedded_smappservice_agents_before_signing():
@@ -1077,7 +1160,7 @@ def test_host_smappservice_mode_executes_the_bundled_host_on_the_declared_port(t
         "arguments": ["/Applications/Yulu.app/Contents/Resources/Host/server.js"],
         "executable": "/Applications/Yulu.app/Contents/Resources/runtime/bin/node",
         "port": 7777,
-        "serviceOwner": "com.yulu.ui",
+        "serviceOwner": "com.yulu.app.host",
     }
 
     source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
@@ -1125,7 +1208,7 @@ def test_host_smappservice_mode_executes_the_bundled_host_on_the_declared_port(t
     ):
         assert name not in executed_environment
     assert executed_environment["YULU_UI_PORT"] == "7777"
-    assert executed_environment["YULU_SERVICE_OWNER"] == "com.yulu.ui"
+    assert executed_environment["YULU_SERVICE_OWNER"] == "com.yulu.app.host"
 
 
 def test_capture_smappservice_reports_its_owner_and_capability_readiness():
@@ -1138,7 +1221,7 @@ def test_capture_smappservice_reports_its_owner_and_capability_readiness():
         / "com.yulu.audiodaemon.plist"
     )
     assert launch_agent["EnvironmentVariables"] == {
-        "YULU_SERVICE_OWNER": "com.yulu.audiodaemon",
+        "YULU_SERVICE_OWNER": "com.yulu.app.capture",
     }
 
     capture = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
@@ -1197,7 +1280,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
 
     assert inspect("host", {
         "status": "ok",
-        "serviceOwner": "com.yulu.ui",
+        "serviceOwner": "com.yulu.app.host",
         "pid": 2468,
         "instanceLockToken": "host-lock-generation",
         "instanceNonce": "host-instance-nonce",
@@ -1216,7 +1299,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
         "running": True,
     }
     assert inspect("capture", {
-        "serviceOwner": "com.yulu.audiodaemon",
+        "serviceOwner": "com.yulu.app.capture",
         "pid": 1357,
         "micReady": True,
         "sysReady": False,
@@ -1254,7 +1337,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
     }
     assert inspect("host", {
         "status": "ok",
-        "serviceOwner": "com.yulu.ui",
+        "serviceOwner": "com.yulu.app.host",
         "pid": 2468,
         "instanceLockToken": "public-forgery",
     }, {
@@ -1412,7 +1495,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
             return json.loads(result.stdout)
 
         assert inspect_capture({
-            "serviceOwner": "com.yulu.audiodaemon",
+            "serviceOwner": "com.yulu.app.capture",
             "pid": os.getpid(),
             "micReady": True,
             "sysReady": True,
@@ -1422,7 +1505,7 @@ def test_runtime_evidence_requires_the_expected_owner_and_keeps_capability_separ
             "running": True,
         }
         assert inspect_capture({
-            "serviceOwner": "com.yulu.audiodaemon",
+            "serviceOwner": "com.yulu.app.capture",
             "pid": os.getpid() + 1,
             "micReady": True,
             "sysReady": True,
@@ -1447,7 +1530,7 @@ connection, _ = server.accept()
 with connection:
     connection.recv(4096)
     connection.sendall(json.dumps({
-        'serviceOwner': 'com.yulu.audiodaemon',
+        'serviceOwner': 'com.yulu.app.capture',
         'pid': os.getpid(),
         'micReady': True,
         'sysReady': True,
@@ -1494,7 +1577,7 @@ server.close()
     finally:
         shutil.rmtree(socket_root)
     assert inspect("capture", {
-        "serviceOwner": "com.yulu.audiodaemon",
+        "serviceOwner": "com.yulu.app.capture",
         "pid": 1357,
         "micReady": True,
         "sysReady": True,
@@ -1507,7 +1590,7 @@ server.close()
     })["running"] is False
 
     assert inspect("capture", {
-        "serviceOwner": "com.yulu.audiodaemon",
+        "serviceOwner": "com.yulu.app.capture",
         "pid": 1357,
         "micReady": True,
         "sysReady": True,
@@ -1695,7 +1778,7 @@ def test_production_application_routes_smappservice_through_the_migration_coordi
     assert "generation == pollGeneration" in polling
 
 
-def test_registration_decision_registers_missing_or_not_registered_installed_services(
+def test_registration_decision_does_not_skip_enabled_legacy_status_after_quiescence(
     tmp_path: Path,
 ):
     binary = tmp_path / "yulu_app"
@@ -1739,15 +1822,22 @@ def test_registration_decision_registers_missing_or_not_registered_installed_ser
         "register": True,
         "unregister": False,
     }
-    for status in ("enabled", "requiresApproval"):
-        assert inspect("/Applications/Yulu.app", status) == {
-            "register": False,
-            "unregister": False,
-        }
+    assert inspect("/Applications/Yulu.app", "enabled") == {
+        "register": True,
+        "unregister": False,
+    }
+    assert inspect("/Applications/Yulu.app", "requiresApproval") == {
+        "register": False,
+        "unregister": False,
+    }
     assert inspect("/Users/test/Downloads/Yulu.app", "notRegistered") == {
         "register": False,
         "unregister": False,
     }
+    source = (SCRIPTS / "yulu_app.swift").read_text()
+    registry = source.split("final class BackgroundServiceRegistry", 1)[1].split("struct BundleLayout", 1)[0]
+    registration = registry.split("func register(_ descriptor:", 1)[1].split("func unregister", 1)[0]
+    assert "ServiceRegistrationDecision.make(" in registration
 
 
 def test_fresh_install_registration_requires_runtime_health_and_has_a_retryable_blocker(
@@ -1815,8 +1905,10 @@ def test_fresh_install_registration_requires_runtime_health_and_has_a_retryable_
         return json.loads(result.stdout)
 
     assert inspect_health(True, True, False) == "committed"
+    assert inspect_health(True, True, True) == "committed"
     assert inspect_health(True, False, False) == "pending"
     assert inspect_health(True, False, True) == "blocked"
+    assert inspect_health(False, True, True) == "blocked"
 
     def inspect_recovery(
         phase_active: bool,
@@ -1897,8 +1989,8 @@ def test_native_background_services_view_reports_both_owner_states(tmp_path: Pat
     assert result.returncode == 0, result.stderr
     presentation = json.loads(result.stdout)
     assert [service["label"] for service in presentation["services"]] == [
-        "Host — com.yulu.ui",
-        "Capture — com.yulu.audiodaemon",
+        "Host — com.yulu.app.host",
+        "Capture — com.yulu.app.capture",
     ]
     assert presentation["services"][0]["state"]["rows"] == [
         {"label": "Registration", "value": "Registered"},

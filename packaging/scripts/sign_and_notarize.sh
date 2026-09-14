@@ -6,16 +6,27 @@
 set -euo pipefail
 
 UPDATE_RELEASE_MODE=0
+VALIDATION_ONLY=0
 if [[ $# -gt 1 ]]; then
-  echo "usage: sign_and_notarize.sh [--update-release]" >&2
+  echo "usage: sign_and_notarize.sh [--update-release|--validation]" >&2
   exit 64
 fi
 if [[ $# -eq 1 ]]; then
-  [[ "$1" == "--update-release" ]] || {
-    echo "usage: sign_and_notarize.sh [--update-release]" >&2
+  [[ "$1" == "--update-release" || "$1" == "--validation" ]] || {
+    echo "usage: sign_and_notarize.sh [--update-release|--validation]" >&2
     exit 64
   }
-  UPDATE_RELEASE_MODE=1
+  if [[ "$1" == "--update-release" ]]; then
+    UPDATE_RELEASE_MODE=1
+  else
+    VALIDATION_ONLY=1
+    [[ "${GITHUB_ACTIONS:-}" == "true" && "${YULU_RELEASE_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-dev\.ci\.[1-9][0-9]*$ ]] || {
+      echo "Validation signing requires CI and an explicit dev.ci build identity" >&2
+      exit 64
+    }
+    # Validation Apps cannot check for or publish updates.
+    unset YULU_SPARKLE_FEED_URL YULU_SPARKLE_PUBLIC_ED_KEY YULU_SPARKLE_PRIVATE_ED_KEY
+  fi
 fi
 
 require_env() {
@@ -124,13 +135,15 @@ security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user
 # This remains a separate, integrity-checked Optional Runtime Pack. It is not an
 # installation alternative and is deliberately absent from the DMG.
 mkdir -p "$REPO_DIR/dist"
-python3 "$REPO_DIR/packaging/scripts/build_local_caption_runtime_pack.py" \
-  --identity "$YULU_CODESIGN_IDENTITY" \
-  --output "$LOCAL_CAPTION_PACK"
-[[ -s "$LOCAL_CAPTION_PACK" ]] || {
-  echo "::error::sign_and_notarize.sh: local caption Runtime Pack was not built" >&2
-  exit 1
-}
+if [[ "$VALIDATION_ONLY" == "0" ]]; then
+  python3 "$REPO_DIR/packaging/scripts/build_local_caption_runtime_pack.py" \
+    --identity "$YULU_CODESIGN_IDENTITY" \
+    --output "$LOCAL_CAPTION_PACK"
+  [[ -s "$LOCAL_CAPTION_PACK" ]] || {
+    echo "::error::sign_and_notarize.sh: local caption Runtime Pack was not built" >&2
+    exit 1
+  }
+fi
 
 # build_audio_daemon.sh owns bottom-up hardened-runtime signing for every nested
 # executable, native addon, Sparkle component, Capture helper, and outer App.
@@ -166,6 +179,18 @@ notarize_app() {
 }
 
 notarize_app "$YULU_APP"
+
+if [[ "$VALIDATION_ONLY" == "1" ]]; then
+  # Only an immutable whole App is handed off. No DMG, Release or appcast is
+  # created, and the local machine's login keychain is never involved.
+  ditto -c -k --keepParent "$YULU_APP" "$REPO_DIR/dist/yulu-validation-app.zip"
+  (
+    cd "$REPO_DIR/dist"
+    shasum -a 256 yulu-validation-app.zip > validation-checksums.txt
+  )
+  echo "Signed, notarized validation App ready; nothing was published."
+  exit 0
+fi
 
 # Package only the already immutable/stapled App. No build or signing step may
 # mutate Yulu.app after this point.

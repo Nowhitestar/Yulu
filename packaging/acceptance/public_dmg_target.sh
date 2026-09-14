@@ -412,6 +412,7 @@ if [[ "$SCENARIO" == "fresh" && "$POST_INSTALL_RESUME" -eq 0 ]]; then
         [[ ! -e "$marker" ]] || fail "existing Yulu data or service state found on fresh target"
     done
     for label in \
+        com.yulu.app.host com.yulu.app.capture \
         com.yulu.ui com.yulu.audiodaemon com.yulu.agentqueue com.yulu.calendar \
         com.yulu.detector com.yulu.scheduler com.yulu.statusagent com.yulu.sttdaemon; do
         if "$LAUNCHCTL" print "gui/${UID:-0}/$label" >/dev/null 2>&1; then
@@ -468,6 +469,7 @@ assert_no_service_mutation() {
         [[ ! -e "$marker" ]] || fail "mounted launch caused persistent LaunchAgent service mutation"
     done
     for label in \
+        com.yulu.app.host com.yulu.app.capture \
         com.yulu.ui com.yulu.audiodaemon com.yulu.agentqueue com.yulu.calendar \
         com.yulu.detector com.yulu.scheduler com.yulu.statusagent com.yulu.sttdaemon; do
         if "$LAUNCHCTL" print "gui/${UID:-0}/$label" >/dev/null 2>&1; then

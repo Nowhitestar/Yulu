@@ -155,7 +155,7 @@ def validate_service_projection(value: dict[str, Any]) -> None:
     require(value.get("schema") == 1 and value.get("formalAcceptance") is False, "journey evidence is incomplete")
     require(value.get("releaseTag") == TAG, "journey release tag is wrong")
     health = require_record(value.get("health"), "journey health")
-    require(health.get("status") == "ok" and health.get("serviceOwner") == "com.yulu.ui" and health.get("databaseStatus") == "ok", "Host health is incomplete")
+    require(health.get("status") == "ok" and health.get("serviceOwner") == "com.yulu.app.host" and health.get("databaseStatus") == "ok", "Host health is incomplete")
     database = require_record(health.get("database"), "journey database health")
     require(isinstance(database.get("schemaVersion"), int) and isinstance(database.get("minimumReadableVersion"), int), "database schema evidence is missing")
     require(value.get("version", {}).get("product") == TAG.removeprefix("v"), "product version is wrong")
@@ -418,13 +418,17 @@ def validate_migration_baseline(value: Any) -> dict[str, Any]:
     return baseline
 
 
-def validate_upgrade_databases(value: Any) -> dict[str, Any]:
+def validate_upgrade_databases(value: Any, *, prepared: bool = False) -> dict[str, Any]:
     databases = require_exact_keys(value, {"prompts", "vocab", "search", "host"}, "upgrade database projection")
     for name, item_value in databases.items():
-        item = require_exact_keys(item_value, {"quickCheck", "schemaSha256", "sentinelSha256"}, f"upgrade {name} database")
+        keys = {"quickCheck", "schemaSha256", "sentinelSha256"} | ({"preparedSchemaSha256"} if prepared else set())
+        item = require_exact_keys(item_value, keys, f"upgrade {name} database")
         require(item.get("quickCheck") == "ok", f"upgrade {name} quick_check is not ok")
         require_sha(item.get("schemaSha256"), f"upgrade {name} schema")
         require_sha(item.get("sentinelSha256"), f"upgrade {name} representative row")
+        if prepared:
+            require_sha(item.get("preparedSchemaSha256"), f"upgrade {name} prepared schema")
+            require(item["schemaSha256"] == item["preparedSchemaSha256"], f"upgrade {name} prepared schema does not match")
     return databases
 
 
@@ -462,8 +466,12 @@ def validate_upgrade_observation(value: dict[str, Any], checkpoint: str, state: 
     require(media == baseline["media"], f"upgrade {checkpoint} Media drifted from migration baseline")
     attestation = require_exact_keys(value.get("operatorAttestation"), {"smappserviceNotRegistered", "externalDestinationNoRunMarker"}, f"upgrade {checkpoint} operator attestation")
     if completed:
-        databases = validate_upgrade_databases(value.get("databases"))
-        require(databases == baseline["databases"]["items"], f"upgrade {checkpoint} database projections drifted from migration baseline")
+        databases = validate_upgrade_databases(value.get("databases"), prepared=completed and not rolled_back)
+        for name, item in databases.items():
+            original = baseline["databases"]["items"][name]
+            require(item["sentinelSha256"] == original["sentinelSha256"], f"upgrade {checkpoint} representative row drifted from migration baseline")
+            if rolled_back:
+                require(item == original, f"upgrade {checkpoint} rollback database projections drifted from migration baseline")
         owners = require_record(value.get("owners"), f"upgrade {checkpoint} owners")
         require_sha(owners.get("hostPidSha256"), f"upgrade {checkpoint} Host owner")
         require_sha(owners.get("capturePidSha256"), f"upgrade {checkpoint} Capture owner")

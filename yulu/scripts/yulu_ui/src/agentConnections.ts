@@ -90,6 +90,7 @@ interface XaiTextBoundary {
 }
 
 export interface DiscoveredAgentRuntime {
+  candidateId?: string;
   adapter: "codex" | "claude-code" | "hermes" | "openclaw";
   label: string;
   path: string;
@@ -366,6 +367,13 @@ export class AgentConnectionCenter {
     this.credentials.setPreferredSource?.(this.credentialSource(direct?.settings.credentialSource));
   }
 
+  selectedXaiCredentialSource(): XaiCredentialSource | null {
+    const direct = this.host.listAgentConnectionRecords().find((record) =>
+      record.id === DIRECT_XAI_ID && record.kind === "direct-provider" && record.adapter === "direct-xai"
+    );
+    return this.credentialSource(direct?.settings.credentialSource);
+  }
+
   async view() {
     this.ensureMigrated();
     const config = this.config.read();
@@ -403,6 +411,8 @@ export class AgentConnectionCenter {
         features: ["transcription", "summary", "conversation", "no-provider-fallback"] as const,
         oauthConnected: status.oauthConnected,
         apiKeyConfigured: status.apiKeyConfigured,
+        oauthReadSucceeded: status.oauthReadSucceeded,
+        apiKeyReadSucceeded: status.apiKeyReadSucceeded,
         status: status.authorization.status,
         verificationUrl: status.authorization.verificationUrl,
         userCode: status.authorization.userCode,
@@ -785,11 +795,13 @@ export class AgentConnectionCenter {
       ...claudeConnections,
       ...conversationOnlyConnections,
     ];
-    const connectedAdapters = new Set(records
-      .filter((record) => record.kind === "supported-agent")
-      .map((record) => record.adapter));
     const candidates = this.host.listAgentConnectionCandidates()
-      .filter((candidate) => !connectedAdapters.has(candidate.adapter))
+      .filter((candidate) => {
+        const connected = records.filter(record => record.kind === "supported-agent" && record.adapter === candidate.adapter);
+        return connected.length === 0 || Boolean(candidate.detectedPath && connected.every(
+          record => record.settings.executablePath !== candidate.detectedPath,
+        ));
+      })
       .map((candidate) => ({
       id: candidate.id,
       kind: "supported-agent" as const,
@@ -976,6 +988,8 @@ export class AgentConnectionCenter {
           source: null,
           oauthConnected: false,
           apiKeyConfigured: false,
+          oauthReadSucceeded: undefined,
+          apiKeyReadSucceeded: undefined,
           detail: "Add direct xAI in Agent Connection Center",
           authorization: {
             status: "idle" as const,
@@ -998,7 +1012,14 @@ export class AgentConnectionCenter {
         source: direct.authorization.credentialSource,
         oauthConnected: direct.authorization.oauthConnected,
         apiKeyConfigured: direct.authorization.apiKeyConfigured,
-        detail: direct.authorization.connected ? "xAI connection is available" : "Connect xAI in Agent Connection Center",
+        oauthReadSucceeded: direct.authorization.oauthReadSucceeded,
+        apiKeyReadSucceeded: direct.authorization.apiKeyReadSucceeded,
+        detail: direct.authorization.connected ? "xAI connection is available"
+          : (direct.authorization.credentialSource === "api-key"
+            ? direct.authorization.apiKeyReadSucceeded === false
+            : direct.authorization.oauthReadSucceeded === false)
+            ? "The saved xAI credential is temporarily unreadable; keep it and check again"
+            : "Connect xAI in Agent Connection Center",
         authorization: {
           status: direct.authorization.status,
           verificationUrl: direct.authorization.verificationUrl,
@@ -1549,7 +1570,7 @@ export class AgentConnectionCenter {
     this.ensureMigrated();
     for (const runtime of this.options.discover()) {
       this.host.upsertAgentConnectionCandidate({
-        id: `candidate:${runtime.adapter}`,
+        id: runtime.candidateId ?? `candidate:${runtime.adapter}`,
         adapter: runtime.adapter,
         label: runtime.label,
         source: "discovered",

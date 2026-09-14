@@ -914,6 +914,22 @@ export const recordingsRouter = router({
       });
     }),
 
+  reconcileRecordingShare: uiMutationProcedure
+    .input(z.object({
+      actionId: z.string().uuid(),
+      confirmed: z.literal(true),
+      receiptId: z.string().trim().max(500).default(""),
+      receiptUrl: z.string().trim().max(2000).default(""),
+    }).strict())
+    .mutation(({ ctx, input }) => {
+      if (!ctx.sharing) throw new Error("Sharing configuration is unavailable");
+      return ctx.sharing.reconcileRecordingUnknown({
+        actionId: input.actionId,
+        receiptId: input.receiptId,
+        receiptUrl: input.receiptUrl,
+      });
+    }),
+
   abandonRecordingShare: uiMutationProcedure
     .input(z.object({ actionId: z.string().uuid(), confirmed: z.literal(true) }).strict())
     .mutation(({ ctx, input }) => {

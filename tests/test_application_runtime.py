@@ -101,14 +101,21 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     (sparkle / "Sparkle").symlink_to("Versions/Current/Sparkle")
     write(contents / "Resources/Sparkle-LICENSE.txt", b"sparkle license\n")
     launch_agents = contents / "Library/LaunchAgents"
-    for label, bundle_program, arguments in (
+    for stem, label in (("RetiredHost", "com.yulu.ui"), ("RetiredCapture", "com.yulu.audiodaemon")):
+        write(launch_agents / f"{stem}.plist", plistlib.dumps({
+            "Label": label, "BundleProgram": "Contents/MacOS/yulu_app",
+            "ProgramArguments": ["yulu_app", "--retired-bundled-service"], "RunAtLoad": False,
+        }))
+    for plist_stem, label, bundle_program, arguments in (
         (
             "com.yulu.ui",
+            "com.yulu.app.host",
             "Contents/MacOS/yulu_app",
             ["yulu_app", "--run-host-service"],
         ),
         (
             "com.yulu.audiodaemon",
+            "com.yulu.app.capture",
             "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon",
             ["audio_daemon"],
         ),
@@ -120,12 +127,12 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
             "RunAtLoad": True,
             "KeepAlive": True,
         }
-        if label == "com.yulu.audiodaemon":
+        if label == "com.yulu.app.capture":
             payload["EnvironmentVariables"] = {
-                "YULU_SERVICE_OWNER": "com.yulu.audiodaemon"
+                "YULU_SERVICE_OWNER": "com.yulu.app.capture"
             }
         write(
-            launch_agents / f"{label}.plist",
+            launch_agents / f"{plist_stem}.plist",
             plistlib.dumps(payload),
         )
 

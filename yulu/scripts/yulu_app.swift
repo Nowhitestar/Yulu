@@ -51,11 +51,17 @@ struct LaunchPolicy: Encodable {
 
 struct BackgroundServiceDescriptor {
     let plistName: String
+    let label: String
 
-    static let bundledOwners = [
-        BackgroundServiceDescriptor(plistName: "com.yulu.ui.plist"),
-        BackgroundServiceDescriptor(plistName: "com.yulu.audiodaemon.plist"),
-    ]
+    // Keep transaction/update plist names stable, but never reuse a legacy
+    // LaunchAgent's BTM identity. The Capture signing/TCC identity is separate.
+    static let host = BackgroundServiceDescriptor(
+        plistName: "com.yulu.ui.plist", label: "com.yulu.app.host"
+    )
+    static let capture = BackgroundServiceDescriptor(
+        plistName: "com.yulu.audiodaemon.plist", label: "com.yulu.app.capture"
+    )
+    static let bundledOwners = [host, capture]
 }
 
 struct ProductionStartupPlan: Encodable {
@@ -120,7 +126,7 @@ struct ServiceRegistrationDecision: Encodable {
         }
         return ServiceRegistrationDecision(
             register: policy.persistentRegistrationAllowed
-                && (status == "notRegistered" || status == "notFound")
+                && status != "requiresApproval"
         )
     }
 }
@@ -346,11 +352,11 @@ struct BundledServicesPresentation: Encodable {
     static func make(host: BackgroundServiceState, capture: BackgroundServiceState) -> BundledServicesPresentation {
         BundledServicesPresentation(services: [
             OwnerServicePresentation(
-                label: "Host — com.yulu.ui",
+                label: "Host — \(BackgroundServiceDescriptor.host.label)",
                 state: BackgroundServicePresentation.make(state: host)
             ),
             OwnerServicePresentation(
-                label: "Capture — com.yulu.audiodaemon",
+                label: "Capture — \(BackgroundServiceDescriptor.capture.label)",
                 state: BackgroundServicePresentation.make(state: capture)
             ),
         ])
@@ -574,8 +580,8 @@ struct RuntimeOwnerEvidence: Encodable {
     ) -> RuntimeOwnerEvidence? {
         let expectedOwner: String
         switch kind {
-        case "host": expectedOwner = "com.yulu.ui"
-        case "capture": expectedOwner = "com.yulu.audiodaemon"
+        case "host": expectedOwner = BackgroundServiceDescriptor.host.label
+        case "capture": expectedOwner = BackgroundServiceDescriptor.capture.label
         default: return nil
         }
         guard payload["serviceOwner"] as? String == expectedOwner,
@@ -725,7 +731,13 @@ final class BackgroundServiceRegistry: PersistentServiceMutating {
 
     func register(_ descriptor: BackgroundServiceDescriptor) {
         let service = SMAppService.agent(plistName: descriptor.plistName)
-        guard service.status == .notRegistered || service.status == .notFound else { return }
+        // A quiesced legacy LaunchAgent can still report enabled. A bound
+        // migration/update registration must actually submit the bundled job;
+        // status alone cannot establish which executable owns that label.
+        guard ServiceRegistrationDecision.make(
+            policy: LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path),
+            status: appServiceStatusName(service.status)
+        )?.register == true else { return }
         do {
             try service.register()
             registrationErrors.removeValue(forKey: descriptor.plistName)
@@ -1232,7 +1244,7 @@ func bundledProcessEnvironment(layout: BundleLayout, applicationPaths: Applicati
 
 struct HostServiceExecution: Encodable {
     static let declaredPort = 7777
-    static let owner = "com.yulu.ui"
+    static let owner = BackgroundServiceDescriptor.host.label
 
     let executableURL: URL
     let arguments: [String]
@@ -1492,6 +1504,20 @@ final class BoundedRedactedStderrDrain {
     }
 }
 
+struct MigrationResumeGate {
+    private var pendingAction: String?
+
+    mutating func observe(action: String) {
+        pendingAction = action
+    }
+
+    mutating func consumeResume() -> Bool {
+        guard pendingAction == "await_approval" else { return false }
+        pendingAction = nil
+        return true
+    }
+}
+
 final class ApplicationMigrationCoordinator {
     private enum FreshInstallPhase {
         case inactive
@@ -1512,6 +1538,7 @@ final class ApplicationMigrationCoordinator {
     private var migrationInput: FileHandle?
     private var migrationOutputBuffer = Data()
     private var migrationTerminalSeen = false
+    private var resumeGate = MigrationResumeGate()
     private var currentBinding: (transactionId: String, nonce: String)?
     private var pendingHealth: (transactionId: String, nonce: String)?
     private var retryAvailable = false
@@ -1546,6 +1573,9 @@ final class ApplicationMigrationCoordinator {
             return
         }
         guard let binding = currentBinding else { return }
+        // App activation is not crash recovery. Only an outstanding approval
+        // request needs a resume, and one request gets at most one response.
+        if event == "resume" && !resumeGate.consumeResume() { return }
         var envelope: [String: Any] = [
             "transactionId": binding.transactionId,
             "nonce": binding.nonce,
@@ -1599,6 +1629,7 @@ final class ApplicationMigrationCoordinator {
               ) else { return }
         retryAfterProcessExit = false
         migrationTerminalSeen = false
+        resumeGate = MigrationResumeGate()
         migrationOutputBuffer.removeAll(keepingCapacity: true)
         currentBinding = nil
         let input = Pipe()
@@ -1722,7 +1753,9 @@ final class ApplicationMigrationCoordinator {
     }
 
     func submitHealth(host: RuntimeOwnerEvidence, capture: RuntimeOwnerEvidence) {
-        if freshInstallPhase == .awaitingHealth {
+        // A diagnostic deadline is not proof that a registered service failed.
+        // Accept a later identity-verified pair without resetting either owner.
+        if freshInstallPhase == .awaitingHealth || freshInstallPhase == .healthBlocked {
             freshInstallHostReady = runtimeOwnerIsReady(host)
             freshInstallCaptureReady = runtimeOwnerIsReady(capture)
             if FreshInstallHealthDisposition.evaluate(
@@ -1731,6 +1764,7 @@ final class ApplicationMigrationCoordinator {
                 timedOut: false
             ) == .committed {
                 freshInstallPhase = .inactive
+                retryAvailable = false
                 freshInstallNeedsServiceReset = false
                 onStateChange?("committed", nil)
             }
@@ -1783,6 +1817,7 @@ final class ApplicationMigrationCoordinator {
     }
 
     private func handle(_ action: ApplicationMigrationAction) {
+        resumeGate.observe(action: action.action)
         switch action.action {
         case "register_services", "unregister_services":
             guard let transactionId = action.transactionId,
@@ -1822,7 +1857,10 @@ final class ApplicationMigrationCoordinator {
             if let raw = action.deadlineAt,
                let deadline = ISO8601DateFormatter().date(from: raw) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSinceNow)) { [weak self] in
-                    self?.advance(event: "resume")
+                    guard let self,
+                          self.currentBinding?.transactionId == action.transactionId,
+                          self.currentBinding?.nonce == action.nonce else { return }
+                    self.advance(event: "resume")
                 }
             }
         case "verify_health":
@@ -1834,18 +1872,21 @@ final class ApplicationMigrationCoordinator {
             pendingHealth = (transactionId, nonce)
             onStateChange?("verifying", nil)
             onNeedsHealth?()
-        case "fresh_install":
+        case "fresh_install", "committed":
             migrationTerminalSeen = true
             retryAvailable = false
+            pendingHealth = nil
             freshInstallPhase = .registering
             onStateChange?("registering", nil)
             services.registerBundledOwners(policy: policy)
             observeFreshInstallRegistration(attempt: 0)
-        case "committed":
+        case "recording_active":
             migrationTerminalSeen = true
             retryAvailable = false
-            pendingHealth = nil
-            onStateChange?("committed", nil)
+            onStateChange?("recording_active", nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.advance()
+            }
         case "rolled_back":
             migrationTerminalSeen = true
             retryAvailable = true
@@ -2087,7 +2128,7 @@ func applicationUpdateHealthPayload(
             "productVersion": hostProductVersion,
             "bundleVersion": hostBundleVersion,
             "hostIPCVersion": hostIPCVersion,
-            "serviceOwner": "com.yulu.ui",
+            "serviceOwner": BackgroundServiceDescriptor.host.label,
             "pid": hostPID,
             "uid": hostUID,
             "generation": hostGeneration,
@@ -2109,7 +2150,7 @@ func applicationUpdateHealthPayload(
             "productVersion": captureProductVersion,
             "bundleVersion": captureBundleVersion,
             "captureIPCVersion": captureIPCVersion,
-            "serviceOwner": "com.yulu.audiodaemon",
+            "serviceOwner": BackgroundServiceDescriptor.capture.label,
             "pid": capturePID,
             "uid": captureUID,
             "generation": captureGeneration,
@@ -2649,6 +2690,30 @@ if CommandLine.arguments.count == 7,
 }
 #endif
 
+// Compatibility descriptors are unregister-only; they can never run an owner.
+if CommandLine.arguments.count == 2,
+   CommandLine.arguments[1] == "--retired-bundled-service" { exit(78) }
+
+if CommandLine.arguments.count == 3,
+   CommandLine.arguments[1] == "--retire-bundled-service" {
+    let policy = LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path)
+    let name = CommandLine.arguments[2]
+    guard policy.persistentRegistrationAllowed,
+          ["RetiredHost.plist", "RetiredCapture.plist", "com.yulu.ui.plist", "com.yulu.audiodaemon.plist"].contains(name) else { exit(78) }
+    let service = SMAppService.agent(plistName: name)
+    if service.status != .notRegistered && service.status != .notFound {
+        do { try service.unregister() } catch { exit(75) }
+    }
+    for _ in 0..<40 {
+        if service.status == .notRegistered || service.status == .notFound {
+            try writeJSON(["removed": true])
+            exit(0)
+        }
+        Thread.sleep(forTimeInterval: 0.25)
+    }
+    exit(75)
+}
+
 if CommandLine.arguments.count == 3,
    CommandLine.arguments[1] == "--apply-migration-service-action" {
     let policy = LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path)
@@ -2681,6 +2746,20 @@ if CommandLine.arguments.count == 3,
 
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-launch" {
     try writeJSON(LaunchPolicy.evaluate(bundlePath: CommandLine.arguments[2]))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 3,
+   CommandLine.arguments[1] == "--inspect-migration-resume-gate" {
+    guard let data = CommandLine.arguments[2].data(using: .utf8),
+          let events = try? JSONDecoder().decode([String].self, from: data) else { exit(64) }
+    var gate = MigrationResumeGate()
+    var results: [Bool] = []
+    for event in events {
+        if event == "resume" { results.append(gate.consumeResume()) }
+        else { gate.observe(action: event) }
+    }
+    try writeJSON(results)
     exit(0)
 }
 
@@ -3946,8 +4025,10 @@ final class SparkleUpdateAdapter: NSObject, SPUUpdaterDelegate {
 }
 #endif
 
-final class ApplicationWebContent: NSObject, WKUIDelegate {
+final class ApplicationWebContent: NSObject, WKUIDelegate, WKNavigationDelegate {
     let webView: WKWebView
+    private let container = NSView()
+    private let statusLabel = NSTextField(wrappingLabelWithString: "Opening Yulu…")
     private let port: Int
     private let openExternalURL: (URL) -> Bool
 
@@ -3960,8 +4041,76 @@ final class ApplicationWebContent: NSObject, WKUIDelegate {
         self.port = port
         self.openExternalURL = openExternalURL
         super.init()
-        webView.autoresizingMask = [.width, .height]
+        container.autoresizingMask = [.width, .height]
+        statusLabel.alignment = .center
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        webView.isHidden = true
+        container.addSubview(statusLabel)
+        container.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            statusLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            statusLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 32),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -32),
+        ])
         webView.uiDelegate = self
+        webView.navigationDelegate = self
+    }
+
+    func attach(to window: NSWindow) {
+        // Give WebKit a laid-out host before loading. Replacing the window's root
+        // directly with a zero-frame WKWebView could leave its first paint blank
+        // until a user resized the window, even though its document had loaded.
+        container.frame = NSRect(origin: .zero, size: window.contentLayoutRect.size)
+        if window.contentView !== container { window.contentView = container }
+        container.needsLayout = true
+        container.layoutSubtreeIfNeeded()
+    }
+
+    func load(_ url: URL, in window: NSWindow) {
+        attach(to: window)
+        statusLabel.stringValue = "Opening Yulu…"
+        statusLabel.isHidden = false
+        webView.isHidden = true
+        webView.load(URLRequest(url: url))
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView === self.webView else { return }
+        // A visibility/layout transition starts the initial compositing pass
+        // without requiring a window resize or changing any user preferences.
+        statusLabel.isHidden = true
+        webView.isHidden = false
+        container.needsLayout = true
+        container.layoutSubtreeIfNeeded()
+        webView.needsDisplay = true
+    }
+
+    private func showLoadFailure(_ detail: String) {
+        webView.isHidden = true
+        statusLabel.stringValue = "Yulu could not display its page. \(detail) Choose Navigate > Open Yulu to retry."
+        statusLabel.isHidden = false
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard webView === self.webView, (error as NSError).code != NSURLErrorCancelled else { return }
+        showLoadFailure("Navigation error \((error as NSError).code).")
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard webView === self.webView, (error as NSError).code != NSURLErrorCancelled else { return }
+        showLoadFailure("Navigation error \((error as NSError).code).")
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard webView === self.webView else { return }
+        showLoadFailure("The web content process stopped.")
     }
 
     func webView(
@@ -4003,7 +4152,12 @@ func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
         contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
         styleMask: [.titled], backing: .buffered, defer: false
     )
-    window.contentView = content.webView
+    content.attach(to: window)
+    guard content.webView.frame.size == window.contentLayoutRect.size,
+          content.webView.frame.width > 0, content.webView.frame.height > 0 else {
+        throw NSError(domain: "WebNavigationSmoke", code: 5,
+                      userInfo: [NSLocalizedDescriptionKey: "initial WebView viewport was not laid out"])
+    }
     let origin = URL(string: "http://127.0.0.1:17891/")!
     content.webView.loadHTMLString("<html><body>Yulu web navigation fixture</body></html>", baseURL: origin)
     let loadDeadline = Date().addingTimeInterval(10)
@@ -4013,6 +4167,19 @@ func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
     guard !content.webView.isLoading else {
         throw NSError(domain: "WebNavigationSmoke", code: 1,
                       userInfo: [NSLocalizedDescriptionKey: "local WebView fixture did not load"])
+    }
+    guard !content.webView.isHidden else {
+        throw NSError(domain: "WebNavigationSmoke", code: 6,
+                      userInfo: [NSLocalizedDescriptionKey: "completed page did not become visible without resizing"])
+    }
+    // A native service/status view must not permanently detach a reused WebView.
+    window.contentView = NSView()
+    content.attach(to: window)
+    guard content.webView.window === window,
+          content.webView.frame.size == window.contentLayoutRect.size,
+          !content.webView.isHidden else {
+        throw NSError(domain: "WebNavigationSmoke", code: 7,
+                      userInfo: [NSLocalizedDescriptionKey: "reused WebView did not reattach"])
     }
     let authorizationURL = "https://accounts.x.ai/oauth2/device?user_code=YULU-TEST"
     let manualURL = "https://accounts.x.ai/oauth2/device?user_code=MANUAL-TEST"
@@ -4293,6 +4460,21 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Quit Yulu", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
+        // Route standard editing shortcuts through the first responder (including
+        // WKWebView inputs). A custom menu bar otherwise omits paste/select-all.
+        let editItem = NSMenuItem()
+        root.addItem(editItem)
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+
         let navigateItem = NSMenuItem()
         root.addItem(navigateItem)
         let navigate = NSMenu(title: "Navigate")
@@ -4456,6 +4638,11 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
 
     private func migrationStateChanged(_ state: String, detail: String?) {
         switch state {
+        case "recording_active":
+            window?.contentView = centeredMessage(
+                "Waiting for the current recording…",
+                detail: "Yulu will finish updating its background services after recording stops."
+            )
         case "registering":
             migrationRetryAvailable = false
             cancelMigrationMenuItem?.isEnabled = true
@@ -4531,7 +4718,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             retryMigrationMenuItem?.isEnabled = true
             showMigrationRetry(
                 "Yulu components did not become ready",
-                detail: "\(detail ?? "The bundled services did not become ready.") Retry restarts both bundled services; Background Services shows their current status."
+                detail: "\(detail ?? "The bundled services did not become ready.") Yulu is still checking and will open when both services are ready. Retry restarts both bundled services; Background Services shows their current status."
             )
         case "blocked":
             migrationRetryAvailable = false
@@ -4751,6 +4938,12 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                         self.pollHost(generation: generation)
                     }
+                } else if !self.migrationCommitted {
+                    // Keep observing late startup at the normal healthy cadence.
+                    // This is read-only; no automatic service retry or migration.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        self.pollHost(generation: generation)
+                    }
                 } else if self.migrationCommitted {
                     self.window?.contentView = self.centeredMessage(
                         "Yulu Host is unavailable",
@@ -4785,18 +4978,16 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     }
 
     private func open(route: String) {
-        let web: WKWebView
-        if let webView {
-            web = webView
+        let content: ApplicationWebContent
+        if let webContent {
+            content = webContent
         } else {
-            let content = ApplicationWebContent(port: port)
+            content = ApplicationWebContent(port: port)
             webContent = content
-            web = content.webView
-            window?.contentView = web
         }
-        guard let url = URL(string: "http://127.0.0.1:\(port)\(route)") else { return }
-        web.load(URLRequest(url: url))
-        window?.makeKeyAndOrderFront(nil)
+        guard let window, let url = URL(string: "http://127.0.0.1:\(port)\(route)") else { return }
+        content.load(url, in: window)
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 }

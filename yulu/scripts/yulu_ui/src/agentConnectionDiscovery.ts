@@ -12,9 +12,10 @@ const RUNTIMES = [
 
 export function discoverAgentConnectionCandidates(
   env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): DiscoveredAgentRuntime[] {
   const path = envWithFallbackPath(env).PATH ?? "";
-  return RUNTIMES.flatMap((runtime) => {
+  const candidates: DiscoveredAgentRuntime[] = RUNTIMES.flatMap((runtime) => {
     for (const directory of path.split(delimiter)) {
       if (!directory) continue;
       const executable = join(directory, runtime.command);
@@ -27,4 +28,18 @@ export function discoverAgentConnectionCandidates(
     }
     return [];
   });
+  if (platform === "darwin") {
+    for (const app of ["Codex", "ChatGPT"]) {
+      const executable = `/Applications/${app}.app/Contents/Resources/codex`;
+      if (candidates.some(candidate => candidate.path === executable)) continue;
+      try {
+        accessSync(executable, constants.X_OK);
+        candidates.push({
+          candidateId: `candidate:codex:desktop:${app.toLowerCase()}`,
+          adapter: "codex", label: `Codex (${app} desktop)`, path: executable,
+        });
+      } catch { /* The desktop App is optional; do not launch it during discovery. */ }
+    }
+  }
+  return candidates;
 }

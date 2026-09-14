@@ -3,8 +3,8 @@ import { useT } from "../../i18n/LanguageProvider.js";
 
 /**
  * AboutSection — the General "About" block (P3-1). Read-only: shows Yulu's
- * PRODUCT version (the repo-root VERSION file, surfaced by system.yuluVersion —
- * not the yulu_ui package version) and, on a release install, the install
+ * PRODUCT version (the signed App identity, or VERSION in a legacy checkout,
+ * surfaced by system.yuluVersion — not the yulu_ui package version) and install
  * source. There is no edit affordance: the values render as plain text, never
  * an input/button/switch. The query never throws (degrades to version
  * "unknown" / installSource null), so this block always renders.

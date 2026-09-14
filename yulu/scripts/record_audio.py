@@ -100,18 +100,20 @@ def socket_send(cmd):
     if not SOCKET_PATH.exists():
         return None
     try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(15)
-        sock.connect(str(SOCKET_PATH))
-        sock.sendall(json.dumps(cmd).encode())
-        sock.shutdown(socket.SHUT_WR)
-        data = b""
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-        sock.close()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            # A cold start now waits for both native capture sources before
+            # acknowledging. Do not apply the short status deadline to that
+            # hardware startup and report failure while capture is starting.
+            sock.settimeout(45 if cmd.get("action") == "start" else 15)
+            sock.connect(str(SOCKET_PATH))
+            sock.sendall(json.dumps(cmd).encode())
+            sock.shutdown(socket.SHUT_WR)
+            data = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
         return json.loads(data.decode()) if data else None
     except Exception as e:
         log(f"Socket error: {e}")

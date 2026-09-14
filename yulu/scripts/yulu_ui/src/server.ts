@@ -144,6 +144,21 @@ export async function runServerCommand(
     legacyQueueAuditName?: string;
   } = {},
 ): Promise<RunningServer | null> {
+  if (arguments_.length === 1 && arguments_[0] === "--initialize-application-data") {
+    // The migration authority first verifies the exact legacy copy, then runs
+    // this bounded, offline leaf before it snapshots the schema for health.
+    // Do not start listeners, pipelines, Agent adapters or credential helpers.
+    const runtimePaths = resolveServerRuntimePaths(pathOverrides);
+    await prepareHostDurableData(runtimePaths, { initializeMissingDatabasesFrom: runtimePaths.scriptDir });
+    new ConfigManager(runtimePaths.configFile).read();
+    const store = new HostStore(runtimePaths.hostDb);
+    try {
+      store.runtimeDatabaseHealth();
+    } finally {
+      store.close();
+    }
+    return null;
+  }
   if (arguments_.length === 1 && arguments_[0] === "--prepare-application-data") {
     const runtimePaths = resolveServerRuntimePaths(pathOverrides);
     await prepareHostDurableData(runtimePaths);
@@ -354,10 +369,10 @@ async function startLockedServer(
     vocabDb: () => dbProxy.vocab,
     transcription: audioTranscription,
     xaiText,
-    xaiSummaryCredentialSource: () => {
-      const proof = xaiReadiness.get("summary");
-      return proof?.status === "ready" ? proof.credentialSource : null;
-    },
+    // Pin the user's durable selection, not a process-local test cache that is
+    // empty after every Host restart. Execution still checks the exact grant,
+    // disclosure and model; a disconnected source waits without fallback.
+    xaiSummaryCredentialSource: () => agentConnections.selectedXaiCredentialSource(),
     supportedAgentSummaryAdapter,
   });
   if (localCaption.status().installed && configManager.read().transcription.engine === "local") {

@@ -7,6 +7,7 @@ const reprocessMutate = vi.fn();
 const transcribeMutate = vi.fn();
 const summarizeMutate = vi.fn();
 const shareRecordingMutate = vi.fn();
+const reconcileRecordingShareMutate = vi.fn();
 const abandonRecordingShareMutate = vi.fn();
 const renameMutate = vi.fn();
 const setTagsMutate = vi.fn();
@@ -32,6 +33,7 @@ vi.mock("../../web/src/trpc.js", () => ({
       transcribe: { useMutation: () => ({ mutate: transcribeMutate, isPending: false }) },
       summarize: { useMutation: () => ({ mutate: summarizeMutate, isPending: false }) },
       shareRecording: { useMutation: () => ({ mutate: shareRecordingMutate, isPending: false }) },
+      reconcileRecordingShare: { useMutation: () => ({ mutate: reconcileRecordingShareMutate, isPending: false }) },
       abandonRecordingShare: { useMutation: () => ({ mutate: abandonRecordingShareMutate, isPending: false }) },
       rename: { useMutation: () => ({ mutate: renameMutate, isPending: false }) },
       setTags: { useMutation: () => ({ mutate: setTagsMutate, isPending: false }) },
@@ -99,6 +101,7 @@ beforeEach(() => {
   clipboardWriteText.mockClear();
   reprocessMutate.mockClear();
   transcribeMutate.mockClear(); summarizeMutate.mockClear(); shareRecordingMutate.mockClear(); abandonRecordingShareMutate.mockClear();
+  reconcileRecordingShareMutate.mockReset();
   promptListMock.mockReset();
   promptListMock.mockReturnValue({ data: [] });
   renameMutate.mockClear(); setTagsMutate.mockClear(); deleteMutate.mockClear();
@@ -265,12 +268,47 @@ describe("RecordingReader", () => {
     fireEvent.click(screen.getByRole("button", { name: /分享摘要/i }));
     expect(screen.getByText(/Do not retry/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /确认分享/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /核对已有回执/i })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /放弃结果未知的尝试/i }));
     expect(abandonRecordingShareMutate).toHaveBeenCalledWith(
       { actionId: "share-unknown", confirmed: true },
       expect.anything(),
     );
     expect(shareRecordingMutate).not.toHaveBeenCalled();
+  });
+
+  it("prefills and pins an unknown receipt for explicit read-only reconciliation, and keeps failures visible in the dialog", () => {
+    const receiptUrl = "https://notion.so/existing-page";
+    getMock.mockReturnValue({ data: {
+      ...baseData,
+      recordingShare: {
+        status: "unknown", detail: "Read-back timed out", remediation: "Do not retry.", duplicateWarningRequired: false,
+        latestAction: { id: "share-unknown", status: "unknown", receiptId: "existing-page", receiptUrl, detail: "Read-back timed out" },
+        snapshot: {
+          hash: "a".repeat(64), recordingStem: baseData.stem, summary: "s", summarySha256: "b".repeat(64),
+          connection: { id: "codex", adapter: "codex", label: "Codex", updatedAt: "2026-09-14" },
+          connector: "notion", destination: "Private QA",
+        },
+      },
+    }, isPending: false });
+    reconcileRecordingShareMutate.mockImplementationOnce((_input, options) => options.onError(new Error("Original content still does not match")));
+    renderAt(baseData.stem);
+    fireEvent.click(screen.getByRole("button", { name: /分享摘要/i }));
+    expect(screen.getByLabelText("回执 ID")).toHaveValue("existing-page");
+    expect(screen.getByLabelText("回执 ID")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("回执 URL")).toHaveValue(receiptUrl);
+    expect(screen.getByLabelText("回执 URL")).toHaveAttribute("readonly");
+    expect(reconcileRecordingShareMutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /核对已有回执（只读）/i }));
+    expect(reconcileRecordingShareMutate).toHaveBeenCalledExactlyOnceWith({
+      actionId: "share-unknown", receiptId: "existing-page", receiptUrl, confirmed: true,
+    }, expect.anything());
+    expect(screen.getByRole("dialog", { name: /确认分享摘要/ })).toHaveTextContent("Original content still does not match");
+    expect(screen.getByRole("button", { name: /确认分享/i })).toBeDisabled();
+    expect(shareRecordingMutate).not.toHaveBeenCalled();
+    expect(abandonRecordingShareMutate).not.toHaveBeenCalled();
+    expect(transcribeMutate).not.toHaveBeenCalled();
+    expect(summarizeMutate).not.toHaveBeenCalled();
   });
 
   it("surfaces a durable non-verified Share Action outcome instead of claiming success", () => {

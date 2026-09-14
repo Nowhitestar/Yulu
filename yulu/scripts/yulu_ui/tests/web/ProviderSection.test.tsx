@@ -23,6 +23,8 @@ const { configUpdate, setApiKey, probe, acceptDataPathDisclosure, providerStatus
       source: "oauth" as const,
       oauthConnected: true,
       apiKeyConfigured: false,
+      oauthReadSucceeded: true,
+      apiKeyReadSucceeded: true,
       detail: "xAI OAuth 已连接",
       authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
     },
@@ -128,6 +130,21 @@ beforeEach(() => {
 });
 
 describe("ProviderSection", () => {
+  it("distinguishes a credential read failure from missing authorization", () => {
+    const saved = { ...providerStatus.connection };
+    Object.assign(providerStatus.connection, { connected: false, oauthConnected: false, oauthReadSucceeded: false });
+    try {
+      mount("en");
+      expect(screen.getByText("Saved credential temporarily unreadable")).toBeInTheDocument();
+      expect(screen.getByRole("alert")).toHaveTextContent("does not mean authorization is missing or expired");
+      expect(screen.getByRole("button", { name: "Check connection again" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Connect with Grok" })).toBeDisabled();
+      expect(configUpdate).not.toHaveBeenCalled();
+    } finally {
+      Object.assign(providerStatus.connection, saved);
+    }
+  });
+
   it("renders one shared connection and three independent accessible readiness rows", () => {
     mount();
 

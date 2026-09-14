@@ -11,7 +11,7 @@ const connection: PersistedAgentConnection = {
   adapter: "codex",
   label: "Codex",
   lifecycle: "available",
-  settings: { executablePath: "/opt/bin/codex" },
+  settings: { executablePath: "/opt/bin/codex", conversationModel: "gpt-5.6-sol" },
   createdAt: "2026-08-29T03:00:00.000Z",
   updatedAt: "2026-08-29T03:00:00.000Z",
 };
@@ -37,6 +37,15 @@ function toolEvidence(input: {
 }
 
 describe("AgentCalendarConnectorRuntimeAdapter", () => {
+  it("requires the selected Connection model rather than inheriting a CLI default", async () => {
+    const run = vi.fn();
+    const adapter = new AgentCalendarConnectorRuntimeAdapter({ scriptDir: "/app/scripts", configDir: "/config", run });
+    await expect(adapter.probe({
+      connection: { ...connection, settings: { executablePath: "/opt/bin/codex" } }, connector: "google_calendar",
+    })).rejects.toThrow(/Choose an explicit Conversation model/);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("uses one bounded read-only calendar operation and permits no mutation tools", async () => {
     const run = vi.fn().mockResolvedValue({
       code: 0,
@@ -93,6 +102,7 @@ describe("AgentCalendarConnectorRuntimeAdapter", () => {
       "--sandbox",
       "read-only",
       "--skip-git-repo-check",
+      "--model", "gpt-5.6-sol",
     ]);
   });
 

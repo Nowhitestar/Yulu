@@ -49,6 +49,8 @@ const mocks = vi.hoisted(() => ({
         credentialSource: "oauth",
         oauthConnected: true,
         apiKeyConfigured: false,
+        oauthReadSucceeded: true,
+        apiKeyReadSucceeded: true,
         status: "idle",
         verificationUrl: "",
         userCode: "",
@@ -409,6 +411,32 @@ beforeEach(() => {
 });
 
 describe("shared Agent Connection Center", () => {
+  it("rechecks an unreadable saved credential without starting OAuth or changing the selected source", async () => {
+    const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
+    const saved = { ...direct.authorization };
+    Object.assign(direct.authorization, {
+      connected: false,
+      oauthConnected: false,
+      oauthReadSucceeded: false,
+    });
+    try {
+      mount("en");
+      const card = screen.getByRole("region", { name: "xAI" });
+      expect(within(card).getByRole("status", { name: "xAI connection status" }))
+        .toHaveTextContent("Saved credential temporarily unreadable");
+      expect(within(card).getByRole("alert", { name: "Saved credential temporarily unreadable" }))
+        .toHaveTextContent("does not mean authorization is missing or expired");
+      expect(within(card).queryByRole("button", { name: /Connect Grok OAuth|Reconnect Grok OAuth/ })).toBeNull();
+      await userEvent.setup().click(within(card).getByRole("button", { name: "Check connection again" }));
+      expect(mocks.refetchView).toHaveBeenCalledOnce();
+      expect(mocks.authorize).not.toHaveBeenCalled();
+      expect(mocks.logoutOAuth).not.toHaveBeenCalled();
+      expect(mocks.selectCredentialSource).not.toHaveBeenCalled();
+    } finally {
+      direct.authorization = saved;
+    }
+  });
+
   it("requires an explicit new Conversation probe attempt after Unknown Outcome", async () => {
     const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
     const conversation = direct.capabilities.find((capability) => capability.capability === "conversation")!;

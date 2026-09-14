@@ -101,7 +101,7 @@ def _returned_fixture(tmp_path: Path, scenario: str, journey: str | None) -> tup
             {"id": "sharing", "contractVersion": "sharing-v1", "outcome": "adopted"},
         ],
     }
-    health = {"status": "ok", "serviceOwner": "com.yulu.ui", "databaseStatus": "ok", "database": {"schemaVersion": 13, "minimumReadableVersion": 12}}
+    health = {"status": "ok", "serviceOwner": "com.yulu.app.host", "databaseStatus": "ok", "database": {"schemaVersion": 13, "minimumReadableVersion": 12}}
     common_journey = {
         "schema": 1, "classification": "journey_policy_test", "formalAcceptance": False,
         "releaseTag": TAG, "health": health, "version": {"product": "0.23.0-rc.19"},
@@ -270,7 +270,12 @@ def _returned_fixture(tmp_path: Path, scenario: str, journey: str | None) -> tup
             }
             if completed_kind == "committed":
                 value.update({
-                    "databases": databases, "owners": current_owners,
+                    "databases": {
+                        name: {**item,
+                            "schemaSha256": "b" * 64 if name == "host" else item["schemaSha256"],
+                            "preparedSchemaSha256": "b" * 64 if name == "host" else item["schemaSha256"],
+                        } for name, item in databases.items()
+                    }, "owners": current_owners,
                     "config": {"retiredKeyAbsent": True, "archiveSha256": "9" * 64},
                 })
             elif completed_kind == "rolled_back":
@@ -496,7 +501,7 @@ def test_controller_rejects_unsafe_or_cross_binding_drift(tmp_path: Path, mutati
 @pytest.mark.parametrize(
     "mutation",
     [
-        "wal", "retry-nonce", "mcp", "database", "macos13", "host-dependency",
+        "wal", "retry-nonce", "mcp", "database", "prepared-schema", "macos13", "host-dependency",
         "rollback-pid-reuse", "rollback-path", "rollback-socket-owner",
     ],
 )
@@ -518,6 +523,10 @@ def test_controller_rejects_incomplete_upgrade_semantics(tmp_path: Path, mutatio
         path = ledger / "upgrade-committed-no-update.json"
         value = json.loads(path.read_text())
         value["databases"]["host"]["quickCheck"] = "corrupt"
+    elif mutation == "prepared-schema":
+        path = ledger / "upgrade-committed.json"
+        value = json.loads(path.read_text())
+        value["databases"]["host"]["preparedSchemaSha256"] = "c" * 64
     elif mutation.startswith("rollback-"):
         path = ledger / "upgrade-rolled-back.json"
         value = json.loads(path.read_text())
