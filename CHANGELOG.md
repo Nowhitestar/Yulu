@@ -4,6 +4,27 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.20](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.19...v0.23.0-rc.20) (2026-09-14)
+
+
+### Bug Fixes
+
+* initialize and reveal native WebView after layout ([d269574](https://github.com/Nowhitestar/Yulu/commit/d26957462dfddef794a08eed05df7b894a29be19))
+* invoke Notion through bounded Codex runtime RPC ([c83f76d](https://github.com/Nowhitestar/Yulu/commit/c83f76d98dc9b18e41b31ced71a57d46b08ff1d1))
+* keep Codex connector calls directly guarded ([a1dcdc7](https://github.com/Nowhitestar/Yulu/commit/a1dcdc79475799a09b261e6b1684b9f69031e28e))
+* **migration:** register bundled owners and retain recovery failures ([af67718](https://github.com/Nowhitestar/Yulu/commit/af6771833387d30fabae5fb8f7526a75a8b9b70f))
+* **onboarding:** preserve unreadable credentials and validate Apps in CI ([5725490](https://github.com/Nowhitestar/Yulu/commit/5725490b8f363562dd7fcb46e7c0dc8ab0cfdc2e))
+* preserve leading headings in Notion share content ([6446a6a](https://github.com/Nowhitestar/Yulu/commit/6446a6a8e74deb8039823ffad717df222a2ec1a1))
+* reconcile unknown recording shares without resending ([18b988e](https://github.com/Nowhitestar/Yulu/commit/18b988e1c8ae4e5224309d3c19617b5ec48efb56))
+* **release:** prepare consolidated RC20 promotion identity ([762113d](https://github.com/Nowhitestar/Yulu/commit/762113d1b715e75ab492c517450e9c8a5959ce7c))
+* **runtime:** complete migration recovery and bundled service takeover ([#209](https://github.com/Nowhitestar/Yulu/issues/209)) ([518d8d1](https://github.com/Nowhitestar/Yulu/commit/518d8d1e8c2f74b9e9ab027f9d8a47280d988b8b))
+* **runtime:** recover initialized migrations and isolate app service owners ([001fc17](https://github.com/Nowhitestar/Yulu/commit/001fc17cb4916f44cc18c9b465a7fc6f5ca2af43))
+* **runtime:** restore whole-App updates and recording processing ([b6a3854](https://github.com/Nowhitestar/Yulu/commit/b6a3854cd1b77ecacbf885be1344bc7db8109bc2))
+* separate Codex connector discovery from tool timeout ([9297895](https://github.com/Nowhitestar/Yulu/commit/929789596f059b4c4bf251477e11418ca1b0206a))
+* **sharing:** align pinned runtimes and connector payloads ([f8d8e11](https://github.com/Nowhitestar/Yulu/commit/f8d8e113b4ce91562997123f2266a57b21604e83))
+* **sharing:** verify Notion fetch receipts and guide page setup ([a147d66](https://github.com/Nowhitestar/Yulu/commit/a147d66047028c357cd6383ad5c2ad212816253b))
+* **shell:** recover when bundled services become ready late ([16f0c2b](https://github.com/Nowhitestar/Yulu/commit/16f0c2ba05b9ca84452162b38ac80c706b0b79f1))
+
 ## [0.23.0-rc.19](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.18...v0.23.0-rc.19) (2026-09-10)
 
 
