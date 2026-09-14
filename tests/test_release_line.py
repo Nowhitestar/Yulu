@@ -266,6 +266,22 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
         assert capability in release_notes
 
 
+def test_dmg_guidance_does_not_require_an_unbundled_global_cli():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    readme_zh = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+    skill = (ROOT / "skills/yulu/SKILL.md").read_text(encoding="utf-8")
+    operations = (ROOT / "docs/operations.md").read_text(encoding="utf-8")
+
+    assert "DMG does not install a global `yulu` command" in readme
+    for guidance in (readme_zh, skill):
+        assert "DMG 不会安装全局 `yulu` 命令" in guidance
+    for guidance in (readme, readme_zh, skill):
+        assert "docs/operations.md#dmg-and-cli-entry-points" in guidance
+    assert "python/bin/python3.13 -B -m provision.mcp install --agent codex" in operations
+    assert "A skill alone does not register MCP" in operations
+    assert "源码／CLI 安装才使用以下命令" in skill
+
+
 def test_social_card_describes_the_current_product_surface():
     card = (ROOT / "assets" / "social-card.svg").read_text(encoding="utf-8")
 

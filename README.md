@@ -184,13 +184,11 @@ for the installed Yulu App even if an older StatusAgent was already approved.
 
 Open the local workspace at
 [`http://127.0.0.1:7777/agent-console`](http://127.0.0.1:7777/agent-console),
-or start your first recording from the menu bar or CLI:
-
-```bash
-yulu record start "Product weekly"
-yulu record status
-yulu record stop
-```
+or start your first recording from Yulu's menu bar.
+The DMG does not install a global `yulu` command.
+No terminal or external runtime is required for the App's
+recording controls; the CLI examples below are for existing repository/CLI
+installations.
 
 ### Install another version
 
@@ -262,6 +260,10 @@ task. See [Architecture](docs/ARCHITECTURE.md) for the full contract.
 
 ## CLI reference
 
+These commands require an existing repository/CLI installation. Installing the
+DMG alone does not add them to your shell. App users should use the native
+controls or registered MCP tools; see [DMG and CLI entry points](docs/operations.md#dmg-and-cli-entry-points).
+
 | Command | Purpose |
 |---|---|
 | `yulu status` | Show service, capture-socket, recording, and UI health |
@@ -286,9 +288,15 @@ Yulu exposes loopback-only, bearer-authenticated MCP tools and resources for
 recording control, meeting metadata, durable task status, local search, prompts,
 glossary, health, and artifact workflows.
 
+For a DMG installation, use the [bundled MCP registration helper](docs/operations.md#dmg-and-cli-entry-points)
+for the local Agent you choose, then add [the Yulu skill](skills/yulu/SKILL.md)
+through that Agent's skill installation mechanism. This is optional for using
+Yulu's own recording UI. Existing repository/CLI installations can use:
+
 ```bash
 yulu skill install --agent codex
 yulu skill install --agent claude-code
+yulu mcp install --agent codex
 yulu mcp test
 ```
 

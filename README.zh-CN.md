@@ -143,13 +143,9 @@ Grok OAuth 会在系统默认浏览器中打开。在浏览器中完成账号登
 
 打开本地工作台：
 [`http://127.0.0.1:7777/agent-console`](http://127.0.0.1:7777/agent-console)。
-也可以直接从菜单栏或 CLI 开始第一次录音：
-
-```bash
-yulu record start "产品周会"
-yulu record status
-yulu record stop
-```
+也可以直接从 Yulu 菜单栏开始第一次录音。DMG 不会安装全局 `yulu` 命令；
+使用 App 的录音控制不需要终端或外部运行时。下方 CLI 示例仅适用于已有的
+源码／CLI 安装。
 
 ### 安装其它版本
 
@@ -214,6 +210,10 @@ Agent Console -> 用户选择的通用 Agent -> 该 Agent 自己的连接器
 
 ## CLI 参考
 
+以下命令要求已有源码／CLI 安装，单独安装 DMG 不会把它们加入终端。
+App 用户请使用原生控制或已注册的 MCP 工具；见
+[DMG 与 CLI 入口说明](docs/operations.md#dmg-and-cli-entry-points)。
+
 | 命令 | 作用 |
 |---|---|
 | `yulu status` | 查看服务、录音 socket、当前录音和 UI 健康状态 |
@@ -237,9 +237,15 @@ Agent Console -> 用户选择的通用 Agent -> 该 Agent 自己的连接器
 Yulu 通过仅监听本机回环地址、使用 bearer token 认证的 MCP，提供录音控制、会议元数据、
 持久化任务状态、本地搜索、模板、术语表、健康检查和产物工作流。
 
+DMG 用户可以用 [App 内置的 MCP 注册工具](docs/operations.md#dmg-and-cli-entry-points)
+连接自己选择的本地 Agent，再通过该 Agent 的 skill 安装方式添加
+[Yulu skill](skills/yulu/SKILL.md)。使用 Yulu 自身的录音界面不需要这一步。
+已有源码／CLI 安装的用户可以运行：
+
 ```bash
 yulu skill install --agent codex
 yulu skill install --agent claude-code
+yulu mcp install --agent codex
 yulu mcp test
 ```
 

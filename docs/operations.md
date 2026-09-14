@@ -4,6 +4,35 @@ This guide covers the current native-capture and durable provider runtime.
 Capture ends at the local Host boundary. Summary work keeps its creation-time
 connection/provider/model identity and never switches or replays automatically.
 
+## DMG and CLI entry points
+
+The DMG does not install a global `yulu` command. Start and stop recordings from
+the App's menu bar, inspect recordings/tasks in the local workspace, and use
+System Settings for macOS permissions. The `yulu ...` examples in this guide
+apply only to an existing repository/CLI installation; do not reinstall the old
+shell distribution or modify the signed App just to obtain those commands.
+
+External Agent control is optional. With Yulu running and the chosen Agent CLI
+already installed, the App includes a registration helper that uses its bundled
+Python. For Codex, run:
+
+```bash
+(
+  cd /Applications/Yulu.app/Contents/Resources/runtime/yulu/scripts || exit 1
+  /Applications/Yulu.app/Contents/Resources/runtime/python/bin/python3.13 -B -m provision.mcp install --agent codex
+  /Applications/Yulu.app/Contents/Resources/runtime/python/bin/python3.13 -B -m provision.mcp test
+)
+```
+
+For Claude Code the MCP helper's agent name is `claude`. Register only Agents
+you choose to use. The helper manages local authentication without displaying
+the bearer token; do not read or copy the token yourself. Add the
+[Yulu skill](../skills/yulu/SKILL.md) using the chosen Agent's skill installer,
+then refresh that Agent's MCP connection. A skill alone does not register MCP.
+This helper neither installs a global CLI nor requires external Python/Node.
+The App's AI Provider settings select summary/conversation connections; they do
+not install this external Agent-to-Yulu MCP registration.
+
 ## Daily commands
 
 ```bash
