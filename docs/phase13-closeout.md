@@ -33,8 +33,11 @@
   repair, a real supported v0.22.2
   upgrade baseline, then conditional
   accepted-source stable publication and its normal RC-to-stable update. The
-  existing same-source RC20 authorization cannot make its known failing source
-  accepted; a changed promotion source must be settled before publication. This
+  user's later explicit approval authorizes pushing the repair, tests and
+  acceptance record to public `Nowhitestar/Yulu`, running existing CI, and
+  publishing a consolidated candidate and stable release from the repaired
+  source only after the remaining issues are resolved and acceptance passes.
+  It supersedes the old RC20-same-source restriction, not the acceptance gate. This
   physical development-to-public replacement does not establish those separate
   journeys. The overall goal is **not complete**.
 - The current goal API still reports its pre-existing blocked status and offers
@@ -742,15 +745,35 @@ installation was used to hide the failure. The new guest's normal provider
 status reports no connected xAI source; a real summary needs normal user-owned
 authorization, not copied credentials or an implicit alternate provider.
 
-The repair is locally committed. Public push to the existing
-`Nowhitestar/Yulu` branch was rejected by the platform's action review, which
-requires explicit authorization for this source/test/checkpoint publication.
-No alternate upload channel, push retry, new PR, CI dispatch or release was
-used after that rejection. This is an external-publication authorization
-blocker, not a failed source test. The guest remains open at its normal xAI
-connection settings for the requested user-owned login; no login material is
-requested in chat. A corrected source must be accepted before stable promotion;
-the original same-source RC20 gate is not bypassed or silently relabeled.
+The repair is locally committed as
+`616756911b189d527e6ad46e984ba34cb26ee154`. The first public push was rejected
+for missing publication-specific authorization. The user then explicitly
+approved publishing these source/test/checkpoint changes to `Nowhitestar/Yulu`,
+running the existing CI, and eventually using the repaired, accepted source for
+the consolidated candidate and stable release. Publication permission is now
+settled; this does not permit publishing before acceptance.
+
+After that approval, the normal branch push and its one permitted retry both
+timed out in automatic action review **before execution**. Read-only GitHub
+readback confirms the remote branch remains at
+`f188a996dd1018f8ead25f7aff2bf64b11089844`, with no open PR. Its latest passing
+CI is still the older documentation run `34804734960`, not a test of this
+repair. No alternate upload channel, new PR, CI dispatch or release was used.
+The blocker is now platform execution availability, not missing user permission
+or a source-test failure.
+
+A separate no-CLT component experiment was prepared in the same existing VM,
+using an empty temporary directory and the reviewed repair only in an isolated
+Python process, without patching the signed App. The directory was created,
+but the execution request was rejected because the action-review model was at
+capacity; no package/model installation or warmup from that experiment ran.
+Do not count it as a passing guest check. The earlier real-package source smoke
+on the physical Mac remains valid only for its stated component scope.
+
+The guest remains open at its normal xAI connection settings and still visibly
+shows disconnected. The requested user-owned login is not established by the
+publication approval; no login material is requested in chat. A corrected
+source must still pass installed acceptance before stable promotion.
 
 The official v0.22.2 baseline artifacts remain available and were independently
 downloaded for inspection only, not executed on the physical Mac. The public
