@@ -9,8 +9,11 @@
 - Final clean-application-state testing has now found a release blocker:
   RC20's default local-transcription Runtime Pack verifier calls `lipo`, which
   is an unavailable developer-tool shim on this no-CLT target. The correctly
-  signed arm64 library is reported as non-arm64. RC20 is **not accepted for
-  stable promotion**. A scoped source repair and passing checks are recorded
+  signed arm64 library is reported as non-arm64. The subsequent component audit
+  also found that the import self-test writes bytecode into the signed Runtime
+  Pack, invalidating its next inventory check. Both repairs and passing source/
+  component checks are recorded below. RC20 is **not accepted for
+  stable promotion**. The
   below; the published and installed App bytes have not been patched.
 - The physical Mac now runs that public RC20 after ordinary Finder whole-App
   replacement from the verified DMG. Installed and mounted CodeResources
@@ -753,22 +756,49 @@ running the existing CI, and eventually using the repaired, accepted source for
 the consolidated candidate and stable release. Publication permission is now
 settled; this does not permit publishing before acceptance.
 
-After that approval, the normal branch push and its one permitted retry both
+Initially after that approval, the normal branch push and its one permitted retry both
 timed out in automatic action review **before execution**. Read-only GitHub
 readback confirms the remote branch remains at
 `f188a996dd1018f8ead25f7aff2bf64b11089844`, with no open PR. Its latest passing
 CI is still the older documentation run `34804734960`, not a test of this
 repair. No alternate upload channel, new PR, CI dispatch or release was used.
-The blocker is now platform execution availability, not missing user permission
-or a source-test failure.
+That interruption was platform execution availability, not missing user
+permission or a source-test failure. After the user's next continuation, the
+normal push succeeded at `7aee7215f54a2a2583c550d29c5019bca96c730b` and
+PR #212 opened. Its own CI is `34817404912`; no release was triggered.
 
 A separate no-CLT component experiment was prepared in the same existing VM,
 using an empty temporary directory and the reviewed repair only in an isolated
 Python process, without patching the signed App. The directory was created,
 but the execution request was rejected because the action-review model was at
 capacity; no package/model installation or warmup from that experiment ran.
-Do not count it as a passing guest check. The earlier real-package source smoke
-on the physical Mac remains valid only for its stated component scope.
+That rejected attempt is not a passing check. After execution recovered, the
+same no-CLT target and temporary directory ran the reviewed source in memory:
+official Runtime Pack and model downloads, signature/architecture checks,
+installation and a real `CaptionWorker` model warmup succeeded in 317.72 seconds.
+Only App Python, OS `file` and OS `codesign` were invoked. This is still a
+component test, not an installed repaired-App acceptance.
+
+The follow-up immutability audit found six new `.pyc` files in that temporary
+Runtime Pack. The import self-test started Python with `-I -S` but without `-B`;
+isolated Python ignores the inherited `PYTHONDONTWRITEBYTECODE` setting. Thus
+the first install could report ready while the next inventory check rejected
+its own bytecode files. A real-subprocess regression reproduced the extra file
+before the fix. The probe now explicitly uses `-B`; the actual installer and
+caption-worker launchers already did. The runtime suite now passes 20 tests and
+the worker suite retains its 4 passes. No signature/inventory exception or
+permission change was added.
+
+The same guest then confirmed `previousRuntimeReady=false`, six cache files,
+and an intact model. The repaired normal installer replaced only this temporary
+Runtime Pack and reused the model. With source SHA-256
+`890f49e62ad2f3cdf6d060a69d396f8064e339f1c51d200f3f3ad85e7c5e95ed`,
+installation, repeated status, real model warmup and subsequent full Runtime
+Pack verification all pass; no bytecode files appear. The complete installed
+RC20 App also passes deep/strict signature verification. This 23.28-second
+component check did not patch the App, install developer tools or alter TCC.
+Both fixes belong in PR #212 before one consolidated candidate; do not publish
+an RC for this one-argument follow-up.
 
 The guest remains open at its normal xAI connection settings and still visibly
 shows disconnected. The requested user-owned login is not established by the

@@ -258,6 +258,7 @@ def _sherpa_import_ok(python: Path, site_packages: Path) -> bool:
                 str(python),
                 "-I",
                 "-S",
+                "-B",  # -I ignores PYTHONDONTWRITEBYTECODE; keep signed code immutable.
                 "-c",
                 (
                     "import sys; sys.path.insert(0, sys.argv[1]); "

@@ -326,3 +326,26 @@ def test_sherpa_import_probe_does_not_run_pack_sitecustomize(tmp_path):
 
     assert runtime._sherpa_import_ok(Path(runtime.sys.executable), site_packages) is True
     assert not marker.exists()
+
+
+def test_sherpa_import_probe_preserves_runtime_pack_bytes(monkeypatch, tmp_path):
+    site_packages = tmp_path / "site-packages"
+    package = site_packages / "sherpa_onnx"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("__version__ = '1.13.2'\n", encoding="utf-8")
+    before = {
+        path.relative_to(site_packages): path.read_bytes()
+        for path in site_packages.rglob("*") if path.is_file()
+    }
+    # Isolated Python ignores this environment setting; the subprocess itself
+    # must disable bytecode writes to keep the signed payload inventory intact.
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
+
+    assert runtime._sherpa_import_ok(Path(runtime.sys.executable), site_packages) is True
+
+    after = {
+        path.relative_to(site_packages): path.read_bytes()
+        for path in site_packages.rglob("*") if path.is_file()
+    }
+    assert after == before
+    assert not list(site_packages.rglob("__pycache__"))
