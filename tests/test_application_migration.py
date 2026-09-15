@@ -1671,6 +1671,11 @@ def test_final_capture_idle_failure_rolls_back_in_the_same_live_session(
         payload = (
             plistlib.dumps({"Program": sys.executable})
             if label == "com.yulu.audiodaemon"
+            else plistlib.dumps({
+                "Label": label,
+                "ProgramArguments": ["/usr/bin/open", "-W", str(legacy / "StatusAgent.app")],
+            })
+            if label == "com.yulu.statusagent"
             else f"{label}\n".encode()
         )
         (agents / f"{label}.plist").write_bytes(payload)
