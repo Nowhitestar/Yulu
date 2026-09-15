@@ -5,15 +5,15 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Yulu</title>
         <item>
             <title>0.23.0</title>
-            <pubDate>Mon, 31 Aug 2026 16:01:06 +0000</pubDate>
-            <sparkle:version>1526</sparkle:version>
+            <pubDate>Tue, 15 Sep 2026 08:04:14 +0000</pubDate>
+            <sparkle:version>1667</sparkle:version>
             <sparkle:shortVersionString>0.23.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>10.13</sparkle:minimumSystemVersion>
+            <sparkle:minimumSystemVersion>13.0.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/Nowhitestar/Yulu/releases/download/v0.23.0-rc.5/yulu-macos-arm64-v0.23.0-rc.5.dmg" length="77537551" type="application/octet-stream" sparkle:edSignature="xh1rcdko5jrlBpg4CexoONXNLKl9A6oTLBufR6n7GMgr5QG7ak89FMeKHYLLsEgcFJIHwihIsMswIhWUz+/rCw=="></enclosure>
+            <enclosure url="https://github.com/Nowhitestar/Yulu/releases/download/v0.23.0/yulu-macos-arm64-v0.23.0.dmg" length="78070894" type="application/octet-stream" sparkle:edSignature="dUilEi08t/QYMwYCUs7Lnd1y3a3XMfaOOHKAAvNiC45epvIZLit60CEEXNzTuXz0cfwVq9ok1fYfJYnsyD0ABQ=="></enclosure>
         </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: u8W4vmn/beGJ9uoKFn/sCO/fxzz6djd3n+CRWCP4C3+Ssc2u4eWTfwfHu4iufT6N9NHeecEFGK8pYMxkugd/BA==
-length: 1143
+edSignature: 9LHOXl1rbE9vEz86P+FEIUfRvuR8CA8Bfns4+7QFfejudXYcV9oQhZV8y9Ml0eEnKn+up+fS6ZlXNb24m3zMAQ==
+length: 1134
 -->
