@@ -153,12 +153,13 @@ return to Yulu to test each selected capability; login alone does not prove read
 
 ### Install
 
-The consolidated [RC21 release candidate](https://github.com/Nowhitestar/Yulu/releases/tag/v0.23.0-rc.21)
+[Yulu v0.23.0 stable](https://github.com/Nowhitestar/Yulu/releases/tag/v0.23.0)
 includes the migration, initialization, capture-package, native-startup and
 manual-sharing repairs, plus developer-tool-free local Runtime Pack verification,
 immutable runtime import checks and safe retirement of the legacy menu-bar App.
-Final fresh-install and supported-upgrade acceptance
-remain in progress; it is not yet an accepted stable release.
+It uses the accepted RC21 source without intervening product changes. See the
+[release acceptance scope and retained risks](docs/release-notes/v0.23.0.md#acceptance-scope)
+for the physical-Mac checks, reused evidence and final-public journeys not re-run.
 
 For an older candidate's database or silent-capture failure, see
 [database preparation](docs/operations.md#fresh-install-database-preparation) and

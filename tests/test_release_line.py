@@ -151,13 +151,16 @@ def test_rc20_cannot_be_promoted_after_the_local_runtime_repair(tmp_path: Path):
     assert "must match VERSION" in result.stderr
 
 
-def test_release_please_uses_the_configured_prerelease_line():
+def test_release_please_leaves_the_finished_prerelease_line():
     config = json.loads((ROOT / "release-please-config.json").read_text(encoding="utf-8"))
     package = config["packages"]["."]
 
-    assert package["versioning"] == "prerelease"
-    assert package["prerelease"] is True
-    assert package["prerelease-type"] == "rc"
+    assert "versioning" not in package
+    assert package["prerelease"] is False
+    assert "prerelease-type" not in package
+    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "0.23.0"
+    manifest = json.loads((ROOT / ".release-please-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["."] == "0.23.0"
 
 
 def test_stable_publication_guidance_requires_the_current_accepted_candidate():
@@ -170,7 +173,12 @@ def test_stable_publication_guidance_requires_the_current_accepted_candidate():
         assert "`v0.23.0-rc.21`" in guidance
         assert "`v0.23.0-rc.20`" not in guidance
         assert "`v0.23.0-rc.19`" not in guidance
-    assert "only after #170" in stable_notes
+        assert "not re-run" in guidance
+        assert "v0.22.2" in guidance
+    assert "1667" in stable_notes
+    assert "#170" in stable_notes
+    assert "#171" in stable_notes
+    assert "## Acceptance scope" in stable_notes
 
 
 def test_rc21_notes_cover_both_local_runtime_repairs_without_claiming_acceptance():
@@ -225,11 +233,13 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
     assert "Hermes 租约任务规则" not in skill
     assert "手动 Share Action" in skill
     assert "Official GitHub Release DMG" in issue_template
-    assert 'placeholder: "Yulu 0.23.0-rc.21"' in issue_template
+    assert 'placeholder: "Yulu 0.23.0"' in issue_template
     assert "bounded direct connector RPC" in readme
     assert "只读对账不会另建页面" in readme_zh
     for guidance in (readme, readme_zh):
-        assert "releases/tag/v0.23.0-rc.21" in guidance
+        assert "releases/tag/v0.23.0)" in guidance
+        assert "releases/tag/v0.23.0-rc.21" not in guidance
+        assert "docs/release-notes/v0.23.0.md#acceptance-scope" in guidance
     operations = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
     assert "For the `v0.23.0-rc.19` public-DMG acceptance harness" in operations
     assert "one-line installer" not in issue_template
