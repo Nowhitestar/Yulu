@@ -40,6 +40,13 @@ class CaptureJobSnapshot:
     executable: Path
 
 
+@dataclass(frozen=True)
+class LegacyStatusAgentProcess:
+    pid: int
+    executable: Path
+    generation: tuple[int, int]
+
+
 LEGACY_JOB_LABELS = (
     "com.yulu.ui",
     "com.yulu.audiodaemon",
@@ -1726,6 +1733,7 @@ def run_migration_step(
                 launch_agents_dir=launch_agents_dir,
                 archive_dir=archive_dir,
                 launchctl=launchctl,
+                legacy_status_socket=legacy_root / "status_agent.sock",
                 final_capture_idle=lambda: assert_legacy_capture_idle(
                     capture_snapshot,
                     legacy_capture_socket,
@@ -1876,6 +1884,14 @@ def run_migration_step(
             )
             return {"action": "rolled_back"}
         if phase == "committed":
+            # Older migrations stopped `open -W`, not its LaunchServices-owned
+            # App. Heal that precise orphan without replaying committed data.
+            snapshot = authority._journal.get("jobSnapshot")
+            if isinstance(snapshot, dict):
+                retire_legacy_status_agent(
+                    authority.legacy_status_snapshot(snapshot),
+                    legacy_root / "status_agent.sock", launchctl=launchctl
+                )
             return authority._service_action("committed")
         if phase == "rolled_back":
             return {"action": "rolled_back", **authority.failure_detail_fields()}
@@ -2018,6 +2034,10 @@ def _recover_live_session_failure(
 ) -> dict[str, object]:
     authority = step_arguments.get("authority")
     if isinstance(authority, ApplicationMigration):
+        if authority._journal is not None and authority._journal.get("phase") == "committed":
+            # Post-commit retirement is independent of the data transaction.
+            # Never cancel, unregister services, or restore legacy data here.
+            return {"action": "blocked", "detail": str(failure)[:512]}
         authority.record_failure(_session_failure_code(failure, {"action": "step"}))
     try:
         action = step(
@@ -3717,6 +3737,18 @@ class ApplicationMigration:
             os.close(snapshots_fd)
         return sanitized
 
+    def legacy_status_snapshot(
+        self, snapshot: dict[str, dict[str, object]]
+    ) -> dict[str, dict[str, object]]:
+        label = "com.yulu.statusagent"
+        entry = snapshot.get(label)
+        if entry is None:
+            return {}
+        contents = self._snapshot_plist_bytes(label, entry)
+        if contents is None and entry.get("loaded") is True:
+            raise MigrationBlocked("loaded legacy StatusAgent has no executable snapshot")
+        return {label: {**entry, "plistBytes": contents.hex() if contents is not None else None}}
+
     def quiesce_legacy_jobs(
         self,
         snapshot: dict[str, dict[str, object]],
@@ -3725,6 +3757,7 @@ class ApplicationMigration:
         archive_dir: Path,
         launchctl: Callable[[list[str]], object] = _run_launchctl,
         final_capture_idle: Callable[[], None] | None = None,
+        legacy_status_socket: Path | None = None,
     ) -> None:
         source_fd = self.launch_agents_fd(launch_agents_dir)
         try:
@@ -3748,8 +3781,23 @@ class ApplicationMigration:
                     raise MigrationBlocked(f"cannot stop legacy job: {label}")
                 self._settle_pending_legacy_bootout(launchctl=launchctl)
 
+            if legacy_status_socket is not None:
+                status_snapshot = self.legacy_status_snapshot(snapshot)
+                status_process = inspect_legacy_status_agent(status_snapshot, legacy_status_socket)
+                if status_process is not None:
+                    if final_capture_idle is None:
+                        raise MigrationBlocked("legacy StatusAgent idle guard is missing")
+                    final_capture_idle()
+                # `open -W` is only a waiter. Stop its KeepAlive job first, then
+                # retire the independently parented App before stopping Host.
+                stop_loaded_job("com.yulu.statusagent")
+                retire_legacy_status_agent(
+                    status_snapshot, legacy_status_socket, launchctl=launchctl
+                )
             for label in LEGACY_JOB_LABELS:
-                if label != capture_label:
+                if label != capture_label and not (
+                    legacy_status_socket is not None and label == "com.yulu.statusagent"
+                ):
                     stop_loaded_job(label)
             if snapshot[capture_label]["loaded"]:
                 if final_capture_idle is None:
@@ -4601,7 +4649,7 @@ def _process_generation(pid: int) -> tuple[int, int]:
     return int(info.pbi_start_tvsec), int(info.pbi_start_tvusec)
 
 
-def _read_status(client: socket.socket) -> dict[str, object]:
+def _read_status_payload(client: socket.socket) -> dict[str, object]:
     client.sendall(b'{"action":"status"}')
     client.shutdown(socket.SHUT_WR)
     response = bytearray()
@@ -4613,9 +4661,152 @@ def _read_status(client: socket.socket) -> dict[str, object]:
     if not response or len(response) > _MAX_STATUS_BYTES:
         raise OSError("legacy Capture status response is missing or too large")
     payload = json.loads(response)
-    if not isinstance(payload, dict) or type(payload.get("recording")) is not bool:
+    if not isinstance(payload, dict):
+        raise OSError("legacy service returned an invalid status response")
+    return payload
+
+
+def _read_status(client: socket.socket) -> dict[str, object]:
+    payload = _read_status_payload(client)
+    if type(payload.get("recording")) is not bool:
         raise OSError("legacy Capture returned an invalid status response")
     return payload
+
+
+def _legacy_status_executable(snapshot: dict[str, dict[str, object]]) -> Path | None:
+    entry = snapshot.get("com.yulu.statusagent", {})
+    raw = entry.get("plistBytes")
+    if raw is None:
+        return None
+    try:
+        payload = plistlib.loads(bytes.fromhex(raw))
+        if not isinstance(payload, dict):
+            raise ValueError("unrecognized StatusAgent plist")
+        arguments = payload.get("ProgramArguments")
+        if payload.get("Label") != "com.yulu.statusagent" or not isinstance(arguments, list):
+            raise ValueError("unrecognized StatusAgent plist")
+        if len(arguments) == 3 and arguments[:2] == ["/usr/bin/open", "-W"]:
+            bundle = Path(arguments[2])
+            if bundle.name != "StatusAgent.app":
+                raise ValueError("unrecognized StatusAgent bundle")
+            executable = bundle / "Contents/MacOS/status_agent"
+        elif len(arguments) == 1:
+            executable = Path(arguments[0])
+            if executable.parts[-4:] != ("StatusAgent.app", "Contents", "MacOS", "status_agent"):
+                raise ValueError("unrecognized StatusAgent executable")
+        else:
+            raise ValueError("unrecognized StatusAgent launch command")
+        if not executable.is_absolute():
+            raise ValueError("StatusAgent executable is not absolute")
+        return executable.resolve()
+    except (TypeError, ValueError, plistlib.InvalidFileException) as exc:
+        raise MigrationBlocked("legacy StatusAgent executable snapshot is invalid") from exc
+
+
+def _legacy_status_pids(executable: Path) -> list[int]:
+    # Names only narrow discovery; signals require the exact kernel-reported
+    # executable, IPC peer UID and process generation below. Never pkill a name.
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-ww", "-U", str(os.geteuid()), "-o", "pid=,comm="],
+            text=True, capture_output=True, check=False, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise MigrationBlocked("cannot inspect legacy StatusAgent processes") from exc
+    if result.returncode != 0:
+        raise MigrationBlocked("cannot inspect legacy StatusAgent processes")
+    matches = []
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2 or Path(fields[1]).name != "status_agent":
+            continue
+        try:
+            pid = int(fields[0])
+            if pid > 1 and _process_executable(pid) == executable:
+                matches.append(pid)
+        except OSError as exc:
+            if exc.errno != errno.ESRCH:
+                raise MigrationBlocked("cannot identify legacy StatusAgent process") from exc
+        except ValueError as exc:
+            raise MigrationBlocked("cannot identify legacy StatusAgent process") from exc
+    return matches
+
+
+def inspect_legacy_status_agent(
+    snapshot: dict[str, dict[str, object]], socket_path: Path,
+) -> LegacyStatusAgentProcess | None:
+    executable = _legacy_status_executable(snapshot)
+    if executable is None:
+        return None
+    pids = _legacy_status_pids(executable)
+    if not pids:
+        return None
+    if len(pids) != 1 or snapshot["com.yulu.statusagent"].get("loaded") is not True:
+        raise MigrationBlocked("legacy StatusAgent is running outside its recorded job")
+    pid = pids[0]
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        generation = _process_generation(pid)
+        client.settimeout(2)
+        client.connect(str(socket_path))
+        peer_pid, peer_uid = _peer_identity(client)
+        if peer_pid != pid or peer_uid != os.geteuid() or _process_executable(pid) != executable:
+            raise MigrationBlocked("legacy StatusAgent identity does not match its job snapshot")
+        status = _read_status_payload(client)
+        if _process_generation(pid) != generation:
+            raise MigrationBlocked("legacy StatusAgent identity changed during status check")
+        if (
+            status.get("ok") is not True or status.get("state") != "idle"
+            or status.get("dictation_active") is not False
+            or status.get("voice_chat_window_visible") is not False
+            or status.get("launcher_pid") is not None
+            or status.get("launcher_pids", []) != []
+        ):
+            raise MigrationBlocked("legacy StatusAgent still has active or unknown native work")
+        return LegacyStatusAgentProcess(pid, executable, generation)
+    except (OSError, ValueError) as exc:
+        raise MigrationBlocked("cannot prove legacy StatusAgent is idle") from exc
+    finally:
+        client.close()
+
+
+def _legacy_status_process_alive(process: LegacyStatusAgentProcess) -> bool:
+    try:
+        os.kill(process.pid, 0)
+        if _process_generation(process.pid) != process.generation:
+            return False  # The original process exited; do not signal a reused PID.
+        if _process_executable(process.pid) != process.executable:
+            raise MigrationBlocked("legacy StatusAgent executable changed")
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError as exc:
+        raise MigrationBlocked("cannot recheck legacy StatusAgent identity") from exc
+
+
+def retire_legacy_status_agent(
+    snapshot: dict[str, dict[str, object]], socket_path: Path,
+    *, launchctl: Callable[[list[str]], object] = _run_launchctl,
+) -> None:
+    process = inspect_legacy_status_agent(snapshot, socket_path)
+    if process is None:
+        return
+    observed = launchctl(["print", f"gui/{os.geteuid()}/com.yulu.statusagent"])
+    if getattr(observed, "returncode", None) != 113:
+        raise MigrationBlocked("legacy StatusAgent launcher is not proven stopped")
+    if not _legacy_status_process_alive(process):
+        return
+    try:
+        os.kill(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError as exc:
+        raise MigrationBlocked("cannot stop legacy StatusAgent") from exc
+    deadline = time.monotonic() + _LEGACY_JOB_TRANSITION_TIMEOUT_SECONDS
+    while _legacy_status_process_alive(process):
+        if time.monotonic() >= deadline:
+            raise MigrationBlocked("legacy StatusAgent did not stop")
+        time.sleep(_LEGACY_JOB_POLL_INTERVAL_SECONDS)
 
 
 def assert_legacy_capture_idle(
