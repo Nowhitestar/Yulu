@@ -4,6 +4,18 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0-rc.21](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.20...v0.23.0-rc.21) (2026-09-15)
+
+
+### Bug Fixes
+
+* **audio:** keep runtime import probes read-only ([9d3c349](https://github.com/Nowhitestar/Yulu/commit/9d3c349496273e9d947d6719c325f7c2642cdd55))
+* **audio:** validate runtime packs without developer tools ([61a3a60](https://github.com/Nowhitestar/Yulu/commit/61a3a603b3b4f823286201ee3c1387cce7c44f8f))
+* **audio:** validate runtime packs without developer tools ([6167569](https://github.com/Nowhitestar/Yulu/commit/616756911b189d527e6ad46e984ba34cb26ee154))
+* **migration:** handle retired capture in committed status cleanup ([c631247](https://github.com/Nowhitestar/Yulu/commit/c631247cd88ecb6c19939b6fdc92e2cc7630147e))
+* **migration:** retire legacy menu bar app after launcher shutdown ([87dd053](https://github.com/Nowhitestar/Yulu/commit/87dd053da8ce3bfefefdb4eaa89d0b9f111cf109))
+* **migration:** retire legacy menu bar owner during upgrade ([8181344](https://github.com/Nowhitestar/Yulu/commit/8181344c1f3c133d63eb40c2d9eca4eb881e4124))
+
 ## [0.23.0-rc.20](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.19...v0.23.0-rc.20) (2026-09-14)
 
 
