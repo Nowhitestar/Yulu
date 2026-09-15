@@ -18,13 +18,13 @@ def git(repository: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def make_release_repository(tmp_path: Path) -> Path:
     repository = tmp_path / "release-repository"
     repository.mkdir()
-    (repository / "VERSION").write_text("0.23.0-rc.20\n", encoding="utf-8")
+    (repository / "VERSION").write_text("0.23.0-rc.21\n", encoding="utf-8")
     assert git(repository, "init", "-q").returncode == 0
     assert git(repository, "config", "user.email", "release-test@example.invalid").returncode == 0
     assert git(repository, "config", "user.name", "Release Test").returncode == 0
     assert git(repository, "add", "VERSION").returncode == 0
-    assert git(repository, "commit", "-qm", "chore: release 0.23.0-rc.20").returncode == 0
-    assert git(repository, "tag", "v0.23.0-rc.20").returncode == 0
+    assert git(repository, "commit", "-qm", "chore: release 0.23.0-rc.21").returncode == 0
+    assert git(repository, "tag", "v0.23.0-rc.21").returncode == 0
     assert git(repository, "tag", "v0.23.0").returncode == 0
     return repository
 
@@ -45,10 +45,10 @@ def resolve(repository: Path, tag: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_release_identity_accepts_rc20_and_reserves_the_next_build_for_stable(tmp_path: Path):
+def test_release_identity_accepts_rc21_and_reserves_the_next_build_for_stable(tmp_path: Path):
     repository = make_release_repository(tmp_path)
 
-    rc = resolve(repository, "v0.23.0-rc.20")
+    rc = resolve(repository, "v0.23.0-rc.21")
     stable = resolve(repository, "v0.23.0")
 
     assert rc.returncode == 0, rc.stderr
@@ -56,7 +56,7 @@ def test_release_identity_accepts_rc20_and_reserves_the_next_build_for_stable(tm
     assert json.loads(rc.stdout) == {
         "buildNumber": "2",
         "bundleShortVersion": "0.23.0",
-        "releaseVersion": "0.23.0-rc.20",
+        "releaseVersion": "0.23.0-rc.21",
         "stablePromotion": False,
     }
     assert json.loads(stable.stdout) == {
@@ -82,19 +82,19 @@ def test_stable_promotion_rejects_a_different_source_commit(tmp_path: Path):
 
 def test_release_identity_rejects_missing_and_mismatched_requested_tags(tmp_path: Path):
     repository = make_release_repository(tmp_path)
-    assert git(repository, "tag", "-d", "v0.23.0-rc.20").returncode == 0
+    assert git(repository, "tag", "-d", "v0.23.0-rc.21").returncode == 0
 
-    missing = resolve(repository, "v0.23.0-rc.20")
+    missing = resolve(repository, "v0.23.0-rc.21")
 
     assert missing.returncode != 0
     assert "unknown revision" in missing.stderr.lower() or "needed a single revision" in missing.stderr.lower()
 
-    assert git(repository, "tag", "v0.23.0-rc.20").returncode == 0
+    assert git(repository, "tag", "v0.23.0-rc.21").returncode == 0
     (repository / "after-tag.txt").write_text("new source\n", encoding="utf-8")
     assert git(repository, "add", "after-tag.txt").returncode == 0
     assert git(repository, "commit", "-qm", "fix: change after tag").returncode == 0
 
-    mismatched = resolve(repository, "v0.23.0-rc.20")
+    mismatched = resolve(repository, "v0.23.0-rc.21")
 
     assert mismatched.returncode != 0
     assert "current release commit" in mismatched.stderr
@@ -140,10 +140,10 @@ def test_stable_promotion_is_limited_to_the_accepted_release_line(tmp_path: Path
     assert "must match VERSION" in result.stderr
 
 
-def test_previous_candidate_cannot_be_promoted_after_acceptance_moves_to_rc20(tmp_path: Path):
+def test_rc20_cannot_be_promoted_after_the_local_runtime_repair(tmp_path: Path):
     repository = make_release_repository(tmp_path)
-    (repository / "VERSION").write_text("0.23.0-rc.19\n", encoding="utf-8")
-    assert git(repository, "tag", "v0.23.0-rc.19").returncode == 0
+    (repository / "VERSION").write_text("0.23.0-rc.20\n", encoding="utf-8")
+    assert git(repository, "tag", "v0.23.0-rc.20").returncode == 0
 
     result = resolve(repository, "v0.23.0")
 
@@ -167,9 +167,20 @@ def test_stable_publication_guidance_requires_the_current_accepted_candidate():
     ).read_text(encoding="utf-8")
 
     for guidance in (stable_notes, stable_adr):
-        assert "`v0.23.0-rc.20`" in guidance
+        assert "`v0.23.0-rc.21`" in guidance
+        assert "`v0.23.0-rc.20`" not in guidance
         assert "`v0.23.0-rc.19`" not in guidance
     assert "only after #170" in stable_notes
+
+
+def test_rc21_notes_cover_both_local_runtime_repairs_without_claiming_acceptance():
+    notes = (ROOT / "docs/release-notes/v0.23.0-rc.21.md").read_text(encoding="utf-8")
+
+    assert "Command Line Tools" in notes
+    assert "bytecode" in notes
+    assert "manual" in notes
+    assert "not an accepted stable release" in notes
+    assert "v0.22.2" in notes
 
 
 def test_release_workflow_and_packager_share_the_validated_release_identity():
