@@ -68,6 +68,29 @@ def test_idle_launchservices_orphan_is_stopped_once(status_case):
     assert not case.state.alive
 
 
+@pytest.mark.parametrize("capture_code", [0, 77, 113])
+def test_daemon_down_requires_committed_retirement_and_absent_capture_job(status_case, capture_code):
+    case = status_case
+    case.status["state"] = "daemonDown"
+    with pytest.raises(case.migration.MigrationBlocked, match="active or unknown"):
+        retire(case)
+
+    def launchctl(args):
+        return SimpleNamespace(returncode=capture_code if args[-1].endswith("/com.yulu.audiodaemon") else 113)
+
+    if capture_code == 113:
+        case.migration.retire_legacy_status_agent(
+            case.snapshot, case.socket, launchctl=launchctl, capture_retired=True,
+        )
+        assert case.events == ["term"]
+    else:
+        with pytest.raises(case.migration.MigrationBlocked, match="Capture is not proven retired"):
+            case.migration.retire_legacy_status_agent(
+                case.snapshot, case.socket, launchctl=launchctl, capture_retired=True,
+            )
+        assert case.events == []
+
+
 @pytest.mark.parametrize("changes", [
     {"state": "recording"}, {"state": "processing"}, {"state": None}, {"ok": False},
     {"dictation_active": True}, {"dictation_active": None},
@@ -309,6 +332,7 @@ def test_committed_cleanup_never_replays_or_rolls_back_data(transaction_case, mo
     journal = case.paths.journal_path.read_bytes()
     marker = case.paths.durable_root / "recording.wav"
     marker.write_bytes(b"user recording after commit")
+    case.status["state"] = "daemonDown"
     if busy:
         case.status["voice_chat_window_visible"] = True
 
@@ -321,9 +345,10 @@ def test_committed_cleanup_never_replays_or_rolls_back_data(transaction_case, mo
     inspect = case.migration.inspect_legacy_status_agent
     inspections = []
 
-    def checked(*args):
+    def checked(*args, **kwargs):
         inspections.append(True)
-        return inspect(*args)
+        assert args[1] == case.legacy / "status_agent.sock"
+        return inspect(*args, **kwargs)
 
     monkeypatch.setattr(case.migration, "inspect_legacy_status_agent", checked)
     output = io.BytesIO()

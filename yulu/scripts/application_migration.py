@@ -1890,7 +1890,8 @@ def run_migration_step(
             if isinstance(snapshot, dict):
                 retire_legacy_status_agent(
                     authority.legacy_status_snapshot(snapshot),
-                    legacy_root / "status_agent.sock", launchctl=launchctl
+                    legacy_root / "status_agent.sock", launchctl=launchctl,
+                    capture_retired=True,
                 )
             return authority._service_action("committed")
         if phase == "rolled_back":
@@ -4734,6 +4735,7 @@ def _legacy_status_pids(executable: Path) -> list[int]:
 
 def inspect_legacy_status_agent(
     snapshot: dict[str, dict[str, object]], socket_path: Path,
+    *, capture_retired: bool = False,
 ) -> LegacyStatusAgentProcess | None:
     executable = _legacy_status_executable(snapshot)
     if executable is None:
@@ -4756,7 +4758,8 @@ def inspect_legacy_status_agent(
         if _process_generation(pid) != generation:
             raise MigrationBlocked("legacy StatusAgent identity changed during status check")
         if (
-            status.get("ok") is not True or status.get("state") != "idle"
+            status.get("ok") is not True
+            or status.get("state") not in ({"idle", "daemonDown"} if capture_retired else {"idle"})
             or status.get("dictation_active") is not False
             or status.get("voice_chat_window_visible") is not False
             or status.get("launcher_pid") is not None
@@ -4787,10 +4790,17 @@ def _legacy_status_process_alive(process: LegacyStatusAgentProcess) -> bool:
 def retire_legacy_status_agent(
     snapshot: dict[str, dict[str, object]], socket_path: Path,
     *, launchctl: Callable[[list[str]], object] = _run_launchctl,
+    capture_retired: bool = False,
 ) -> None:
-    process = inspect_legacy_status_agent(snapshot, socket_path)
+    process = inspect_legacy_status_agent(snapshot, socket_path, capture_retired=capture_retired)
     if process is None:
         return
+    if capture_retired:
+        # A committed migration normally leaves the old menu in daemonDown.
+        # Missing IPC is not proof: require its retired launchd owner to be gone.
+        capture = launchctl(["print", f"gui/{os.geteuid()}/com.yulu.audiodaemon"])
+        if getattr(capture, "returncode", None) != 113:
+            raise MigrationBlocked("legacy Capture is not proven retired")
     observed = launchctl(["print", f"gui/{os.geteuid()}/com.yulu.statusagent"])
     if getattr(observed, "returncode", None) != 113:
         raise MigrationBlocked("legacy StatusAgent launcher is not proven stopped")
