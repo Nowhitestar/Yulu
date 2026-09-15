@@ -153,9 +153,11 @@ return to Yulu to test each selected capability; login alone does not prove read
 
 ### Install
 
-The consolidated [RC20 release candidate](https://github.com/Nowhitestar/Yulu/releases/tag/v0.23.0-rc.20)
+The consolidated [RC21 release candidate](https://github.com/Nowhitestar/Yulu/releases/tag/v0.23.0-rc.21)
 includes the migration, initialization, capture-package, native-startup and
-manual-sharing repairs. Final fresh-install and supported-upgrade acceptance
+manual-sharing repairs, plus developer-tool-free local Runtime Pack verification,
+immutable runtime import checks and safe retirement of the legacy menu-bar App.
+Final fresh-install and supported-upgrade acceptance
 remain in progress; it is not yet an accepted stable release.
 
 For an older candidate's database or silent-capture failure, see
