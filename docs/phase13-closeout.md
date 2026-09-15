@@ -1,6 +1,31 @@
-# Phase 13 closeout — active scope, updated 2026-09-14
+# Phase 13 closeout — accepted scope, updated 2026-09-15
 
-## Current checkpoint
+## Current closeout scope
+
+The owner explicitly accepted physical-Mac closeout and stopping further VM
+repetitions on September 15. This decision supersedes the historical test matrix
+and remaining-work lists below; they are retained evidence, not an active queue.
+
+- Accepted candidate: `v0.23.0-rc.21`, source
+  `ef9828a3d241acde0d05c8908e1d7b4023878760`, build 1666. Public artifact
+  verification and physical-Mac whole-App/service/normal-reopen/data readback
+  pass under #170. Existing functional evidence retains its original scope.
+- Stable `v0.23.0` uses that same source, build 1667. #171 records actual
+  publication, signed feed/public guidance and the normal whole-App update;
+  #145 records final phase closure. Do not infer their state from an older
+  checkpoint below.
+- Exact final-public default-local-runtime fresh installation and complete
+  `v0.22.2` upgrade were **not re-run end to end**. Additional cloud, lifecycle
+  and rollback repetitions are waived, not passed. The stopped VM and its data
+  are retained; do not restart it for this superseded matrix.
+- No new model call, OAuth login, Notion write, password-store inspection,
+  permission reset, silent provider change or signed-App patch is required.
+  Current-process Sharing Readiness is separate from retained verified receipts.
+
+See [the release acceptance scope](release-notes/v0.23.0.md#acceptance-scope)
+and #170/#171 for current evidence and explicitly accepted validation risks.
+
+## Historical checkpoints through September 14 — not current gates
 
 - Public `v0.23.0-rc.20` is published and independently verified. Its exact
   source is `edb5a7a4b932db7ceccd1cfa12b8611aa11f41d8`, build **1636**.

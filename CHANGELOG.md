@@ -4,6 +4,15 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0](https://github.com/Nowhitestar/Yulu/releases/tag/v0.23.0) (2026-09-15)
+
+Stable promotion of the accepted RC21 source, with Sparkle build 1667 and no
+intervening product changes. The release includes the self-contained signed DMG,
+resumable onboarding and migration, independent providers and manual-only sharing.
+See [release notes and acceptance scope](docs/release-notes/v0.23.0.md) for the
+reused evidence and explicitly accepted validation risks. The candidate history
+below is retained; it is not a new validation queue.
+
 ## [0.23.0-rc.21](https://github.com/Nowhitestar/Yulu/compare/v0.23.0-rc.20...v0.23.0-rc.21) (2026-09-15)
 
 

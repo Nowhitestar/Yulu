@@ -1,22 +1,29 @@
 # Gate stable on an accepted RC and current guidance
 
-Yulu publishes `v0.23.0` stable only from the same source commit as an accepted
-`v0.23.0-rc.21`, after green CI, real fresh-install and `v0.22.2` upgrade checks
-on the required Apple Silicon environment, and read-back of current repository,
-GitHub, and website guidance. The macOS 13 deployment target remains checked but
-macOS 13 arm64 is not an acceptance environment for this release.
+Yulu publishes `v0.23.0` stable only from the same source commit as accepted
+`v0.23.0-rc.21`: `ef9828a3d241acde0d05c8908e1d7b4023878760`. Candidate build
+1666 becomes stable build 1667 without intervening product changes. CI and
+signed public-artifact verification remain required, followed by live stable
+feed/guidance readback and the normal whole-App update before phase closure.
 
-Acceptance starts from a quarantined public DMG on a clean machine without
-Homebrew, host Node, host Python, or Xcode; it covers drag-to-Applications,
-Gatekeeper, service and permission recovery, Core Activation through transcript
-and summary, restart and login, supported Agent OAuth, Calendar, Test Share,
-stable upgrade without duplicate services, RC-to-stable update, and proof that
-the signed App remains immutable while running.
+## September 15 acceptance decision
 
-The next consolidated candidate includes the no-developer-tools Runtime Pack
-check and read-only import probe repairs; the previous public candidate cannot
-be promoted without them. This pins the intended promotion source; it is not an
-acceptance decision or publication authorization. Reuse applicable unchanged
-capability evidence as recorded in `docs/phase13-closeout.md`. Do not inspect password stores or copy
-credentials: use the product's non-secret connection status and authorized
-functional checks, and state any preservation claim those checks cannot prove.
+The project owner explicitly accepted stopping VM repetitions and closing on
+the existing physical Mac. #170 records the completed public-RC21 artifact,
+installed-service, normal reopen and data-preservation checks. Applicable
+recording, transcription, summary and manual-sharing evidence is reused with
+its original version and scope. No new OAuth login or external share is needed.
+
+The exact public RC21 default-local-runtime fresh-install journey and full
+public `v0.22.2` upgrade were **not re-run end to end**. Existing internal-App,
+genuine-legacy and component evidence is retained, not relabeled. Additional
+cloud, lifecycle and rollback repetitions are accepted residual validation
+risks, not passes or a new execution queue. This decision supersedes this ADR's
+earlier full fresh-machine matrix. The VM stays stopped. macOS 13 remains a
+deployment target, not an acceptance environment.
+
+#171 owns stable publication and its separate public update checks. Current
+evidence boundaries are summarized in `docs/release-notes/v0.23.0.md`; detailed
+dated history remains in `docs/phase13-closeout.md`. Do not inspect password
+stores or copy credentials, silently switch providers, reset permissions,
+patch signed Apps or replay external writes to improve a status badge.
