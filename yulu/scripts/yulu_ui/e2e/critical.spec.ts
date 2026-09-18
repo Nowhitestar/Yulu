@@ -137,9 +137,8 @@ test("Sidebar: single Recordings entry, no Voicemails/Meetings, no counts", asyn
   await expect(page.locator(".sidebar a", { hasText: /^Meetings$/ })).toHaveCount(0);
   await expect(page.locator('.sidebar a[href="/settings"]')).toHaveCount(1);
   await expect(page.locator('.sidebar a[href="/health"]')).toHaveCount(1);
-  // Bottom region reports the local runtime rather than duplicating nav links.
-  const bottom = page.locator('[data-testid="sidebar-bottom"]');
-  await expect(bottom).toContainText("Local Engine");
+  // Readiness is now reported by the capability checks on Runtime status.
+  await expect(page.locator('[data-testid="sidebar-bottom"]')).toHaveCount(0);
 });
 
 test("Recordings — list renders + clicking a row opens reader", async ({ page }) => {
@@ -189,11 +188,12 @@ test("GlobalSearch popover opens via ⌘K, lists results, closes on Esc", async 
 test("Settings — Agent-native categories render current detail sections", async ({ page }) => {
   await page.goto("/settings");
   await expect(page).toHaveURL(/\/settings\/general$/);
-  await expect(page.getByTestId("settings-category")).toHaveCount(6);
-  await expect(page.getByRole("heading", { name: "Host capabilities", exact: true })).toBeVisible();
+  await expect(page.getByTestId("settings-category")).toHaveCount(5);
+  await expect(page.getByRole("heading", { name: "Host capabilities", exact: true })).toBeHidden();
   await expect(page.getByRole("heading", { name: "General", exact: true })).toBeVisible();
   await page.goto("/settings/audio");
-  await expect(page.getByRole("heading", { name: "Audio", exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/recording#audio$/);
+  await expect(page.getByRole("heading", { name: "Recording", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Storage", exact: true })).toBeVisible();
 });
 
@@ -213,8 +213,8 @@ test("Settings — Agent Connection Center is authoritative and honors exact rem
   });
 
   await page.goto("/settings/llm?connection=direct-xai&capability=summary");
-  await expect(page).toHaveURL(/\/settings\/llm\?connection=direct-xai&capability=summary$/);
-  await expect(page.getByRole("heading", { name: "Agent Connection Center", exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/connections\?connection=direct-xai&capability=summary#ai-connections$/);
+  await expect(page.getByRole("heading", { name: "Accounts & connections", exact: true })).toBeVisible();
   const target = page.locator("#agent-connection-direct-xai-summary");
   await expect(target).toBeFocused();
   await expect(target).toHaveAttribute("aria-current", "location");
@@ -230,7 +230,7 @@ test("Settings — Agent Connection Center is authoritative and honors exact rem
   await page.route("**/trpc/config.get*", (route) => fulfill(route, { ui: { language: "zh" } }));
   await page.addInitScript(() => localStorage.setItem("yulu_ui.lang", "zh"));
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Agent 连接中心", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "账号与连接", exact: true })).toBeVisible();
   expect(probes).toBe(0);
 });
 
@@ -254,39 +254,33 @@ test("Settings — capabilities remain readable at the native default window siz
       expect(bounds, `${capability} must be rendered at ${width}px`).not.toBeNull();
       expect.soft(bounds!.width, `${capability} must fit readable controls at ${width}px`).toBeGreaterThanOrEqual(180);
     }
-    const detail = page.locator(".masterdetail-detail");
+    const detail = page.locator(".settings-content");
     const overflow = await detail.evaluate((element) => element.scrollWidth - element.clientWidth);
     expect.soft(overflow, `connection controls must not need horizontal scrolling at ${width}px`).toBeLessThanOrEqual(1);
     await page.screenshot({ path: test.info().outputPath(`settings-${width}.png`) });
   }
 
-  await page.setViewportSize({ width: 1440, height: 680 });
-  const settings = page.locator(".settings-masterdetail");
-  const pane = settings.locator(".rs-pane");
-  const separator = settings.getByRole("separator");
-  await expect(pane).toHaveCSS("width", "360px");
-  const handle = await separator.boundingBox();
-  expect(handle).not.toBeNull();
-  await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(handle!.x + handle!.width / 2 + 80, handle!.y + handle!.height / 2);
-  await page.mouse.up();
-  await expect(pane).toHaveCSS("width", "440px");
-
-  for (const width of [960, 390]) {
+  const settings = page.locator(".settings-page");
+  const navigation = settings.locator(".settings-navigation");
+  for (const width of [1440, 960, 390]) {
     await page.setViewportSize({ width, height: 680 });
-    await expect(separator).toBeHidden();
-    await settings.locator('a[href="/settings/audio"]').click();
-    await expect(page.getByRole("heading", { name: "Audio", exact: true })).toBeVisible();
-    await settings.locator('a[href="/settings/llm"]').click();
-    await expect(page.getByRole("heading", { name: "Agent Connection Center", exact: true })).toBeVisible();
+    if (width < 760) {
+      await expect(navigation).toBeHidden();
+      await settings.getByRole("link", { name: "All settings", exact: true }).click();
+    }
+    await expect(navigation).toBeVisible();
+    await expect(navigation.getByTestId("settings-category")).toHaveCount(5);
+    await navigation.locator('a[href="/settings/recording"]').click();
+    await expect(page.getByRole("heading", { name: "Recording & notes", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Recording", exact: true })).toBeVisible();
+    if (width < 760) await settings.getByRole("link", { name: "All settings", exact: true }).click();
+    await navigation.locator('a[href="/settings/connections"]').click();
+    await expect(page.getByRole("heading", { name: "Accounts & connections", exact: true })).toBeVisible();
   }
-
-  await page.setViewportSize({ width: 1440, height: 680 });
-  await expect(separator).toBeVisible();
-  await expect(pane).toHaveCSS("width", "440px");
   await page.reload();
-  await expect(pane).toHaveCSS("width", "440px");
+  await expect(page.getByRole("heading", { name: "Accounts & connections", exact: true })).toBeVisible();
+  await expect(navigation).toBeHidden();
+  await expect(settings.getByRole("link", { name: "All settings", exact: true })).toBeVisible();
 });
 
 test("Agent Console preserves a pinned pause and only retries after an explicit action", async ({ page }) => {
@@ -340,6 +334,7 @@ test("Agent Console preserves a pinned pause and only retries after an explicit 
   });
 
   await page.goto("/agent-console");
+  await page.getByRole("button", { name: "Conversation history", exact: true }).click();
   await page.getByText("Paused xAI E2E").click();
   await expect(page.getByText("Provider paused", { exact: true })).toHaveAttribute("role", "alert");
   await expect(page.getByText("xAI · grok-4.6-exact failed. Yulu did not switch providers.")).toBeVisible();
@@ -401,6 +396,7 @@ test("Agent Console repairs a deleted pinned connection through a focused Settin
   }));
 
   await page.goto("/agent-console");
+  await page.getByRole("button", { name: "Conversation history", exact: true }).click();
   await page.getByText("Deleted connection E2E").click();
   await expect(page.getByText("Provider paused", { exact: true })).toHaveAttribute("role", "alert");
   await expect(page.getByText("Codex · gpt-5.6-sol failed. Yulu did not switch providers.")).toBeVisible();
@@ -413,7 +409,7 @@ test("Agent Console repairs a deleted pinned connection through a focused Settin
     "/settings/llm?connection=codex-deleted&capability=conversation",
   );
   await repair.click();
-  await expect(page).toHaveURL(/\/settings\/llm\?connection=codex-deleted&capability=conversation$/);
+  await expect(page).toHaveURL(/\/settings\/connections\?connection=codex-deleted&capability=conversation#ai-connections$/);
   const tombstone = page.getByTestId("missing-remediation-connection");
   await expect(tombstone).toBeFocused();
   await expect(tombstone).toHaveAttribute("id", "agent-connection-codex-deleted-conversation");
@@ -443,9 +439,11 @@ test("Knowledge/Glossary — proper-noun editor renders", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Add", exact: true })).toBeDisabled();
 });
 
-test("Health — defaults to Doctor and exposes the current daemon grid", async ({ page }) => {
+test("Health — folds diagnostics by default and exposes the current daemon grid", async ({ page }) => {
   await page.goto("/health");
   await expect(page.locator('[data-testid="health-summary"]')).toBeVisible();
+  await expect(page.locator('[data-testid="tab-doctor"]')).toHaveCount(0);
+  await page.getByRole("button", { name: /Advanced diagnostics/ }).click();
   await expect(page.locator('[data-testid="tab-doctor"][aria-selected="true"]')).toBeVisible();
   await page.locator('[data-testid="tab-daemons"]').click();
   await expect(page).toHaveURL(/\/health#daemons$/);
