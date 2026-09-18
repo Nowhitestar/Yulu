@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.24.0](https://github.com/Nowhitestar/Yulu/compare/v0.23.0...v0.24.0) (2026-09-18)
+
+
+### Features
+
+* restore meeting reminders and simplify the workspace ([dffb5cf](https://github.com/Nowhitestar/Yulu/commit/dffb5cfc4c18980512837c14e375cc18235e30d7))
+
 ## [0.23.0](https://github.com/Nowhitestar/Yulu/releases/tag/v0.23.0) (2026-09-15)
 
 Stable promotion of the accepted RC21 source, with Sparkle build 1667 and no
