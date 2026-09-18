@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { CalendarDays, Check, ChevronDown } from "lucide-react";
 import { Link } from "react-router";
 import { trpc } from "../../trpc.js";
 import { useT } from "../../i18n/LanguageProvider.js";
+import { AdvancedDisclosure } from "./AdvancedDisclosure.js";
 
 type SourceSelection = { source: "macos" | "gog"; account: string | null };
 
@@ -9,165 +11,137 @@ export function CalendarSourceSection() {
   const t = useT();
   const utils = trpc.useUtils();
   const sources = trpc.integrations.calendarSources.useQuery(undefined, { retry: false });
-  const onboarding = trpc.onboarding.status.useQuery(undefined, { retry: false });
+  const schedule = trpc.scheduler.overview.useQuery(undefined, { retry: false, refetchInterval: 30_000 });
   const selectSource = trpc.integrations.selectCalendarSource.useMutation();
   const probeSource = trpc.integrations.probeCalendarSource.useMutation();
   const adoptSource = trpc.onboarding.adoptCalendarSource.useMutation();
-  const deferSource = trpc.onboarding.deferOptionalCapability.useMutation();
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const accounts = trpc.integrations.accountList.useQuery(undefined, {
-    enabled: advancedOpen,
-    retry: false,
-  });
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [googleOpen, setGoogleOpen] = useState(false);
+  const accounts = trpc.integrations.accountList.useQuery(undefined, { enabled: googleOpen, retry: false });
   const [account, setAccount] = useState("");
-  const [selectionOverride, setSelectionOverride] = useState<SourceSelection | null>(null);
-  const [readinessOverride, setReadinessOverride] = useState<Awaited<ReturnType<typeof probeSource.mutateAsync>> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const selection = sources.data?.selectedSource;
+  const readiness = sources.data?.readiness;
 
-  const selection = selectionOverride ?? sources.data?.selectedSource ?? null;
-  const readiness = readinessOverride ?? sources.data?.readiness;
-  const outcome = onboarding.data?.optionalCapabilities.find((item) => item.id === "calendar-source")?.outcome ?? null;
-
-  const refresh = async () => {
-    await Promise.all([
-      utils.integrations.calendarSources.invalidate(),
-      utils.onboarding.status.invalidate(),
-    ]);
-  };
-  const run = async <T,>(action: () => Promise<T>, onSuccess?: (result: T) => void) => {
+  const connect = async (next: SourceSelection, changeSource: boolean) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
     setError(null);
+    setSuccess(false);
     try {
-      const result = await action();
-      onSuccess?.(result);
-      await refresh();
+      if (changeSource) {
+        const result = await selectSource.mutateAsync(next);
+        utils.integrations.calendarSources.setData(undefined, (current) => current && ({
+          ...current, selectedSource: result.selection, readiness: result.readiness,
+        }));
+        if (result.restartErrors.length) throw new Error(result.restartErrors.join("; "));
+      }
+      const result = await probeSource.mutateAsync();
+      if (result.source !== next.source) {
+        setError(t("settings.calendarSource.selectionChanged"));
+        return;
+      }
+      utils.integrations.calendarSources.setData(undefined, (current) => current && ({ ...current, readiness: result }));
+      if (result.status !== "ready") return;
+      // Preserve the verified-adoption contract; never adopt a failed or stale probe.
+      await adoptSource.mutateAsync();
+      setSuccess(true);
+      setPickerOpen(false);
+      setGoogleOpen(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      await Promise.allSettled([
+        utils.integrations.calendarSources.invalidate(),
+        utils.onboarding.status.invalidate(),
+        utils.scheduler.overview.invalidate(),
+      ]);
+      setBusy(false);
+      inFlight.current = false;
     }
   };
-  const choose = (next: SourceSelection) => void run(
-    () => selectSource.mutateAsync(next),
-    (result) => {
-      setSelectionOverride(next);
-      setReadinessOverride(result.readiness);
-      if (result.restartErrors.length > 0) {
-        setError(t("settings.calendarSource.restartFailed", { error: result.restartErrors.join("; ") }));
-      }
-    },
-  );
 
-  if (sources.isPending) return <section className="settings-section"><p>{t("settings.calendarSource.loading")}</p></section>;
+  if (sources.isPending) return <section className="settings-section"><p role="status">{t("settings.calendarSource.loading")}</p></section>;
   if (sources.isError || !sources.data) {
-    return <section className="settings-section"><p role="alert">{t("settings.calendarSource.unavailable")}</p></section>;
+    return <section className="settings-section"><p role="alert">{t("settings.calendarSource.unavailable")}</p><button className="settings-action" onClick={() => void sources.refetch()}>{t("settings.retry")}</button></section>;
   }
 
+  const status = busy ? "checking" : readiness?.status ?? "untested";
+  const sourceLabel = selection ? t(`settings.calendarSource.${selection.source}.title`) : t("settings.calendarSource.notConnected");
+  const updatedAt = schedule.data?.updatedAt;
+  const updateDate = updatedAt ? new Date(updatedAt) : null;
+  const validUpdate = updateDate && Number.isFinite(updateDate.getTime());
+  const stopped = schedule.data && (!schedule.data.schedulerStatus?.pid || !schedule.data.calendarStatus?.pid);
+  const stale = validUpdate && Date.now() - updateDate.getTime() > 10 * 60_000;
+  const reasonKey = selection?.source === "gog" && readiness?.reason?.startsWith("authorization_")
+    ? "settings.calendarSource.failure.google_authorization"
+    : `settings.calendarSource.failure.${readiness?.reason ?? "enumeration_failed"}`;
+
   return (
-    <section className="settings-section calendar-source-section" id="calendar-source" aria-labelledby="calendar-source-heading">
-      <div className="settings-section-head">
-        <h2 className="settings-section-h" id="calendar-source-heading">{t("settings.calendarSource.heading")}</h2>
-        <p className="settings-section-sub">{t("settings.calendarSource.sub")}</p>
-      </div>
+    <section className="settings-section calendar-source-section" id="calendar-source" aria-labelledby="calendar-source-heading" aria-busy={busy}>
+      <h2 className="settings-section-h" id="calendar-source-heading">{t("settings.calendarSource.heading")}</h2>
+      <p className="settings-section-sub">{t("settings.calendarSource.sub")}</p>
 
-      <div className="calendar-source-outcome" data-outcome={outcome?.outcome ?? "pending"}>
-        <strong>{t("settings.calendarSource.outcome")}</strong>
-        <span>{outcome?.outcome === "adopted"
-          ? t("settings.calendarSource.outcome.adopted")
-          : outcome?.outcome === "deferred"
-            ? t("settings.calendarSource.outcome.deferred")
-            : t("settings.calendarSource.outcome.pending")}</span>
-      </div>
-
-      <article className="calendar-source-card" data-selected={selection?.source === "macos"}>
-        <div>
-          <span className="calendar-source-badge">{t("settings.calendarSource.recommended")}</span>
-          <h3>{t("settings.calendarSource.macos.title")}</h3>
-          <p>{t("settings.calendarSource.macos.detail")}</p>
-          <small>{t("settings.calendarSource.macos.runtime")}</small>
+      <div className="calendar-connection" data-status={status}>
+        <CalendarDays size={24} strokeWidth={1.5} aria-hidden="true" />
+        <div className="calendar-connection-copy">
+          <strong>{sourceLabel}</strong>
+          {selection?.account && <span className="calendar-account">{selection.account}</span>}
+          <span className="calendar-status" role="status"><i aria-hidden="true" />{selection ? t(`settings.calendarSource.status.${status}`) : t("settings.calendarSource.chooseHint")}</span>
         </div>
-        <button type="button" onClick={() => choose({ source: "macos", account: null })} disabled={selectSource.isPending}>
-          {t("settings.calendarSource.macos.use")}
+        {selection && <button className="settings-action" disabled={busy} onClick={() => void connect(selection, readiness?.reason === "service_activation_failed")}>{t("settings.calendarSource.test")}</button>}
+      </div>
+
+      {selection && <div className="calendar-sync" aria-live="polite">
+        <span>{schedule.isError ? t("settings.calendarSource.sync.unavailable") : validUpdate
+          ? t("settings.calendarSource.sync.updated", { time: updateDate.toLocaleString() })
+          : t("settings.calendarSource.sync.pending")}</span>
+        {(stopped || stale) && <span className="calendar-sync-warning">{t(stopped ? "settings.calendarSource.sync.stopped" : "settings.calendarSource.sync.stale")} <Link to="/health#scheduler">{t("settings.diagnostics.open")}</Link></span>}
+      </div>}
+
+      {success && <p className="calendar-success" role="status"><Check size={16} />{t("settings.calendarSource.success")}</p>}
+      {(error || readiness?.status === "failed") && <div className="calendar-source-error" role="alert">
+        {t(error ? "settings.calendarSource.actionFailed" : reasonKey)}
+      </div>}
+
+      {selection && <button className="settings-text-link calendar-source-advanced-toggle" aria-expanded={pickerOpen} disabled={busy} onClick={() => setPickerOpen((open) => !open)}>
+        {t("settings.calendarSource.change")}<ChevronDown size={14} aria-hidden="true" />
+      </button>}
+
+      {(!selection || pickerOpen) && <div className="calendar-source-picker">
+        <div className="calendar-source-option">
+          <div><strong>{t("settings.calendarSource.macos.title")}</strong><p>{t("settings.calendarSource.macos.detail")}</p></div>
+          <button className="settings-action primary" disabled={busy} onClick={() => void connect({ source: "macos", account: null }, true)}>{t("settings.calendarSource.macos.use")}</button>
+        </div>
+        <button className="settings-text-link" aria-expanded={googleOpen} disabled={busy} onClick={() => setGoogleOpen((open) => !open)}>
+          {t("settings.calendarSource.advanced.show")}<ChevronDown size={14} aria-hidden="true" />
         </button>
-      </article>
-
-      <button
-        type="button"
-        className="calendar-source-advanced-toggle"
-        aria-expanded={advancedOpen}
-        onClick={() => setAdvancedOpen((current) => !current)}
-      >
-        {advancedOpen ? t("settings.calendarSource.advanced.hide") : t("settings.calendarSource.advanced.show")}
-      </button>
-
-      {advancedOpen && (
-        <article className="calendar-source-card" data-selected={selection?.source === "gog"}>
-          <div>
-            <span className="calendar-source-badge advanced">{t("settings.calendarSource.advanced.badge")}</span>
-            <h3>{t("settings.calendarSource.gog.title")}</h3>
-            <p>{t("settings.calendarSource.gog.detail")}</p>
-            {!accounts.isPending && accounts.data?.ok && accounts.data.accounts.length > 0 && (
-              <select aria-label={t("settings.calendarSource.gog.account")} value={account} onChange={(event) => setAccount(event.currentTarget.value)}>
+        {googleOpen && <div className="calendar-source-option calendar-google-option">
+          <p>{t("settings.calendarSource.gog.detail")}</p>
+          {accounts.isPending ? <p role="status">{t("settings.calendarSource.accounts.loading")}</p> : accounts.data?.ok ? <>
+            {accounts.data.accounts.length ? <label className="calendar-account-picker">
+              {t("settings.calendarSource.gog.account")}
+              <select disabled={busy} value={account} onChange={(event) => setAccount(event.currentTarget.value)}>
                 <option value="">{t("settings.calendarSource.gog.choose")}</option>
                 {accounts.data.accounts.map((item) => <option key={item.email} value={item.email}>{item.email}</option>)}
               </select>
-            )}
-            {!accounts.isPending && accounts.data?.ok && accounts.data.accounts.length === 0 && (
-              <div className="calendar-source-oauth-guidance">
-                <small>{t("settings.calendarSource.gog.authorize")}</small>
-                <code>{t("settings.calendarSource.gog.authorize.command")}</code>
-              </div>
-            )}
-            {!accounts.isPending && !accounts.data?.ok && <small>{t("settings.calendarSource.gog.install")}</small>}
-          </div>
-          <button
-            type="button"
-            onClick={() => choose({ source: "gog", account })}
-            disabled={selectSource.isPending || !account}
-          >
-            {t("settings.calendarSource.gog.use")}
-          </button>
-        </article>
-      )}
+            </label> : <div className="calendar-source-oauth-guidance"><p>{t("settings.calendarSource.gog.authorize")}</p><code>{t("settings.calendarSource.gog.authorize.command")}</code></div>}
+            <button className="settings-action primary" disabled={busy || !account} onClick={() => void connect({ source: "gog", account }, true)}>{t("settings.calendarSource.gog.use")}</button>
+          </> : <p>{t("settings.calendarSource.gog.install")}</p>}
+          <button className="settings-text-link" disabled={busy || accounts.isFetching} onClick={() => void accounts.refetch()}>{t("settings.calendarSource.accounts.refresh")}</button>
+        </div>}
+      </div>}
 
-      <div className="calendar-source-readiness" data-status={readiness?.status ?? "untested"}>
-        <strong>{t("settings.calendarSource.readiness")}</strong>
-        <span>{readiness?.detail ?? t("settings.calendarSource.readiness.untested")}</span>
-        {readiness?.remediation && <small>{readiness.remediation}</small>}
-        <button
-          type="button"
-          disabled={!selection || probeSource.isPending}
-          onClick={() => void run(() => probeSource.mutateAsync(), setReadinessOverride)}
-        >
-          {t("settings.calendarSource.test")}
-        </button>
-      </div>
-
-      {!outcome && (
-        <div className="calendar-source-onboarding-actions">
-          <button
-            type="button"
-            disabled={readiness?.status !== "ready" || adoptSource.isPending}
-            onClick={() => void run(() => adoptSource.mutateAsync())}
-          >
-            {t("onboarding.action.adoptCalendarSource")}
-          </button>
-          <button
-            type="button"
-            disabled={deferSource.isPending}
-            onClick={() => void run(() => deferSource.mutateAsync({ capability: "calendar-source" }))}
-          >
-            {t("settings.calendarSource.defer")}
-          </button>
-        </div>
-      )}
-
-      <aside className="calendar-source-connector-boundary">
-        <strong>{t("settings.calendarSource.connector.title")}</strong>
-        <p>{t("settings.calendarSource.connector.detail")}</p>
-        <Link to="/settings/integrations#agent-calendar-connector">
-          {t("settings.calendarSource.connector.open")}
-        </Link>
-      </aside>
-
-      {error && <p role="alert" className="calendar-source-error">{error}</p>}
+      <AdvancedDisclosure title={t("settings.calendarSource.details")} note="">
+        <p>{readiness?.detail}</p>
+        {readiness?.remediation && <p>{readiness.remediation}</p>}
+        {error && <p className="calendar-source-error">{error}</p>}
+        <p>{t("settings.calendarSource.connector.detail")} <Link to="/settings/connections#agent-calendar-connector">{t("settings.calendarSource.connector.open")}</Link></p>
+      </AdvancedDisclosure>
     </section>
   );
 }

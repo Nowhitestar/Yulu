@@ -102,26 +102,59 @@ afterEach(() => {
 });
 
 describe("AgentCalendarConnectorSection", () => {
-  it("selects an Agent Connection, runs only the read-only probe, and adopts or defers independently", async () => {
+  it("checks the explicit selection before enabling access in one action", async () => {
     const user = userEvent.setup();
     renderSection();
 
-    expect(screen.getByRole("heading", { name: "Agent Calendar Connector" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Calendar access for AI" })).toBeInTheDocument();
     expect(screen.getByText(/never creates, updates, or deletes calendar content/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Adopt proven Agent Calendar Connector" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Check and enable" })).toBeDisabled();
+    expect(calendarConnector.probe).not.toHaveBeenCalled();
 
-    await user.selectOptions(screen.getByLabelText("Agent Connection"), "codex");
+    await user.selectOptions(screen.getByLabelText("AI account"), "codex");
     await user.clear(screen.getByLabelText("Calendar connector name"));
     await user.type(screen.getByLabelText("Calendar connector name"), "google_calendar");
-    await user.click(screen.getByRole("button", { name: "Use this Agent Calendar Connector" }));
-    await user.click(screen.getByRole("button", { name: "Test read-only connector access" }));
-    await user.click(screen.getByRole("button", { name: "Adopt proven Agent Calendar Connector" }));
-    await user.click(screen.getByRole("button", { name: "Defer Agent Calendar Connector" }));
+    await user.click(screen.getByRole("button", { name: "Check and enable" }));
+    await vi.waitFor(() => expect(calendarConnector.adopt).toHaveBeenCalledOnce());
 
     expect(calendarConnector.select).toHaveBeenCalledWith({ connectionId: "codex", connector: "google_calendar" });
     expect(calendarConnector.probe).toHaveBeenCalledWith();
     expect(calendarConnector.adopt).toHaveBeenCalledWith();
+    expect(calendarConnector.defer).not.toHaveBeenCalled();
+  });
+
+  it("does not enable access when the check fails", async () => {
+    calendarConnector.probe.mockResolvedValueOnce({
+      selection: { connectionId: "codex", connector: "google_calendar" },
+      readiness: { status: "failed", failure: "authorization", detail: "Access denied", remediation: "Sign in again", evidence: null },
+    } as never);
+    renderSection();
+    await userEvent.selectOptions(screen.getByLabelText("AI account"), "codex");
+    await userEvent.clear(screen.getByLabelText("Calendar connector name"));
+    await userEvent.type(screen.getByLabelText("Calendar connector name"), "google_calendar");
+    await userEvent.click(screen.getByRole("button", { name: "Check and enable" }));
+    await vi.waitFor(() => expect(screen.getByText("Access denied")).toBeInTheDocument());
+    expect(calendarConnector.adopt).not.toHaveBeenCalled();
+  });
+
+  it("does not enable a different connection returned by the check", async () => {
+    calendarConnector.probe.mockResolvedValueOnce({
+      selection: { connectionId: "another-account", connector: "google_calendar" },
+      readiness: { status: "ready", failure: null, detail: "Ready", remediation: "", evidence: null },
+    } as never);
+    renderSection();
+    await userEvent.selectOptions(screen.getByLabelText("AI account"), "codex");
+    await userEvent.click(screen.getByRole("button", { name: "Check and enable" }));
+    await vi.waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("calendar changed"));
+    expect(calendarConnector.adopt).not.toHaveBeenCalled();
+  });
+
+  it("can defer an optional calendar without selecting or testing a connection", async () => {
+    renderSection();
+    await userEvent.click(screen.getByRole("button", { name: "Set up later" }));
     expect(calendarConnector.defer).toHaveBeenCalledWith({ capability: "agent-calendar-connector" });
+    expect(calendarConnector.select).not.toHaveBeenCalled();
+    expect(calendarConnector.probe).not.toHaveBeenCalled();
   });
 
   it("shows the exact failure scope and actionable remediation", () => {
@@ -144,7 +177,7 @@ describe("AgentCalendarConnectorSection", () => {
     calendarConnector.query.isPending = true;
     calendarConnector.data.selection = { connectionId: "codex", connector: "google_calendar" };
     const rendered = renderSection();
-    expect(screen.queryByLabelText("Agent Connection")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("AI account")).not.toBeInTheDocument();
 
     calendarConnector.query.isPending = false;
     rendered.rerender(
@@ -155,7 +188,7 @@ describe("AgentCalendarConnectorSection", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByLabelText("Agent Connection")).toHaveValue("codex");
+    expect(screen.getByLabelText("AI account")).toHaveValue("codex");
     expect(screen.getByLabelText("Calendar connector name")).toHaveValue("google_calendar");
   });
 });

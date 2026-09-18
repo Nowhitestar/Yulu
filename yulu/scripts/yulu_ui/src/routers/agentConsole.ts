@@ -393,6 +393,14 @@ async function recordingState(statusAgentSock: string) {
 }
 
 export const agentConsoleRouter = router({
+  meetings: publicProcedure.query(({ ctx }) => recentTasks(ctx.paths.moviesDir, ctx.host)),
+
+  connectors: publicProcedure.query(({ ctx }) => {
+    const config = ctx.config.read();
+    const runtime = resolveAgentRuntime(config, { scriptDir: ctx.paths.scriptDir, moviesDir: ctx.paths.moviesDir });
+    return agentPluginOverview(config, { agent: selectedConsoleAgent(config, ctx.paths.scriptDir, ctx.paths.moviesDir), agentReady: !runtime.disabledReason });
+  }),
+
   overview: publicProcedure.query(async ({ ctx }) => {
     const config = ctx.config.read();
     const runtime = resolveAgentRuntime(config, { scriptDir: ctx.paths.scriptDir, moviesDir: ctx.paths.moviesDir });

@@ -1,205 +1,140 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { LanguageProvider } from "../../web/src/i18n/LanguageProvider.js";
+import type { CalendarSourceReadiness, SelectedCalendarSource } from "../../src/calendarSources.js";
 
-const calendar = vi.hoisted(() => ({
-  select: vi.fn(async () => ({
-    restartErrors: [],
-    readiness: {
-      status: "untested",
-      source: "macos",
-      reason: null,
-      detail: "The selected Calendar Source has not been tested",
-      remediation: "Run the Calendar Source test",
-      evidence: null,
-    },
-  })),
-  probe: vi.fn(async () => ({
-    status: "ready",
-    source: "macos",
-    reason: null,
-    detail: "macOS Calendar is ready (0 events in the test window)",
-    remediation: "",
-    evidence: {
-      capability: "calendar-source",
-      source: "macos",
-      adapter: "eventkit",
-      selectionFingerprint: "a".repeat(64),
-      accessGranted: true,
-      enumerationSucceeded: true,
-      eventCount: 0,
-      windowStart: "2026-08-29T00:00:00.000Z",
-      windowEnd: "2026-08-30T00:00:00.000Z",
-      testedAt: "2026-08-29T00:00:00.000Z",
-    },
-  })),
-  adopt: vi.fn(async () => ({})),
-  defer: vi.fn(async () => ({})),
-  invalidateSources: vi.fn(async () => ({})),
-  invalidateOnboarding: vi.fn(async () => ({})),
-  accountQueryInputs: [] as unknown[],
-  accountResult: { ok: true, accounts: [{ email: "me@example.com", services: ["calendar"] }] } as {
-    ok: boolean;
-    accounts: Array<{ email: string; services: string[] }>;
-  },
-}));
+const calendar = vi.hoisted(() => {
+  const untested: CalendarSourceReadiness = { status: "untested", source: null, reason: null, detail: "Select a source", remediation: "", testedAt: null, evidence: null };
+  const ready: CalendarSourceReadiness = {
+    ...untested, status: "ready", source: "macos", detail: "Access verified", testedAt: "2026-09-17T00:00:00Z",
+    evidence: { capability: "calendar-source", source: "macos", adapter: "eventkit", selectionFingerprint: "a".repeat(64), accessGranted: true, enumerationSucceeded: true, eventCount: 0, window: { start: "2026-09-17T00:00:00Z", end: "2026-09-18T00:00:00Z" }, testedAt: "2026-09-17T00:00:00Z" },
+  };
+  return {
+    untested, ready,
+    view: { selectedSource: null as SelectedCalendarSource | null, readiness: untested, sources: [] },
+    select: vi.fn(async (selection: SelectedCalendarSource) => ({ selection, restartErrors: [] as string[], readiness: { ...untested, source: selection.source } })),
+    probe: vi.fn(async () => ready),
+    adopt: vi.fn(async () => ({})),
+    invalidate: vi.fn(async () => ({})),
+    accountQueryInputs: [] as unknown[],
+    accountResult: { ok: true, accounts: [{ email: "me@example.com", services: ["calendar"] }] },
+    refreshAccounts: vi.fn(),
+    schedule: { updatedAt: new Date().toISOString(), schedulerStatus: { pid: 123 }, calendarStatus: { pid: 456 } },
+  };
+});
 
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     integrations: {
-      calendarSources: {
-        useQuery: () => ({
-          isPending: false,
-          isError: false,
-          data: {
-            selectedSource: null,
-            sources: [
-              { id: "macos", label: "macOS Calendar", recommended: true, advanced: false, externalRuntime: false },
-              { id: "gog", label: "Google Calendar via gog", recommended: false, advanced: true, externalRuntime: true },
-            ],
-            readiness: {
-              status: "untested",
-              source: null,
-              reason: null,
-              detail: "Select a Calendar Source",
-              remediation: "Choose macOS Calendar or the advanced gog source",
-              evidence: null,
-            },
-          },
-        }),
-      },
-      accountList: {
-        useQuery: (input: unknown, options: unknown) => {
-          calendar.accountQueryInputs.push({ input, options });
-          return { isPending: false, data: calendar.accountResult };
-        },
-      },
-      selectCalendarSource: { useMutation: () => ({ mutateAsync: calendar.select, isPending: false }) },
-      probeCalendarSource: { useMutation: () => ({ mutateAsync: calendar.probe, isPending: false }) },
+      calendarSources: { useQuery: () => ({ isPending: false, isError: false, data: calendar.view, refetch: calendar.invalidate }) },
+      accountList: { useQuery: (_input: unknown, options: unknown) => {
+        calendar.accountQueryInputs.push(options);
+        return { isPending: false, data: calendar.accountResult, refetch: calendar.refreshAccounts };
+      } },
+      selectCalendarSource: { useMutation: () => ({ mutateAsync: calendar.select }) },
+      probeCalendarSource: { useMutation: () => ({ mutateAsync: calendar.probe }) },
     },
-    onboarding: {
-      status: { useQuery: () => ({ data: { optionalCapabilities: [{ id: "calendar-source", outcome: null }] } }) },
-      adoptCalendarSource: { useMutation: () => ({ mutateAsync: calendar.adopt, isPending: false }) },
-      deferOptionalCapability: { useMutation: () => ({ mutateAsync: calendar.defer, isPending: false }) },
-    },
+    scheduler: { overview: { useQuery: () => ({ data: calendar.schedule }) } },
+    onboarding: { adoptCalendarSource: { useMutation: () => ({ mutateAsync: calendar.adopt }) } },
     useUtils: () => ({
-      integrations: { calendarSources: { invalidate: calendar.invalidateSources } },
-      onboarding: { status: { invalidate: calendar.invalidateOnboarding } },
+      integrations: { calendarSources: { invalidate: calendar.invalidate, setData: (_input: unknown, updater: (view: typeof calendar.view) => typeof calendar.view) => { calendar.view = updater(calendar.view); } } },
+      scheduler: { overview: { invalidate: calendar.invalidate } },
+      onboarding: { status: { invalidate: calendar.invalidate } },
     }),
   },
 }));
 
 import { CalendarSourceSection } from "../../web/src/components/settings/CalendarSourceSection.js";
 
-function renderSection() {
+function mount() {
   localStorage.setItem("yulu_ui.lang", "en");
-  return render(
-    <MemoryRouter>
-      <LanguageProvider>
-        <CalendarSourceSection />
-      </LanguageProvider>
-    </MemoryRouter>,
-  );
+  return render(<MemoryRouter><LanguageProvider><CalendarSourceSection /></LanguageProvider></MemoryRouter>);
 }
 
-afterEach(() => {
-  localStorage.clear();
-  calendar.select.mockClear();
-  calendar.probe.mockClear();
-  calendar.adopt.mockClear();
-  calendar.defer.mockClear();
-  calendar.invalidateSources.mockClear();
-  calendar.invalidateOnboarding.mockClear();
+beforeEach(() => {
+  vi.clearAllMocks();
+  calendar.view = { selectedSource: null, readiness: calendar.untested, sources: [] };
   calendar.accountQueryInputs.length = 0;
   calendar.accountResult = { ok: true, accounts: [{ email: "me@example.com", services: ["calendar"] }] };
+  calendar.schedule = { updatedAt: new Date().toISOString(), schedulerStatus: { pid: 123 }, calendarStatus: { pid: 456 } };
 });
 
-describe("CalendarSourceSection", () => {
-  it("presents macOS as the CLI-free primary path and keeps Agent Calendar Connector separate", () => {
-    renderSection();
-
-    expect(screen.getByRole("heading", { name: "Calendar Sources" })).toBeInTheDocument();
-    expect(screen.getByText("Recommended")).toBeInTheDocument();
-    expect(screen.getByText(/No external CLI required/)).toBeInTheDocument();
-    expect(screen.queryByText("Google Calendar via gog")).toBeNull();
-    expect(screen.getByRole("link", { name: "Open Agent Calendar Connector" }))
-      .toHaveAttribute("href", "/settings/integrations#agent-calendar-connector");
-    expect(screen.getByText(/does not establish Calendar Source readiness/)).toBeInTheDocument();
+describe("Calendar connection flow", () => {
+  it("does not mutate or discover Google accounts until an explicit action", () => {
+    mount();
+    expect(screen.getByRole("button", { name: "Connect macOS Calendar" })).toBeVisible();
+    expect(calendar.accountQueryInputs.at(-1)).toMatchObject({ enabled: false });
+    expect(calendar.select).not.toHaveBeenCalled();
+    expect(calendar.probe).not.toHaveBeenCalled();
+    expect(calendar.adopt).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Onboarding outcome/)).toBeNull();
   });
 
-  it("does not discover gog accounts until the user opens the advanced source", async () => {
-    const user = userEvent.setup();
-    renderSection();
-
-    expect(calendar.accountQueryInputs.at(-1)).toMatchObject({ options: { enabled: false } });
-    await user.click(screen.getByRole("button", { name: "Show advanced source" }));
-
-    expect(screen.getByText("Google Calendar via gog")).toBeInTheDocument();
-    expect(calendar.accountQueryInputs.at(-1)).toMatchObject({ options: { enabled: true } });
-  });
-
-  it("gives a fresh gog user an exact native OAuth next step", async () => {
-    calendar.accountResult = { ok: true, accounts: [] };
-    const user = userEvent.setup();
-    renderSection();
-
-    await user.click(screen.getByRole("button", { name: "Show advanced source" }));
-
-    expect(screen.getByText("gog auth add <email> --services calendar")).toBeInTheDocument();
-    expect(screen.getByText(/OAuth remains in gog/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Use gog Calendar" })).toBeDisabled();
-  });
-
-  it("keeps an unavailable optional gog runtime distinct from incomplete OAuth", async () => {
-    calendar.accountResult = { ok: false, accounts: [] };
-    const user = userEvent.setup();
-    renderSection();
-
-    await user.click(screen.getByRole("button", { name: "Show advanced source" }));
-
-    expect(screen.getByText(/optional gog runtime is unavailable/)).toBeInTheDocument();
-    expect(screen.queryByText("gog auth add <email> --services calendar")).toBeNull();
-  });
-
-  it("changes selection, probes, adopts, and defers only through explicit actions", async () => {
-    const user = userEvent.setup();
-    renderSection();
-
-    await user.click(screen.getByRole("button", { name: "Use macOS Calendar" }));
-    await user.click(screen.getByRole("button", { name: "Test selected Calendar Source" }));
-    await user.click(screen.getByRole("button", { name: "Adopt proven Calendar Source" }));
-    await user.click(screen.getByRole("button", { name: "Defer Calendar" }));
-
+  it("connects, verifies and adopts sequentially with one action; zero events are valid", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: "Connect macOS Calendar" }));
+    await waitFor(() => expect(calendar.adopt).toHaveBeenCalledOnce());
     expect(calendar.select).toHaveBeenCalledWith({ source: "macos", account: null });
-    expect(calendar.probe).toHaveBeenCalledWith();
-    expect(calendar.adopt).toHaveBeenCalledWith();
-    expect(calendar.defer).toHaveBeenCalledWith({ capability: "calendar-source" });
-    expect(calendar.invalidateSources).toHaveBeenCalled();
-    expect(calendar.invalidateOnboarding).toHaveBeenCalled();
+    expect(calendar.select.mock.invocationCallOrder[0]).toBeLessThan(calendar.probe.mock.invocationCallOrder[0]!);
+    expect(calendar.probe.mock.invocationCallOrder[0]).toBeLessThan(calendar.adopt.mock.invocationCallOrder[0]!);
+    expect(await screen.findByText("Connection checked")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Connect macOS Calendar" })).toBeNull();
   });
 
-  it("blocks adoption and shows the production service activation failure", async () => {
-    calendar.select.mockResolvedValueOnce({
-      restartErrors: ["com.yulu.calendar: service not found"],
-      readiness: {
-        status: "failed",
-        source: "macos",
-        reason: "service_activation_failed",
-        detail: "The production Calendar polling services did not activate",
-        remediation: "Repair or reinstall Yulu's Calendar services",
-        evidence: null,
-      },
-    } as never);
-    const user = userEvent.setup();
-    renderSection();
+  it("rechecks an existing source without reselecting or restarting it", async () => {
+    calendar.view.selectedSource = { source: "macos", account: null };
+    mount();
+    expect(screen.getByText("Configured · connection not checked")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Check connection" }));
+    await waitFor(() => expect(calendar.adopt).toHaveBeenCalledOnce());
+    expect(calendar.select).not.toHaveBeenCalled();
+  });
 
-    await user.click(screen.getByRole("button", { name: "Use macOS Calendar" }));
+  it("shows a useful permission failure and never adopts a failed probe", async () => {
+    calendar.probe.mockResolvedValueOnce({ ...calendar.untested, status: "failed", source: "macos", reason: "authorization_denied", detail: "Access denied" });
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: "Connect macOS Calendar" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Privacy & Security");
+    expect(calendar.adopt).not.toHaveBeenCalled();
+    expect(screen.getByText("Connection needs attention")).toBeVisible();
+  });
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Calendar services did not activate");
-    expect(screen.getByText("The production Calendar polling services did not activate"))
-      .toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Adopt proven Calendar Source" })).toBeDisabled();
+  it("stops before probing or adopting when reminder services fail to start", async () => {
+    calendar.select.mockResolvedValueOnce({ selection: { source: "macos", account: null }, restartErrors: ["com.yulu.calendar: not_running"], readiness: { ...calendar.untested, status: "failed", source: "macos", reason: "service_activation_failed" } });
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: "Connect macOS Calendar" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not finish connecting");
+    expect(calendar.probe).not.toHaveBeenCalled();
+    expect(calendar.adopt).not.toHaveBeenCalled();
+  });
+
+  it("never adopts a probe for a different selection", async () => {
+    calendar.probe.mockResolvedValueOnce({ ...calendar.ready, source: "gog" });
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: "Connect macOS Calendar" }));
+    await waitFor(() => expect(calendar.invalidate).toHaveBeenCalled());
+    expect(calendar.adopt).not.toHaveBeenCalled();
+  });
+
+  it("keeps account discovery on demand and provides a refresh after OAuth", async () => {
+    calendar.accountResult = { ok: true, accounts: [] };
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: "Connect Google Calendar directly" }));
+    expect(calendar.accountQueryInputs.at(-1)).toMatchObject({ enabled: true });
+    expect(screen.getByText("gog auth add <email> --services calendar")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Connect Google Calendar" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Refresh accounts" }));
+    expect(calendar.refreshAccounts).toHaveBeenCalledOnce();
+  });
+
+  it("shows existing Google selection, and reports a stale schedule independently from connection readiness", () => {
+    calendar.view = { selectedSource: { source: "gog", account: "me@example.com" }, sources: [], readiness: { ...calendar.ready, source: "gog" } };
+    calendar.schedule.updatedAt = "2020-01-01T00:00:00Z";
+    mount();
+    expect(screen.getByText("me@example.com")).toBeVisible();
+    expect(screen.getByText("Connection checked")).toBeVisible();
+    expect(screen.getByText(/schedule has not updated recently/)).toBeVisible();
   });
 });

@@ -185,6 +185,19 @@ function parseJsonObjects(raw: string): unknown[] {
 }
 
 export const recordingRouter = router({
+  // Read readiness only. Never start capture or expose the current recording path.
+  captureStatus: publicProcedure.query(async ({ ctx }) => {
+    const checkedAt = new Date().toISOString();
+    try {
+      const result = await ipcSend<unknown>(ctx.paths.audioDaemonSock, { action: "status" });
+      const status = z.object({
+        recording: z.boolean(), micReady: z.boolean(), sysReady: z.boolean(),
+      }).safeParse(result);
+      if (status.success) return { ...status.data, reachable: true, checkedAt };
+    } catch { /* A missing response is unknown, not evidence of a permission failure. */ }
+    return { reachable: false, recording: null, micReady: null, sysReady: null, checkedAt };
+  }),
+
   history: publicProcedure.query(({ ctx }) => readHistory(
     ctx.paths.durableDataDir,
     ctx.paths.legacyReadOnlyDataDir,

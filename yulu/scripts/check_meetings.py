@@ -11,6 +11,8 @@
 """
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -105,8 +107,15 @@ def _fetch_google(config, start, end):
     fmt_start = start.strftime("%Y-%m-%dT%H:%M:%S%z") if hasattr(start, 'strftime') else str(start)
     fmt_end = end.strftime("%Y-%m-%dT%H:%M:%S%z") if hasattr(end, 'strftime') else str(end)
 
+    executable = "gog"
+    if shutil.which(executable) is None:
+        for directory in (Path.home() / ".local/bin", Path("/opt/homebrew/bin"), Path("/usr/local/bin")):
+            candidate = directory / "gog"
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                executable = str(candidate)
+                break
     cmd = [
-        "gog",
+        executable,
         "--json",
         "--results-only",
         "--no-input",

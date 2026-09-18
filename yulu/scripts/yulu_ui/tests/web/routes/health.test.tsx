@@ -86,6 +86,10 @@ vi.mock("../../../web/src/trpc.js", () => {
   });
   return {
     trpc: {
+      config: { get: { useQuery: () => ({ data: { transcription: { engine: "local" }, agent_pipeline: { enabled: true, auto_process_recordings: true }, status_agent: { enabled: true }, calendars: [] } }) } },
+      recording: { captureStatus: { useQuery: () => ({ data: { reachable: true, micReady: true, sysReady: true, recording: false, checkedAt: new Date().toISOString() } }) }, state: { useQuery: () => ({ data: { state: "idle" } }) } },
+      agentConnections: { view: { useQuery: () => ({ data: { selections: { summary: { connectionId: null, model: "" }, transcription: { connectionId: null, model: "local" } }, connections: [] } }) } },
+      integrations: { calendarSources: { useQuery: () => ({ data: { selectedSource: null, readiness: { status: "untested" } } }) } },
       daemons: {
         health:  { useQuery: () => ({ data: HEALTH, isPending: false }) },
         restart: { useMutation: noopMutation },
@@ -97,7 +101,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       agentTasks: {
         list: { useQuery: () => ({ data: AGENT_TASKS, isPending: false, refetch: vi.fn() }) },
-        transcriptionHealth: { useQuery: () => ({ data: { available: true, paused: false, policyReason: null } }) },
+        transcriptionHealth: { useQuery: () => ({ data: { available: true, provider: "local", paused: false, policyReason: null } }) },
         retry: { useMutation: () => ({ mutate: retryMutate, mutateAsync: retryMutate, isPending: false }) },
         confirmNotionDelivery: { useMutation: noopMutation },
         abandonNotionDelivery: { useMutation: noopMutation },
@@ -127,6 +131,7 @@ vi.mock("../../../web/src/ws.js", () => ({
   nextBackoff: (n: number) => n,
 }));
 
+import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 import { Health } from "../../../web/src/routes/health.js";
 
 function wrap(initial = "/health") {
@@ -134,7 +139,7 @@ function wrap(initial = "/health") {
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[initial]}>
-        <Health />
+        <LanguageProvider><Health /></LanguageProvider>
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -147,7 +152,8 @@ describe("Health (consolidated)", () => {
   });
 
   it("renders control-surface tabs", () => {
-    const { getByTestId } = wrap();
+    const { getByTestId, getByRole } = wrap();
+    fireEvent.click(getByRole("button", { name: /高级诊断/ }));
     expect(getByTestId("tab-doctor")).toBeInTheDocument();
     expect(getByTestId("tab-queue")).toBeInTheDocument();
     expect(getByTestId("tab-scheduler")).toBeInTheDocument();
@@ -155,10 +161,12 @@ describe("Health (consolidated)", () => {
     expect(getByTestId("tab-logs")).toBeInTheDocument();
   });
 
-  it("defaults to Doctor tab", () => {
-    const { getByTestId } = wrap();
-    expect(getByTestId("tab-doctor").getAttribute("aria-selected")).toBe("true");
-    expect(getByTestId("tab-logs").getAttribute("aria-selected")).toBe("false");
+  it("starts with feature status and collapsed diagnostics", () => {
+    const { getByRole, queryByTestId, getByText } = wrap();
+    expect(getByRole("button", { name: /高级诊断/ })).toHaveAttribute("aria-expanded", "false");
+    expect(queryByTestId("tab-doctor")).toBeNull();
+    expect(getByText("麦克风、系统声音与录音控制已就绪。")).toBeInTheDocument();
+    expect(getByText("有 2 项功能待配置或检查")).toBeInTheDocument();
   });
 
   it("opens Logs tab when URL hash is #logs", () => {

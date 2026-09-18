@@ -14,6 +14,23 @@ describe("recordingRouter", () => {
     if (tempDir) { await rm(tempDir, { recursive: true, force: true }); tempDir = undefined; }
   });
 
+  it("reads capture prerequisites without revealing private recording paths", async () => {
+    fake = await startFakeSocket((req) => {
+      expect(req).toEqual({ action: "status" });
+      return { recording: false, micReady: true, sysReady: false, file: "/private/meeting.wav", micError: "private detail" };
+    });
+    const caller = createCaller(recordingRouter, { paths: { audioDaemonSock: fake.path } } as unknown as AppContext);
+    expect(await caller.captureStatus()).toEqual({ reachable: true, recording: false, micReady: true, sysReady: false, checkedAt: expect.any(String) });
+  });
+
+  it("treats missing and malformed capture responses as unknown", async () => {
+    fake = await startFakeSocket(() => ({ ok: true }));
+    const caller = createCaller(recordingRouter, { paths: { audioDaemonSock: fake.path } } as unknown as AppContext);
+    expect(await caller.captureStatus()).toMatchObject({ reachable: false, micReady: null, sysReady: null, recording: null });
+    const missing = createCaller(recordingRouter, { paths: { audioDaemonSock: "/tmp/yulu-no-capture.sock" } } as unknown as AppContext);
+    expect(await missing.captureStatus()).toMatchObject({ reachable: false, micReady: null });
+  });
+
   it("state() round-trips status from status_agent.sock", async () => {
     fake = await startFakeSocket((req) => {
       expect(req).toEqual({ action: "status" });

@@ -3,8 +3,8 @@
 事件驱动的会议提醒调度器（替代每分钟 cron 轮询）。
 
 工作原理：
-- 由 LaunchAgent 启动并保活，常驻后台
-- 读 ~/.config/yulu/schedule.json，把所有未来事件挂到内部堆
+- 由 App 内的提醒服务管理器启动并保活（兼容独立 LaunchAgent）
+- 读 Yulu 数据目录的 schedule.json，把所有未来事件挂到内部堆
 - 主循环 wait 到"下一个事件时间"再唤醒，CPU 占用 0
 - 收到 SIGHUP 时重新加载 schedule.json（schedule 命令写完文件后发送）
 - 事件触发时 fork 子进程跑 notify.py / meeting_daemon.py，daemon 不阻塞
@@ -158,7 +158,7 @@ class Scheduler:
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
+            start_new_session=os.environ.get("YULU_MANAGED_REMINDERS") != "1",
         )
 
 

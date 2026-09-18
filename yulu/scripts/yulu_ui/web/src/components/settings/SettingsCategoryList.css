@@ -1,48 +1,24 @@
-/* web/src/components/settings/SettingsCategoryList.css
-   Master column for the settings MasterDetail. Mirrors .recording-row styling
-   (borderless, hover=row-hover, active=accent-soft) using existing tokens. */
-.settings-category-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px;
-}
+.settings-category-list { display: flex; flex-direction: column; gap: 5px; }
 .settings-category-row {
-  min-height: 68px;
-  margin-bottom: 0;
-  border-radius: 12px;
-  padding: 11px 12px;
-}
-.settings-category-row.active {
-  background: var(--glass-3);
-  border-color: color-mix(in oklch, var(--accent) 42%, var(--edge));
-  box-shadow: var(--shadow-card);
-}
-.settings-category-desc {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 12px;
+  min-height: 60px;
+  border-radius: 10px;
   color: var(--fg-2);
-  line-height: 1.4;
-  margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-decoration: none;
 }
-
-@media (max-width: 760px) {
-  .settings-category-list {
-    flex-direction: row;
-    gap: 6px;
-    min-width: max-content;
-  }
-
-  .settings-category-row {
-    flex: 0 0 auto;
-    margin-bottom: 0;
-    padding: 6px 10px;
-    white-space: nowrap;
-  }
-
-  .settings-category-desc {
-    display: none;
-  }
+.settings-category-row > svg { flex-shrink: 0; }
+.settings-category-row:hover { background: var(--row-hover); color: var(--fg); }
+.settings-category-row.active { background: var(--accent-soft); color: var(--accent-on, var(--accent)); }
+.settings-category-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.settings-category-title { font-size: 13px; font-weight: 600; }
+.settings-category-desc { font-size: 11px; color: var(--fg-2); line-height: 1.45; }
+.settings-category-chevron { display: none; margin-left: auto; }
+@media (max-width: 759px) {
+  .settings-category-row { min-height: 76px; }
+  .settings-category-title { font-size: 15px; }
+  .settings-category-desc { font-size: 12px; }
+  .settings-category-chevron { display: block; }
 }

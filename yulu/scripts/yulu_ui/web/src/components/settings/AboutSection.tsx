@@ -18,7 +18,6 @@ export function AboutSection() {
   return (
     <section id="about" className="settings-section">
       <h2 className="settings-section-h">{t("settings.about.heading")}</h2>
-      <p className="settings-section-sub">{t("settings.about.sub")}</p>
 
       <div className="row">
         <div className="row-label">{t("settings.about.version")}</div>
@@ -26,13 +25,7 @@ export function AboutSection() {
         <div className="row-status" />
       </div>
 
-      {installSource && (
-        <div className="row">
-          <div className="row-label">{t("settings.about.installSource")}</div>
-          <div className="row-value"><span className="about-value">{installSource}</span></div>
-          <div className="row-status" />
-        </div>
-      )}
+      {installSource && <details className="settings-install-details"><summary>{t("settings.about.installSource")}</summary><p>{installSource}</p></details>}
     </section>
   );
 }

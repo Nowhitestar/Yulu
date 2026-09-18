@@ -1,164 +1,15 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import {
-  AlertCircle,
-  Archive,
-  ArrowUp,
-  Bot,
-  Calendar,
-  Check,
-  CheckCircle2,
-  ChevronDown,
-  Cpu,
-  Database,
-  FileText,
-  HardDrive,
-  Keyboard,
-  Languages,
-  ListChecks,
-  Loader2,
-  MessageSquare,
-  MoreHorizontal,
-  Pencil,
-  Pin,
-  Play,
-  Radar,
-  RefreshCw,
-  Send,
-  Share2,
-  ShieldCheck,
-  Sparkles,
-  Square,
-  Terminal,
-  Trash2,
-  X,
-  Zap,
-} from "lucide-react";
+import { Archive, ArrowUp, Bot, FileText, History, Loader2, MessageSquare, MoreHorizontal, Pencil, Pin, Plus, Settings2, Trash2, X } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useWsChannel } from "../ws.js";
-import { usePersistedSize } from "../hooks/usePersistedSize.js";
 import { MarkdownView } from "../components/MarkdownView.js";
 import { Logo } from "../components/Logo.js";
 import { useT } from "../i18n/LanguageProvider.js";
+import { taskActivity } from "../components/health/taskStatus.js";
 import "./agent-console.css";
 
 export const handle = { breadcrumb: "breadcrumb.agentConsole", filters: null };
-
-type StageState = "idle" | "waiting" | "running" | "done" | "failed";
-type SendDest = "notion" | "zulip" | null;
-type ConsoleMode = "ask" | "run";
-type AgentId = "codex" | "claude" | "hermes" | "openclaw";
-type AgentPluginId = "summary" | "notion" | "zulip" | "calendar";
-type AgentPluginStatus = "configured" | "unconfigured" | "unsupported";
-
-interface AgentTask {
-  id: string;
-  stem: string;
-  title: string;
-  recordedAt: string;
-  dayLabel: "today" | "yesterday" | "recent";
-  stages: {
-    record: StageState;
-    transcribe: StageState;
-    summarize: StageState;
-    send: StageState;
-  };
-  dest: SendDest;
-  error?: string;
-  hasTranscript: boolean;
-  hasSummary: boolean;
-}
-
-type DurableAgentTaskState =
-  | "queued"
-  | "awaiting_agent"
-  | "awaiting_policy"
-  | "running"
-  | "transcript_committed"
-  | "artifacts_committed"
-  | "sending"
-  | "delivery_reported"
-  | "delivery_unverified"
-  | "execution_unverified"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
-interface DurableAgentTask {
-  id: string;
-  recordingStem: string;
-  title: string;
-  trigger: "automatic" | "manual";
-  state: DurableAgentTaskState;
-  phase: string;
-  sendToNotion: boolean;
-  agentProvider: string;
-  attempt: number;
-  error: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface ConsoleAgent {
-  id: AgentId;
-  name: string;
-  command: string;
-  found: boolean;
-  path: string;
-  supported: boolean;
-  connected: boolean;
-  unavailableReason: string;
-  runtimePreview: string;
-}
-
-interface AgentPluginState {
-  id: AgentPluginId;
-  label: string;
-  added: boolean;
-  core: boolean;
-  status: AgentPluginStatus;
-  statusLabel: string;
-  resolvedPath: string;
-  detail: string;
-  configureLabel: string;
-  agent: AgentId | null;
-  destination?: AgentDestinationView;
-}
-
-interface AgentDestinationView {
-  channel: "notion" | "zulip";
-  label: string;
-  value: string;
-  configured: boolean;
-  missingReason: string;
-  notion?: { target: string };
-  zulip?: { stream: string; topic: string };
-}
-
-interface AgentPluginOverview {
-  agent: AgentId | null;
-  current: AgentPluginState[];
-  available: AgentPluginState[];
-  all: AgentPluginState[];
-}
-
-interface RecordingAgentStatus {
-  available: boolean;
-  provider: string;
-  reason: string | null;
-  paused: boolean;
-  policyReason: string | null;
-}
-
-interface ConnectorGuide {
-  plugin: AgentPluginId;
-  label: string;
-  agentName: string;
-  manageCommand: string;
-  message: string;
-}
-
-type MeetingNextAction = "transcribe" | "summarize" | "share";
 
 interface AskSource {
   ref?: number;
@@ -176,17 +27,6 @@ interface RemoteSource {
   label: string;
   detail: string;
   connected?: boolean;
-}
-
-interface DestinationOption {
-  id: string;
-  label: string;
-  value: string;
-  source: "agent" | "saved" | "default";
-  kind?: string;
-  target?: string;
-  stream?: string;
-  topic?: string;
 }
 
 interface AskResponse {
@@ -267,442 +107,22 @@ interface AgentSession {
   messages: AgentSessionMessage[];
 }
 
-interface SummaryPrompt {
-  id: string;
-  slug: string;
-  name: string;
-  is_auto_run?: number;
-  isAutoRun?: boolean;
-}
-
-const AGENT_ICONS: Record<AgentId, JSX.Element> = {
-  codex: <Terminal size={14} strokeWidth={1.9} />,
-  claude: <Bot size={14} strokeWidth={1.9} />,
-  hermes: <Cpu size={14} strokeWidth={1.9} />,
-  openclaw: <Cpu size={14} strokeWidth={1.9} />,
-};
-
-function agentName(id: AgentId): string {
-  if (id === "codex") return "Codex CLI";
-  if (id === "claude") return "Claude Code";
-  if (id === "hermes") return "Hermes";
-  return "OpenClaw";
-}
-
-function audioProviderName(provider: string): string {
-  if (provider === "local" || provider.startsWith("sherpa-onnx")) return "本地转写";
-  if (provider === "xai-oauth:yulu") return "xAI · Yulu OAuth";
-  if (provider.startsWith("xai")) return "xAI 云端";
-  return provider || "正在检测";
-}
-
-function formatTime(value: string): string {
-  const d = new Date(value);
-  if (Number.isNaN(d.valueOf())) return "";
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-function dayLabelText(label: AgentTask["dayLabel"]): string {
-  if (label === "today") return "今天";
-  if (label === "yesterday") return "昨天";
-  return "近三天";
-}
-
-function firstAvailablePrompt(prompts: SummaryPrompt[]): string | null {
-  return prompts.find((prompt) => prompt.slug === "summary")?.id ?? prompts[0]?.id ?? null;
-}
-
-function promptLabel(prompt: SummaryPrompt): string {
-  return prompt.name || prompt.slug || prompt.id;
-}
-
 function asConfigRecord(config: unknown): Record<string, unknown> {
   return typeof config === "object" && config !== null && !Array.isArray(config) ? config as Record<string, unknown> : {};
 }
 
-function nextMeetingAction(task: AgentTask): MeetingNextAction {
-  if (!task.hasTranscript) return "transcribe";
-  if (!task.hasSummary) return "summarize";
-  return "share";
-}
-
 export function AgentConsole() {
-  const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const floating = location.pathname === "/voice-chat";
   const utils = trpc.useUtils();
-  const [mode, setMode] = useState<ConsoleMode>("ask");
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [connectorGuide, setConnectorGuide] = useState<ConnectorGuide | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const overview = trpc.agentConsole.overview.useQuery(undefined, { refetchInterval: 5000 });
-  const detectAgents = trpc.agentConsole.detectAgents.useQuery(undefined, { enabled: false });
-  const agentTasksQuery = trpc.agentTasks.list.useQuery({ limit: 100 }, { refetchInterval: 5000 });
-  const schedulerQuery = trpc.scheduler.overview.useQuery(undefined, { refetchInterval: 15_000 });
-
-  const toggleRecording = trpc.recording.toggle.useMutation({
-    onSettled: () => void utils.agentConsole.overview.invalidate(),
-  });
-  const configurePlugin = trpc.agentConsole.configurePlugin.useMutation({
-    onSuccess: (result) => {
-      setConnectorGuide({
-        plugin: result.plugin as AgentPluginId,
-        label: result.label,
-        agentName: result.agent ? agentName(result.agent as AgentId) : "当前 Agent",
-        manageCommand: result.manageCommand,
-        message: result.message,
-      });
-    },
-  });
-
-  useWsChannel("recordings-changed", () => {
-    void utils.agentConsole.overview.invalidate();
-    void utils.agentTasks.list.invalidate();
-  });
-  useWsChannel("jobs", () => {
-    void utils.agentConsole.overview.invalidate();
-    void utils.agentTasks.list.invalidate();
-  });
-  useWsChannel("recording", () => void utils.agentConsole.overview.invalidate());
-
-  const tasks = (overview.data?.tasks as AgentTask[] | undefined) ?? [];
-  const plugins = (overview.data?.plugins as AgentPluginOverview | undefined) ?? { agent: null, current: [], available: [], all: [] };
-  const recordingAgent = (overview.data?.recordingAgent as RecordingAgentStatus | undefined) ?? {
-    available: false,
-    provider: "",
-    reason: "正在检测音频引擎",
-    paused: false,
-    policyReason: null,
-  };
-  const requestedSessionId = searchParams.get("session");
-  const latestAgentTaskByStem = useMemo(() => {
-    const latest = new Map<string, DurableAgentTask>();
-    for (const task of (agentTasksQuery.data ?? []) as DurableAgentTask[]) {
-      if (isActiveDurableTask(task) && !latest.has(task.recordingStem)) latest.set(task.recordingStem, task);
-    }
-    return latest;
-  }, [agentTasksQuery.data]);
-
-  const activeAgent = useMemo(() => {
-    const agents = (overview.data?.agents as ConsoleAgent[] | undefined) ?? [];
-    return agents.find((agent) => agent.connected) ?? agents.find((agent) => agent.supported && agent.found) ?? null;
-  }, [overview.data?.agents]);
-
-  const runConfigurePlugin = (plugin: AgentPluginId) => {
-    configurePlugin.mutate({ plugin });
-  };
-
-  const runDetectAgents = async () => {
-    try {
-      await detectAgents.refetch();
-      await overview.refetch();
-    } catch (err) {
-      setNotice((err as Error).message || "探测失败");
-    }
-  };
-
-  const taskRail: TaskRailProps = {
-    tasks,
-    agentTasks: latestAgentTaskByStem,
-    isLoading: overview.isPending,
-    actionPending: toggleRecording.isPending,
-    onToggleRecording: () => toggleRecording.mutate(),
-    onOpenAll: () => navigate("/inbox"),
-    onOpenTask: (task) => { if (task.stem) navigate(`/inbox/${task.stem}`); },
-  };
-
-  return (
-    <div className={`agent-console-page${floating ? " voice-chat-popover" : ""}`}>
-      <main className="agent-console-center">
-        {!floating && <div className="agent-console-modebar" role="tablist" aria-label="Agent Console mode">
-          <button type="button" className={mode === "ask" ? "active" : ""} onClick={() => setMode("ask")}>
-            <MessageSquare size={15} strokeWidth={1.9} />
-            问会议
-          </button>
-          <button type="button" className={mode === "run" ? "active" : ""} onClick={() => setMode("run")}>
-            <Play size={15} strokeWidth={1.9} />
-            跑任务
-          </button>
-          <button type="button" className="agent-inspector-toggle" onClick={() => setInspectorOpen(true)}>
-            <ListChecks size={15} strokeWidth={1.9} />
-            Agents
-          </button>
-        </div>}
-        {notice && (
-          <div className="agent-console-notice">
-            <AlertCircle size={14} strokeWidth={2} />
-            <span>{notice}</span>
-            <button type="button" onClick={() => setNotice(null)} aria-label="关闭"><X size={13} strokeWidth={2} /></button>
-          </div>
-        )}
-        {floating || mode === "ask" ? (
-          <AskMeetings
-            agentId={activeAgent?.id ?? "agent"}
-            agentName={activeAgent?.name ?? "Agent"}
-            initialSessionId={requestedSessionId}
-            floating={floating}
-            taskRail={floating ? null : taskRail}
-          />
-        ) : (
-          <RunTasks
-            agentTasks={agentTasksQuery.data}
-            scheduler={schedulerQuery.data}
-            tasksLoading={agentTasksQuery.isPending}
-            schedulerLoading={schedulerQuery.isPending}
-            onOpenTasks={() => navigate("/health#queue")}
-            onOpenScheduler={() => navigate("/health#scheduler")}
-          />
-        )}
-      </main>
-
-      {!floating && inspectorOpen && <div className="agent-inspector-scrim" aria-hidden="true" onClick={() => setInspectorOpen(false)} />}
-      {!floating && inspectorOpen && <aside className="agent-console-rail agent-console-rail-right open" aria-label="Agents 与 Connectors">
-        <div className="agent-rail-drawer-head">
-          <span>Agents 与 Connectors</span>
-          <button type="button" onClick={() => setInspectorOpen(false)} aria-label="关闭 Agents 与 Connectors"><X size={16} strokeWidth={2} /></button>
-        </div>
-        <AgentRolesPanel
-          activeAgent={activeAgent}
-          recordingAgent={recordingAgent}
-        />
-        <ConnectorsPanel
-          plugins={plugins}
-          agentName={activeAgent?.name ?? "当前 Agent"}
-          configuring={configurePlugin.isPending}
-          onManage={runConfigurePlugin}
-        />
-      </aside>}
-      {connectorGuide && (
-        <ConnectorGuideModal
-          guide={connectorGuide}
-          detecting={detectAgents.isFetching || overview.isFetching}
-          onDetect={() => void runDetectAgents()}
-          onClose={() => setConnectorGuide(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-function VoiceInputPanel() {
-  return (
-    <section className="agent-panel agent-voice-input-panel">
-      <div className="agent-panel-head">
-        <span>语音输入</span>
-        <Link to="/voice-input" className="agent-link-btn">打开</Link>
-      </div>
-      <div className="agent-voice-input-copy">
-        <div>
-          <Keyboard size={14} strokeWidth={1.9} />
-          <span>听写</span>
-        </div>
-        <div>
-          <Languages size={14} strokeWidth={1.9} />
-          <span>翻译</span>
-        </div>
-        <div>
-          <Bot size={14} strokeWidth={1.9} />
-          <span>问 Agent</span>
-        </div>
-      </div>
-      <div className="agent-voice-input-actions">
-        <Link to="/settings/voice" className="agent-action secondary compact">配置快捷键</Link>
-      </div>
-    </section>
-  );
-}
-
-interface TaskRailProps {
-  tasks: AgentTask[];
-  agentTasks: ReadonlyMap<string, DurableAgentTask>;
-  isLoading: boolean;
-  actionPending: boolean;
-  onToggleRecording: () => void;
-  onOpenAll: () => void;
-  onOpenTask: (task: AgentTask) => void;
-}
-
-function TaskRail({
-  tasks,
-  agentTasks,
-  isLoading,
-  actionPending,
-  onToggleRecording,
-  onOpenAll,
-  onOpenTask,
-}: TaskRailProps) {
-  return (
-    <>
-      <div className="agent-rail-head">
-        <div>
-          <div className="agent-rail-title">最近三天</div>
-          <div className="agent-rail-sub">{isLoading ? "同步中" : `${tasks.length} 个会议`}</div>
-        </div>
-        <button type="button" className="agent-link-btn" onClick={onOpenAll}>全部</button>
-      </div>
-      <div className="agent-task-list">
-        {tasks.length === 0 && !isLoading && (
-          <div className="agent-empty">最近三天没有待处理会议。</div>
-        )}
-        {tasks.map((task) => (
-          <TaskCard
-            key={task.id}
-            task={task}
-            disabled={actionPending}
-            agentTask={agentTasks.get(task.stem)}
-            onOpen={() => onOpenTask(task)}
-            onStopRecording={onToggleRecording}
-          />
-        ))}
-      </div>
-    </>
-  );
-}
-
-function TaskCard({
-  task,
-  disabled,
-  agentTask,
-  onOpen,
-  onStopRecording,
-}: {
-  task: AgentTask;
-  disabled: boolean;
-  agentTask?: DurableAgentTask;
-  onOpen: () => void;
-  onStopRecording: () => void;
-}) {
-  const failed = agentTask?.state === "delivery_unverified" || agentTask?.state === "execution_unverified";
-  const error = agentTask?.error || (Object.values(task.stages).includes("failed") ? task.error : "");
-  return (
-    <div className={"agent-task-card" + (failed ? " failed" : "")}>
-      <div className="agent-task-head">
-        <button type="button" className="agent-task-title" onClick={onOpen}>{task.title}</button>
-      </div>
-      <div className="agent-task-meta">{dayLabelText(task.dayLabel)} · {formatTime(task.recordedAt)}</div>
-      {error && (
-        <div className="agent-task-error">
-          <AlertCircle size={13} strokeWidth={2} />
-          <span>{error}</span>
-        </div>
-      )}
-      <TaskAction
-        task={task}
-        agentTask={agentTask}
-        disabled={disabled}
-        onOpen={onOpen}
-        onStopRecording={onStopRecording}
-      />
-    </div>
-  );
-}
-
-function RunningState({ label }: { label: string }) {
-  return (
-    <div className="agent-task-running">
-      <Loader2 className="spin" size={15} strokeWidth={2} />
-      {label}
-    </div>
-  );
-}
-
-function TaskAction({
-  task,
-  agentTask,
-  disabled,
-  onOpen,
-  onStopRecording,
-}: {
-  task: AgentTask;
-  agentTask?: DurableAgentTask;
-  disabled: boolean;
-  onOpen: () => void;
-  onStopRecording: () => void;
-}) {
-  if (task.stages.record === "running") {
-    return (
-      <RecordingBar startedAt={task.recordedAt} disabled={disabled} onStop={onStopRecording} />
-    );
-  }
-  if (agentTask && isActiveDurableTask(agentTask)) {
-    return <RunningState label={durableTaskLabel(agentTask)} />;
-  }
-  if (!agentTask && task.stages.transcribe === "running") return <RunningState label="Yulu 转写中" />;
-  if (!agentTask && task.stages.summarize === "running") return <RunningState label="摘要 Agent 工作中" />;
-  if (!agentTask && task.stages.send === "running") return <RunningState label="正在发送到 Notion" />;
-  const nextAction = nextMeetingAction(task);
-  if (nextAction === "share") {
-    return (
-      <button type="button" className="agent-action primary" disabled={disabled} onClick={onOpen}>
-        <Share2 size={14} strokeWidth={2} />
-        查看并分享
-      </button>
-    );
-  }
-  const actionLabel = nextAction === "transcribe" ? "转录" : "总结";
-  return (
-    <div className="agent-task-actions">
-      <button type="button" className="agent-action primary" disabled={disabled} onClick={onOpen}>
-        {nextAction === "transcribe" ? <FileText size={14} strokeWidth={2} /> : <Sparkles size={14} strokeWidth={2} />}
-        {actionLabel}
-      </button>
-    </div>
-  );
-}
-
-function isActiveDurableTask(task: DurableAgentTask): boolean {
-  if (task.state === "awaiting_policy" && task.trigger === "automatic") return false;
-  return ["queued", "awaiting_agent", "awaiting_policy", "running", "transcript_committed", "artifacts_committed", "sending", "delivery_reported", "delivery_unverified", "execution_unverified"].includes(task.state);
-}
-
-function durableTaskLabel(task: DurableAgentTask): string {
-  if (task.state === "queued") return "已排队等待处理";
-  if (task.state === "awaiting_agent") return "等待摘要 Agent";
-  if (task.state === "awaiting_policy") return "Agent 自动处理已暂停";
-  if (task.state === "transcript_committed") return "转写已保存，等待摘要 Agent";
-  if (task.state === "failed") return "处理失败";
-  if (task.state === "delivery_unverified") return "请核实 Notion 发送结果";
-  if (task.state === "execution_unverified") return "Agent 执行结果未知，请先核实";
-  if (task.state === "cancelled") return "任务已取消";
-  if (task.state === "completed") return task.sendToNotion ? "已发送到 Notion" : "已处理";
-  if (task.phase === "transcribing") return "Yulu 转写中";
-  if (task.phase === "summarizing") return "摘要 Agent 工作中";
-  if (task.sendToNotion && (task.state === "sending" || task.state === "delivery_reported")) return "正在发送到 Notion";
-  return "处理中";
-}
-
-const WAVE_BARS = [12, 18, 24, 16, 22, 14, 20, 13];
-
-function RecordingBar({ startedAt, disabled, onStop }: { startedAt: string; disabled: boolean; onStop: () => void }) {
-  const [seconds, setSeconds] = useState(() => elapsedSeconds(startedAt));
-  useEffect(() => {
-    const timer = window.setInterval(() => setSeconds(elapsedSeconds(startedAt)), 1000);
-    return () => window.clearInterval(timer);
-  }, [startedAt]);
-  const minutes = Math.floor(seconds / 60);
-  const secs = String(seconds % 60).padStart(2, "0");
-  return (
-    <div className="agent-recording-bar">
-      <span className="agent-recording-dot" />
-      <span className="agent-recording-time">{minutes}:{secs}</span>
-      <span className="agent-recording-wave" aria-hidden="true">
-        {WAVE_BARS.map((height, index) => (
-          <span key={index} style={{ height, animationDelay: `${index * 80}ms` }} />
-        ))}
-      </span>
-      <button type="button" disabled={disabled} onClick={onStop} aria-label="停止录制">
-        <Square size={13} strokeWidth={2.3} />
-      </button>
-    </div>
-  );
-}
-
-function elapsedSeconds(startedAt: string): number {
-  const start = new Date(startedAt).valueOf();
-  if (!Number.isFinite(start)) return 0;
-  return Math.max(0, Math.floor((Date.now() - start) / 1000));
+  const tasks = trpc.agentTasks.list.useQuery({ limit: 100 }, { refetchInterval: 15_000, enabled: !floating });
+  useWsChannel("jobs", () => void utils.agentTasks.list.invalidate());
+  return <div className={`agent-console-page${floating ? " voice-chat-popover" : ""}`}>
+    <main className="agent-console-center">
+      <AskMeetings initialSessionId={searchParams.get("session")} floating={floating} activity={tasks.isError ? null : taskActivity(tasks.data ?? [])} />
+    </main>
+  </div>;
 }
 
 function sessionMessages(session: AgentSession | null | undefined): ChatMessage[] {
@@ -729,22 +149,14 @@ function displayedLocalSources(message: ChatMessage, provider?: string): AskSour
 
 const ASK_STARTERS = [
   "最近三天有哪些待办？",
-  "Bruce 最近忙什么？",
-  "哪些会议提到了 Zulip？",
+  "总结最近一次会议的决定",
+  "有哪些事项还需要跟进？",
 ];
 
-function AskMeetings({
-  agentId,
-  agentName,
-  initialSessionId,
-  floating,
-  taskRail,
-}: {
-  agentId: string;
-  agentName: string;
+function AskMeetings({ initialSessionId, floating, activity }: {
   initialSessionId: string | null;
   floating: boolean;
-  taskRail: TaskRailProps | null;
+  activity: ReturnType<typeof taskActivity> | null;
 }) {
   const navigate = useNavigate();
   const t = useT();
@@ -759,6 +171,9 @@ function AskMeetings({
   const sessionsQuery = trpc.agentSessions.list.useQuery();
   const configQuery = trpc.config.get.useQuery();
   const [input, setInput] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyToggle = useRef<HTMLButtonElement>(null);
+  const closeHistory = () => { setHistoryOpen(false); historyToggle.current?.focus(); };
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [draftSession, setDraftSession] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -804,8 +219,8 @@ function AskMeetings({
   const conversationName = provider === "xai"
     ? "xAI"
     : draftSession
-      ? agentName
-      : provider ?? selectedSession?.agent ?? selectedSessionSummary?.agent ?? agentName;
+      ? provider ?? "Agent"
+      : provider ?? selectedSession?.agent ?? selectedSessionSummary?.agent ?? "Agent";
   const sessionTitle = selectedSession?.title || selectedSessionSummary?.title || (draftSession ? "新对话" : "问本地会议");
   const sessionSub = selectedSessionSummary
     ? t("agentConsole.provider.session.messages", {
@@ -827,7 +242,7 @@ function AskMeetings({
     setSelectedSessionId(null);
     setMessages([]);
     setDraftSession(true);
-  }, [agentId, initialSessionId]);
+  }, [initialSessionId]);
 
   useEffect(() => {
     if (!initialSessionId) return;
@@ -954,11 +369,13 @@ function AskMeetings({
     setSessionStatusOverride(null);
     setRecoveryOverride(null);
     setCreateError(null);
+    closeHistory();
   };
 
   const selectSession = (id: string) => {
     setDraftSession(false);
     setSelectedSessionId(id);
+    closeHistory();
   };
 
   const refreshSessions = (id?: string) => {
@@ -991,94 +408,25 @@ function AskMeetings({
     refreshSessions(session.id);
   };
 
-  if (messages.length === 0) {
-    return (
-      <section className="agent-chat">
-        <AgentSessionPanel
-          sessions={sessions}
-          selectedSessionId={selectedSessionId}
-          loading={sessionsQuery.isPending}
-          onSelect={selectSession}
-          onNew={startNewSession}
-          onRename={renameSelectedSession}
-          onDelete={deleteSelectedSession}
-          onArchive={archiveSelectedSession}
-          onPin={pinSelectedSession}
-          taskRail={taskRail}
-        />
-        <div className="agent-chat-main">
-          <ChatHeader title={sessionTitle} identity={identity} sub={providerHeader} />
-          <div className="agent-chat-thread empty">
-            <div className="agent-chat-start">
-              <span className="agent-chat-start-icon"><Logo size={52} /></span>
-              <div className="agent-chat-title">问本地会议</div>
-              <div className="agent-chat-sub">
-                {provider === "xai"
-                  ? t("agentConsole.xai.localBoundary")
-                  : "本地记录、Notion、Zulip 会自动进入上下文。"}
-              </div>
-              <div className="agent-chat-starters">
-                {ASK_STARTERS.map((starter) => (
-                  <button key={starter} type="button" onClick={() => setInput(starter)}>
-                    {starter}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-          <div className="agent-chat-composer">
-            {draftSession && createError && (
-              <NewConversationFailure
-                identity={identity ?? conversationName}
-                reason={createError}
-                repairPath={defaultRepairPath}
-                retrying={createSession.isPending}
-                onRetry={() => void submit()}
-              />
-            )}
-            {sessionStatus === "paused" && identity && (
-              <PausedConversation
-                identity={identity}
-                repairPath={conversationRecovery?.settingsPath ?? defaultRepairPath}
-                reason={pausedReason}
-                retryAvailable={conversationRecovery?.retry === "same_snapshot"}
-                retrying={ask.isPending}
-                onRetry={() => void retrySameProvider()}
-                onNew={startNewSession}
-              />
-            )}
-            <Composer
-              value={input}
-              onChange={setInput}
-              onSubmit={submit}
-              pending={ask.isPending || createSession.isPending || appendSession.isPending}
-              disabled={sessionStatus === "paused"}
-              placeholder="问会议记录、决策、行动项..."
-            />
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <section className="agent-chat">
-      <AgentSessionPanel
-        sessions={sessions}
-        selectedSessionId={selectedSessionId}
-        loading={sessionsQuery.isPending}
-        onSelect={selectSession}
-        onNew={startNewSession}
-        onRename={renameSelectedSession}
-        onDelete={deleteSelectedSession}
-        onArchive={archiveSelectedSession}
-        onPin={pinSelectedSession}
-        taskRail={taskRail}
-      />
+  return <section className="agent-chat-workspace">
+    <header className="assistant-toolbar">
+      <button ref={historyToggle} type="button" className="assistant-tool" aria-label={t("assistant.history")} aria-expanded={historyOpen} aria-controls="assistant-history" onClick={() => setHistoryOpen(!historyOpen)}><History size={17} /></button>
+      <div className="assistant-heading"><strong>{sessionTitle}</strong><Link to={defaultRepairPath} title={providerHeader + " · " + t("agentConsole.provider.newSessionNote")}>{identity ?? conversationName}<Settings2 size={12} /></Link></div>
+      {!floating && activity && (activity.active > 0 || activity.attention > 0) && <Link className="assistant-activity" to="/health#queue">{activity.attention > 0 ? t("assistant.activity.attention", { n: activity.attention }) : t("assistant.activity.active", { n: activity.active })}</Link>}
+      <button type="button" className="assistant-tool" onClick={startNewSession} aria-label={t("assistant.new")} title={t("assistant.new")}><Plus size={18} /></button>
+    </header>
+    <div className={`agent-chat${historyOpen ? " history-open" : ""}`}>
+      {historyOpen && <AgentSessionPanel sessions={sessions} selectedSessionId={selectedSessionId} loading={sessionsQuery.isPending}
+        onSelect={selectSession} onNew={startNewSession} onRename={renameSelectedSession} onDelete={deleteSelectedSession}
+        onArchive={archiveSelectedSession} onPin={pinSelectedSession} onClose={closeHistory} />}
       <div className="agent-chat-main">
-        <ChatHeader title={sessionTitle} identity={identity} sub={providerHeader} />
-        <div ref={scrollRef} className="agent-chat-thread">
-          <div className="agent-chat-thread-inner">
+        <div ref={scrollRef} className={`agent-chat-thread${messages.length === 0 ? " empty" : ""}`}>
+          {messages.length === 0 ? <div className="agent-chat-start">
+            <Logo size={48} />
+            <div className="agent-chat-title">{t("assistant.title")}</div>
+            <div className="agent-chat-sub">{t("assistant.intro")}</div>
+            <div className="agent-chat-starters">{ASK_STARTERS.map((starter) => <button key={starter} type="button" onClick={() => setInput(starter)}>{starter}</button>)}</div>
+          </div> : <div className="agent-chat-thread-inner">
             {messages.map((message, index) => {
               const localSources = displayedLocalSources(message, provider);
               return (
@@ -1103,46 +451,45 @@ function AskMeetings({
                 </div>
               );
             })}
-          </div>
+
+          </div>}
         </div>
         <div className="agent-chat-composer">
-          {sessionStatus === "paused" && identity && (
-            <PausedConversation
-              identity={identity}
-              repairPath={conversationRecovery?.settingsPath ?? defaultRepairPath}
-              reason={pausedReason}
-              retryAvailable={conversationRecovery?.retry === "same_snapshot"}
-              retrying={ask.isPending}
-              onRetry={() => void retrySameProvider()}
-              onNew={startNewSession}
-            />
-          )}
-          <Composer
-            value={input}
-            onChange={setInput}
-            onSubmit={submit}
-            pending={ask.isPending || createSession.isPending || appendSession.isPending}
-            disabled={sessionStatus === "paused"}
-            placeholder="继续提问..."
-          />
+          {draftSession && createError && <NewConversationFailure identity={identity ?? conversationName} reason={createError} repairPath={defaultRepairPath} retrying={createSession.isPending} onRetry={() => void submit()} />}
+          {sessionStatus === "paused" && <PausedConversation identity={identity ?? conversationName} repairPath={conversationRecovery?.settingsPath ?? defaultRepairPath} reason={pausedReason} retryAvailable={conversationRecovery?.retry === "same_snapshot"} retrying={ask.isPending} onRetry={() => void retrySameProvider()} onNew={startNewSession} />}
+          <div className="assistant-composer-tools">
+            <MeetingReference onChoose={(title, recordedAt) => setInput((value) => `${value}${value ? "\n" : ""}关于会议「${title}」（${recordedAt.slice(0, 16).replace("T", " ")}）：`)} disabled={sessionStatus === "paused" || ask.isPending} />
+            <span title={provider === "xai" ? t("agentConsole.xai.localBoundary") : t("assistant.agentScope.detail")}>{t(provider === "xai" ? "assistant.localScope" : "assistant.agentScope")}</span>
+          </div>
+          <Composer value={input} onChange={setInput} onSubmit={submit} pending={ask.isPending || createSession.isPending || appendSession.isPending} disabled={sessionStatus === "paused"} placeholder={messages.length ? "继续提问..." : "问会议记录、决策、行动项..."} />
         </div>
       </div>
-    </section>
-  );
+    </div>
+  </section>;
 }
 
-function ChatHeader({ title, identity, sub }: { title: string; identity: string | null; sub: string }) {
+function MeetingReference({ onChoose, disabled }: { onChoose: (title: string, recordedAt: string) => void; disabled: boolean }) {
   const t = useT();
-  return (
-    <div className="agent-chat-head">
-      <div>
-        <strong>{title}</strong>
-        {identity && <span className="agent-chat-identity">{identity}</span>}
-        <span>{sub}</span>
-        {identity && <span>{t("agentConsole.provider.newSessionNote")}</span>}
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const button = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const overview = trpc.agentConsole.meetings.useQuery(undefined, { enabled: open, staleTime: 15_000 });
+  useEffect(() => { if (open) panel.current?.querySelector("input")?.focus(); }, [open]);
+  const close = () => { setOpen(false); button.current?.focus(); };
+  const meetings = (overview.data ?? []).filter((task) => task.stem && task.hasTranscript && task.title.toLowerCase().includes(query.toLowerCase()));
+  return <div className="assistant-reference" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); close(); } }}>
+    <button ref={button} type="button" disabled={disabled} className="assistant-reference-toggle" aria-expanded={open} aria-controls="assistant-meetings" onClick={() => setOpen(!open)}><FileText size={14} />{t("assistant.reference")}</button>
+    {open && <div ref={panel} id="assistant-meetings" className="assistant-meeting-picker" role="region" aria-label={t("assistant.reference")}>
+      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("assistant.reference.search")} aria-label={t("assistant.reference.search")} />
+      <p>{t("assistant.reference.hint")}</p>
+      <div className="assistant-meeting-list">
+        {meetings.map((meeting) => <button type="button" key={meeting.stem} onClick={() => { onChoose(meeting.title, meeting.recordedAt); close(); }}><strong>{meeting.title}</strong><span>{meeting.recordedAt.slice(0, 10)}</span></button>)}
+        {meetings.length === 0 && <p role="status">{t(overview.isPending ? "common.loading" : overview.isError ? "assistant.reference.error" : "assistant.reference.empty")}</p>}
       </div>
-    </div>
-  );
+      <Link to="/inbox">{t("assistant.recordings")}</Link>
+    </div>}
+  </div>;
 }
 
 function PausedConversation({
@@ -1252,7 +599,7 @@ function AgentSessionPanel({
   onDelete,
   onArchive,
   onPin,
-  taskRail,
+  onClose,
 }: {
   sessions: AgentSessionSummary[];
   selectedSessionId: string | null;
@@ -1263,65 +610,18 @@ function AgentSessionPanel({
   onDelete: (session: AgentSessionSummary) => void;
   onArchive: (session: AgentSessionSummary) => void;
   onPin: (session: AgentSessionSummary) => void;
-  taskRail: TaskRailProps | null;
+  onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const [historyHeight, setHistoryHeight] = usePersistedSize("yulu_ui.agent.history_height", 300);
-  const renderedHistoryHeight = Math.min(600, Math.max(140, historyHeight));
   const panelRef = useRef<HTMLElement>(null);
-  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const groups = groupedSessions(sessions, query);
-
-  useEffect(() => () => resizeCleanupRef.current?.(), []);
-  useEffect(() => {
-    if (historyHeight !== renderedHistoryHeight) setHistoryHeight(renderedHistoryHeight);
-  }, [historyHeight, renderedHistoryHeight, setHistoryHeight]);
-
-  const clampHistoryHeight = (next: number) => {
-    const panelHeight = panelRef.current?.getBoundingClientRect().height ?? 0;
-    const max = panelHeight > 0 ? Math.min(600, Math.max(140, panelHeight - 170)) : 600;
-    return Math.min(max, Math.max(140, next));
-  };
-
-  const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const panel = panelRef.current;
-    if (!panel) return;
-    event.preventDefault();
-    const startY = event.clientY;
-    const startHeight = renderedHistoryHeight;
-    const onMove = (moveEvent: PointerEvent) => {
-      setHistoryHeight(clampHistoryHeight(startHeight + moveEvent.clientY - startY));
-    };
-    const cleanup = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", cleanup);
-      window.removeEventListener("pointercancel", cleanup);
-      window.removeEventListener("blur", cleanup);
-      resizeCleanupRef.current = null;
-    };
-    resizeCleanupRef.current?.();
-    resizeCleanupRef.current = cleanup;
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", cleanup);
-    window.addEventListener("pointercancel", cleanup);
-    window.addEventListener("blur", cleanup);
-  };
-
-  const resizeWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const delta = event.key === "ArrowUp" ? -20 : event.key === "ArrowDown" ? 20 : 0;
-    if (delta === 0 && event.key !== "Home" && event.key !== "End") return;
-    event.preventDefault();
-    if (event.key === "Home") setHistoryHeight(140);
-    else if (event.key === "End") setHistoryHeight(clampHistoryHeight(Number.POSITIVE_INFINITY));
-    else setHistoryHeight(clampHistoryHeight(renderedHistoryHeight + delta));
-  };
-
+  useEffect(() => { panelRef.current?.querySelector("input")?.focus(); }, []);
   return (
-    <aside ref={panelRef} className="agent-session-panel" aria-label="Agent 会话与最近会议">
-      <div className="agent-session-pane agent-session-history" style={taskRail ? { height: renderedHistoryHeight } : undefined}>
+    <aside ref={panelRef} id="assistant-history" className="agent-session-panel" aria-label="对话历史" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }}>
+      <div className="agent-session-pane agent-session-history">
         <div className="agent-session-panel-head">
           <span>历史</span>
-          <button type="button" className="agent-session-new" onClick={onNew}>新对话</button>
+          <button type="button" className="assistant-tool" onClick={onClose} aria-label="收起对话历史"><X size={16} /></button>
         </div>
         <input
           className="agent-session-search"
@@ -1368,26 +668,6 @@ function AgentSessionPanel({
           {groups.length === 0 && <span className="agent-session-empty">{loading ? "读取历史..." : "暂无历史会话"}</span>}
         </div>
       </div>
-      {taskRail && (
-        <>
-          <div
-            className="agent-session-resizer"
-            role="separator"
-            tabIndex={0}
-            aria-label="调整历史和最近会议的高度"
-            aria-orientation="horizontal"
-            aria-valuemin={140}
-            aria-valuemax={600}
-            aria-valuenow={Math.round(renderedHistoryHeight)}
-            onPointerDown={startResize}
-            onKeyDown={resizeWithKeyboard}
-            onDoubleClick={() => setHistoryHeight(300)}
-          ><span /></div>
-          <div className="agent-session-pane agent-session-recent">
-            <TaskRail {...taskRail} />
-          </div>
-        </>
-      )}
     </aside>
   );
 }
@@ -1456,7 +736,7 @@ function Composer({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
             event.preventDefault();
             onSubmit();
           }
@@ -1468,414 +748,6 @@ function Composer({
       <button type="button" disabled={disabled || !value.trim() || pending} onClick={onSubmit} aria-label="发送">
         {pending ? <Loader2 className="spin" size={15} strokeWidth={2} /> : <ArrowUp size={15} strokeWidth={2} />}
       </button>
-    </div>
-  );
-}
-
-function RunTasks({
-  agentTasks,
-  scheduler,
-  tasksLoading,
-  schedulerLoading,
-  onOpenTasks,
-  onOpenScheduler,
-}: {
-  agentTasks: unknown;
-  scheduler: unknown;
-  tasksLoading: boolean;
-  schedulerLoading: boolean;
-  onOpenTasks: () => void;
-  onOpenScheduler: () => void;
-}) {
-  const tasks = Array.isArray(agentTasks) ? agentTasks as DurableAgentTask[] : [];
-  const schedulerRecord = asConfigRecord(scheduler);
-  const events = Array.isArray(schedulerRecord.events) ? schedulerRecord.events as Array<Record<string, unknown>> : [];
-  const meetings = Array.isArray(schedulerRecord.meetings) ? schedulerRecord.meetings as Array<Record<string, unknown>> : [];
-  const waiting = tasks.filter((task) => ["queued", "awaiting_agent", "awaiting_policy", "transcript_committed"].includes(task.state)).length;
-  const running = tasks.filter((task) => ["running", "artifacts_committed", "sending", "delivery_reported"].includes(task.state)).length;
-  const failed = tasks.filter((task) =>
-    task.state === "failed" || task.state === "delivery_unverified" || task.state === "execution_unverified"
-  ).length;
-  return (
-    <section className="agent-run-panel">
-      <div className="agent-run-card">
-        <div className="agent-run-head">
-          <div>
-            <h2>Agent 任务</h2>
-            <p>{tasksLoading ? "同步任务中" : `最近 ${tasks.length} 个任务`}</p>
-          </div>
-          <button type="button" className="agent-action secondary compact" onClick={onOpenTasks}>管理</button>
-        </div>
-        <div className="agent-stat-row">
-          <span>等待 {waiting}</span>
-          <span>运行 {running}</span>
-          <span>失败 {failed}</span>
-        </div>
-        <div className="agent-mini-list">
-          {tasks.slice(0, 4).map((task) => (
-            <div key={task.id} className="agent-mini-row">
-              <span>{task.title || task.recordingStem || "Agent task"}</span>
-              <em>{task.state}</em>
-            </div>
-          ))}
-          {tasks.length === 0 && <div className="agent-mini-empty">当前没有 Agent 任务。</div>}
-        </div>
-      </div>
-
-      <div className="agent-run-card">
-        <div className="agent-run-head">
-          <div>
-            <h2>Agent 调度器</h2>
-            <p>{schedulerLoading ? "同步日程中" : `${events.length} 个事件 · ${meetings.length} 个会议`}</p>
-          </div>
-          <button type="button" className="agent-action secondary compact" onClick={onOpenScheduler}>管理</button>
-        </div>
-        <div className="agent-mini-list">
-          {[...meetings, ...events].slice(0, 5).map((event, index) => (
-            <div key={`${String(event.title ?? event.name ?? "event")}-${index}`} className="agent-mini-row">
-              <span>{String(event.title ?? event.name ?? "Calendar event")}</span>
-              <em>{String(event.start ?? event.ts ?? "")}</em>
-            </div>
-          ))}
-          {meetings.length + events.length === 0 && <div className="agent-mini-empty">暂无即将触发的调度。</div>}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function AgentRolesPanel({
-  activeAgent,
-  recordingAgent,
-}: {
-  activeAgent: ConsoleAgent | null;
-  recordingAgent: RecordingAgentStatus;
-}) {
-  return (
-    <section className="agent-panel agent-role-panel">
-      <div className="agent-panel-head"><span>Agent 角色</span></div>
-      <div className="agent-role-list">
-        <div className="agent-role-row">
-          <span className="agent-role-icon"><Bot size={17} strokeWidth={1.9} /></span>
-          <span className="agent-role-copy">
-            <strong>对话与手动操作</strong>
-            <em>{activeAgent?.name ?? "未选择 Agent"}</em>
-          </span>
-          <Link className="agent-cap-action" to="/settings/llm?capability=conversation">管理 Agent 连接</Link>
-        </div>
-        <div className="agent-role-row">
-          <span className="agent-role-icon"><Cpu size={17} strokeWidth={1.9} /></span>
-          <span className="agent-role-copy">
-            <strong>实时字幕、转写与听写</strong>
-            <em>{audioProviderName(recordingAgent.provider)}</em>
-          </span>
-          <span
-            className={`agent-role-state ${recordingAgent.available ? "ready" : "unavailable"}`}
-            title={recordingAgent.reason ?? undefined}
-          >
-            <span />已选择 · {recordingAgent.available ? "可用" : "不可用"}
-          </span>
-        </div>
-      </div>
-      <p className="agent-role-note">
-        实时字幕、最终转写和听写由 Yulu 使用所选音频引擎执行；摘要与 Connector 由 Agent 执行
-        {!recordingAgent.available && recordingAgent.reason ? `：${recordingAgent.reason}` : ""}
-      </p>
-    </section>
-  );
-}
-
-function ConnectorsPanel({
-  plugins,
-  agentName,
-  configuring,
-  onManage,
-}: {
-  plugins: AgentPluginOverview;
-  agentName: string;
-  configuring: boolean;
-  onManage: (plugin: AgentPluginId) => void;
-}) {
-  const connectors = plugins.all.filter((plugin) => plugin.id !== "summary");
-  return (
-    <section className="agent-panel agent-connectors-panel">
-      <div className="agent-connectors-head">
-        <strong>当前 Agent 的 Connectors</strong>
-        <span>{agentName} 管理授权，Yulu 只读取配置状态</span>
-      </div>
-      <div className="agent-connector-list">
-        {connectors.map((plugin) => (
-          <div className="agent-connector-row" key={plugin.id}>
-            <span className="agent-connector-icon">{connectorIcon(plugin.id)}</span>
-            <span className="agent-connector-name">{plugin.label}</span>
-            <span className={`agent-connector-status ${plugin.status}`} title={plugin.detail}>
-              <span />{plugin.status === "configured" ? "已配置" : plugin.status === "unsupported" ? "不可用" : "未配置"}
-            </span>
-            <button
-              type="button"
-              className="agent-cap-action"
-              disabled={configuring || plugin.status === "unsupported"}
-              onClick={() => onManage(plugin.id)}
-            >
-              {plugin.status === "configured" ? "管理" : plugin.status === "unsupported" ? "不可用" : "去配置"}
-            </button>
-          </div>
-        ))}
-        {connectors.length === 0 && <div className="agent-connector-empty">正在读取 Connector 状态…</div>}
-      </div>
-      <div className="agent-connector-privacy">
-        <ShieldCheck size={15} strokeWidth={1.8} />
-        <span>Connector 凭据保存在 Agent 内，不由 Yulu 保存。</span>
-      </div>
-    </section>
-  );
-}
-
-function connectorIcon(id: AgentPluginId) {
-  if (id === "calendar") return <Calendar size={16} strokeWidth={1.9} />;
-  if (id === "notion") return <Database size={16} strokeWidth={1.9} />;
-  return <Send size={16} strokeWidth={1.9} />;
-}
-
-function ConnectorGuideModal({
-  guide,
-  detecting,
-  onDetect,
-  onClose,
-}: {
-  guide: ConnectorGuide;
-  detecting: boolean;
-  onDetect: () => void;
-  onClose: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  const copyCommand = async () => {
-    if (!guide.manageCommand) return;
-    try {
-      await navigator.clipboard.writeText(guide.manageCommand);
-      setCopied(true);
-    } catch {
-      window.prompt("复制管理命令：", guide.manageCommand);
-    }
-  };
-  return (
-    <div className="agent-modal-backdrop" onMouseDown={onClose}>
-      <div className="agent-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-label={`${guide.label} Connector 管理`}>
-        <div className="agent-modal-head">
-          <div>
-            <strong>{connectorIcon(guide.plugin)}在 {guide.agentName} 中管理 {guide.label}</strong>
-            <span>{guide.message}</span>
-          </div>
-          <button type="button" onClick={onClose} aria-label="关闭"><X size={16} strokeWidth={2} /></button>
-        </div>
-        {guide.manageCommand && <code className="agent-connector-command">{guide.manageCommand}</code>}
-        <div className="agent-modal-actions">
-          <button type="button" className="agent-action secondary compact" onClick={() => void copyCommand()} disabled={!guide.manageCommand}>
-            {copied ? <Check size={13} strokeWidth={2} /> : null}{copied ? "已复制" : "复制管理命令"}
-          </button>
-          <button type="button" className="agent-action primary compact" onClick={onDetect} disabled={detecting}>
-            {detecting ? <Loader2 className="spin" size={13} strokeWidth={2} /> : <RefreshCw size={13} strokeWidth={2} />}
-            {detecting ? "检测中" : "重新检测"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SummaryConfigModal({
-  plugin,
-  prompts,
-  selectedPromptId,
-  onPromptChange,
-  onClose,
-}: {
-  plugin: AgentPluginState | undefined;
-  prompts: SummaryPrompt[];
-  selectedPromptId: string | null;
-  onPromptChange: (id: string) => void;
-  onClose: () => void;
-}) {
-  const [draftPromptId, setDraftPromptId] = useState(selectedPromptId ?? firstAvailablePrompt(prompts) ?? "");
-  const selectedPrompt = prompts.find((prompt) => prompt.id === draftPromptId);
-  const save = () => {
-    if (draftPromptId) onPromptChange(draftPromptId);
-    onClose();
-  };
-  return (
-    <div className="agent-modal-backdrop" onMouseDown={onClose}>
-      <div className="agent-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-label="总结配置">
-        <div className="agent-modal-head">
-          <div>
-            <strong><FileText size={15} strokeWidth={2} />总结</strong>
-            <span>{plugin?.status === "configured" ? "由当前底层 Agent 执行。" : plugin?.detail ?? "当前 Agent 未就绪。"}</span>
-          </div>
-          <button type="button" onClick={onClose} aria-label="关闭"><X size={16} strokeWidth={2} /></button>
-        </div>
-        <label className="agent-field">
-          <span>默认总结模板</span>
-          <span className="agent-select-wrap">
-            <select value={draftPromptId} onChange={(event) => setDraftPromptId(event.currentTarget.value)} disabled={prompts.length === 0}>
-              {prompts.length === 0 ? (
-                <option value="">暂无总结模板</option>
-              ) : prompts.map((prompt) => (
-                <option key={prompt.id} value={prompt.id}>{promptLabel(prompt)}</option>
-              ))}
-            </select>
-            <ChevronDown size={14} strokeWidth={2} />
-          </span>
-          <em>{selectedPrompt ? selectedPrompt.slug : "在模板页添加后会显示在这里。"}</em>
-        </label>
-        <div className="agent-modal-actions">
-          <button type="button" className="agent-action secondary compact" onClick={onClose}>取消</button>
-          <button type="button" className="agent-action primary compact" disabled={!draftPromptId} onClick={save}>保存</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DestinationConfigModal({
-  plugin,
-  saving,
-  onSave,
-  onClose,
-}: {
-  plugin: AgentPluginState;
-  saving: boolean;
-  onSave: (input:
-    | { channel: "notion"; target: string }
-    | { channel: "zulip"; stream: string; topic: string }
-  ) => void;
-  onClose: () => void;
-}) {
-  const [notionTarget, setNotionTarget] = useState(plugin.destination?.notion?.target || "Yulu Meeting");
-  const [zulipStream, setZulipStream] = useState(plugin.destination?.zulip?.stream ?? "");
-  const [zulipTopic, setZulipTopic] = useState(plugin.destination?.zulip?.topic ?? "");
-  const isNotion = plugin.id === "notion";
-  const channel = isNotion ? "notion" : "zulip";
-  const utils = trpc.useUtils();
-  const [autoRefreshStarted, setAutoRefreshStarted] = useState(false);
-  const optionsQuery = trpc.agentConsole.destinationOptions.useQuery({ channel });
-  const refreshOptions = trpc.agentConsole.refreshDestinationOptions.useMutation({
-    onSuccess: () => {
-      void utils.agentConsole.destinationOptions.invalidate({ channel });
-      void utils.agentConsole.overview.invalidate();
-    },
-  });
-  const options = (optionsQuery.data?.options as DestinationOption[] | undefined) ?? [];
-  const canSave = isNotion ? notionTarget.trim().length > 0 : zulipStream.trim().length > 0 && zulipTopic.trim().length > 0;
-  useEffect(() => {
-    if (autoRefreshStarted || plugin.status !== "configured" || !optionsQuery.isSuccess) return;
-    setAutoRefreshStarted(true);
-    if (options.length <= 1) refreshOptions.mutate({ channel });
-  }, [autoRefreshStarted, channel, options.length, optionsQuery.isSuccess, plugin.status, refreshOptions]);
-  const save = () => {
-    if (!canSave || saving) return;
-    if (isNotion) onSave({ channel: "notion", target: notionTarget.trim() });
-    else onSave({ channel: "zulip", stream: zulipStream.trim(), topic: zulipTopic.trim() });
-  };
-  const applyOption = (id: string) => {
-    const option = options.find((item) => item.id === id);
-    if (!option) return;
-    if (isNotion) {
-      setNotionTarget(option.target || option.value);
-    } else {
-      setZulipStream(option.stream ?? "");
-      setZulipTopic(option.topic ?? "");
-    }
-  };
-  const selectedOptionId = isNotion
-    ? options.find((option) => (option.target || option.value) === notionTarget.trim())?.id ?? ""
-    : options.find((option) => option.stream === zulipStream.trim() && option.topic === zulipTopic.trim())?.id ?? "";
-  const optionStatus =
-    refreshOptions.isPending ? "正在从 Agent connector 读取目标..." :
-    refreshOptions.data?.error ? refreshOptions.data.error :
-    options.length > 0 ? `已读取 ${options.length} 个候选目标` :
-    "没有读取到候选目标，可手动填写。";
-  return (
-    <div className="agent-modal-backdrop" onMouseDown={onClose}>
-      <div className="agent-modal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-label={`${plugin.label} 发送目标`}>
-        <div className="agent-modal-head">
-          <div>
-            <strong><Database size={15} strokeWidth={2} />{plugin.label} 发送目标</strong>
-            <span>只保存路径偏好；连接和权限仍由 {plugin.agent ?? "当前"} Agent 管理。</span>
-          </div>
-          <button type="button" onClick={onClose} aria-label="关闭"><X size={16} strokeWidth={2} /></button>
-        </div>
-        <div className="agent-option-row">
-          <select value={selectedOptionId} onChange={(event) => applyOption(event.currentTarget.value)} aria-label={`${plugin.label} 候选目标`}>
-            <option value="">选择 Agent 读取到的目标...</option>
-            {options.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}{option.source === "agent" ? "" : ` · ${option.source}`}
-              </option>
-            ))}
-          </select>
-          <button type="button" className="agent-action secondary compact" disabled={refreshOptions.isPending || plugin.status !== "configured"} onClick={() => refreshOptions.mutate({ channel })}>
-            {refreshOptions.isPending ? <Loader2 className="spin" size={13} strokeWidth={2} /> : <RefreshCw size={13} strokeWidth={2} />}
-            刷新
-          </button>
-        </div>
-        <div className={"agent-option-status" + (refreshOptions.data?.error ? " warn" : "")}>{optionStatus}</div>
-        {isNotion ? (
-          <label className="agent-field">
-            <span>页面/数据库名称或 URL</span>
-            <input value={notionTarget} onChange={(event) => setNotionTarget(event.target.value)} placeholder="Yulu Meeting" />
-            <em>默认发送到 Yulu Meeting；如果 Agent connector 支持创建，未找到时会尝试新建。</em>
-          </label>
-        ) : (
-          <div className="agent-field-grid">
-            <label className="agent-field">
-              <span>Channel / Stream</span>
-              <input value={zulipStream} onChange={(event) => setZulipStream(event.target.value)} placeholder="meetings" />
-            </label>
-            <label className="agent-field">
-              <span>Topic</span>
-              <input value={zulipTopic} onChange={(event) => setZulipTopic(event.target.value)} placeholder="会议纪要" />
-            </label>
-          </div>
-        )}
-        <div className="agent-modal-actions">
-          <button type="button" className="agent-action secondary compact" onClick={onClose}>取消</button>
-          <button type="button" className="agent-action primary compact" disabled={!canSave || saving} onClick={save}>
-            {saving ? <Loader2 className="spin" size={13} strokeWidth={2} /> : null}
-            保存
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function LocalStatus({ agentTasks, onDetails }: { agentTasks: unknown; onDetails: () => void }) {
-  const tasks = Array.isArray(agentTasks) ? agentTasks as DurableAgentTask[] : [];
-  const activeTasks = tasks.filter((task) =>
-    !["completed", "failed", "cancelled", "delivery_unverified", "execution_unverified"].includes(task.state)
-  );
-  return (
-    <section className="agent-panel agent-local-status">
-      <div className="agent-panel-head">
-        <span>本地状态</span>
-        <button type="button" className="agent-link-btn" onClick={onDetails}>详情</button>
-      </div>
-      <StatusRow icon={<ListChecks size={16} strokeWidth={1.9} />} title="Agent Tasks" sub={`${activeTasks.length} 个进行中`} state={activeTasks.length > 0 ? "running" : "idle"} />
-      <StatusRow icon={<HardDrive size={16} strokeWidth={1.9} />} title="Storage" sub="本地记录目录" state="本机" />
-      <StatusRow icon={<ShieldCheck size={16} strokeWidth={1.9} />} title="Privacy" sub="音频处理遵循当前 Agent 的隐私配置" state="Agent" />
-    </section>
-  );
-}
-
-function StatusRow({ icon, title, sub, state }: { icon: JSX.Element; title: string; sub: string; state: string }) {
-  const ready = state === "running" || state === "本机" || state === "本地";
-  return (
-    <div className="agent-status-row">
-      <span className={"agent-status-icon" + (ready ? " ready" : "")}>{icon}</span>
-      <span className="agent-status-copy">
-        <strong>{title}</strong>
-        <em>{sub}</em>
-      </span>
-      <span className="agent-status-state">{state}</span>
     </div>
   );
 }

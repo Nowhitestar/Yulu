@@ -153,13 +153,11 @@ return to Yulu to test each selected capability; login alone does not prove read
 
 ### Install
 
-[Yulu v0.23.0 stable](https://github.com/Nowhitestar/Yulu/releases/tag/v0.23.0)
-includes the migration, initialization, capture-package, native-startup and
-manual-sharing repairs, plus developer-tool-free local Runtime Pack verification,
-immutable runtime import checks and safe retirement of the legacy menu-bar App.
-It uses the accepted RC21 source without intervening product changes. See the
-[release acceptance scope and retained risks](docs/release-notes/v0.23.0.md#acceptance-scope)
-for the physical-Mac checks, reused evidence and final-public journeys not re-run.
+Download the [latest stable Yulu](https://github.com/Nowhitestar/Yulu/releases/latest).
+The v0.24.0 update restores bundled meeting reminders, simplifies Settings,
+Meeting assistant and Runtime status, and improves the native titlebar,
+responsive layout and startup loading flow. See the
+[release notes and verification scope](docs/release-notes/v0.24.0.md).
 
 For an older candidate's database or silent-capture failure, see
 [database preparation](docs/operations.md#fresh-install-database-preparation) and

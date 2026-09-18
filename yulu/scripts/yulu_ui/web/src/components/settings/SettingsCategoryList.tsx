@@ -1,30 +1,29 @@
-// web/src/components/settings/SettingsCategoryList.tsx
 import { NavLink } from "react-router";
+import { AudioLines, Bell, ChevronRight, Mic, Plug, SlidersHorizontal } from "lucide-react";
 import { CATEGORIES } from "./categories.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import "./SettingsCategoryList.css";
 
-/**
- * The master column of the settings MasterDetail: one NavLink per category,
- * styled like the inbox `.recording-row` (borderless, hover=row-hover,
- * active=accent-soft). No emoji (locked by brainstorm). Each row shows the
- * localized category label plus a one-line description.
- */
+const ICONS = { general: SlidersHorizontal, recording: Mic, meetings: Bell, voice: AudioLines, connections: Plug };
+
 export function SettingsCategoryList() {
   const t = useT();
   return (
-    <div className="settings-category-list">
-      {CATEGORIES.map((cat) => (
-        <NavLink
-          key={cat.id}
-          to={`/settings/${cat.id}`}
-          data-testid="settings-category"
-          className={({ isActive }) => "recording-row settings-category-row" + (isActive ? " active" : "")}
-        >
-          <div className="recording-row-title">{t(cat.labelKey)}</div>
-          <div className="settings-category-desc">{t(cat.descKey)}</div>
-        </NavLink>
-      ))}
-    </div>
+    <nav className="settings-category-list" aria-label={t("settings.navigation")}>
+      {CATEGORIES.map((cat) => {
+        const Icon = ICONS[cat.id];
+        return (
+          <NavLink key={cat.id} to={`/settings/${cat.id}`} data-testid="settings-category"
+            className={({ isActive }) => "settings-category-row" + (isActive ? " active" : "")}>
+            <Icon size={18} strokeWidth={1.7} aria-hidden="true" />
+            <span className="settings-category-text">
+              <span className="settings-category-title">{t(cat.labelKey)}</span>
+              <span className="settings-category-desc">{t(cat.descKey)}</span>
+            </span>
+            <ChevronRight className="settings-category-chevron" size={16} aria-hidden="true" />
+          </NavLink>
+        );
+      })}
+    </nav>
   );
 }

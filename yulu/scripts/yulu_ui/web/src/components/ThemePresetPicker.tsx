@@ -33,7 +33,7 @@ function previewStyle(colors: string[]): CSSProperties {
   };
 }
 
-export function ThemePresetPicker() {
+export function ThemePresetPicker({ compact = false }: { compact?: boolean } = {}) {
   const { family, setFamily, mode, setMode, resolved, customTheme, setCustomTheme, resetCustomTheme } = useTheme();
   const [editMode, setEditMode] = useState<ResolvedThemeMode>(resolved);
   const t = useT();
@@ -73,7 +73,7 @@ export function ThemePresetPicker() {
       <div className="theme-panel-heading">
         <div>
           <div className="theme-panel-title">{t("theme.family.heading")}</div>
-          <div className="theme-panel-sub">{t("theme.family.sub")}</div>
+          {!compact && <div className="theme-panel-sub">{t("theme.family.sub")}</div>}
         </div>
         <div className="theme-mode-toggle" role="group" aria-label={t("theme.mode.aria")}>
           {(["auto", "light", "dark"] as const).map((value) => (
@@ -105,7 +105,7 @@ export function ThemePresetPicker() {
         ))}
       </div>
 
-      <div className="theme-preview-window" aria-label={t("theme.preview.aria")}>
+      {!compact && <div className="theme-preview-window" aria-label={t("theme.preview.aria")}>
         <div className="theme-preview-chrome">
           <span />
           <span />
@@ -119,7 +119,7 @@ export function ThemePresetPicker() {
             <div className="theme-preview-card" />
           </div>
         </div>
-      </div>
+      </div>}
 
       {family === "custom" && (
         <div className="theme-custom-panel" aria-label={t("theme.custom.aria")}>

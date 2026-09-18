@@ -19,6 +19,20 @@ vi.mock("../../web/src/trpc.js", () => ({
 }));
 
 describe("InlineEditRow", () => {
+  it("opens numeric settings from the keyboard and labels the editor", async () => {
+    const onCommit = vi.fn();
+    render(<InlineEditRow label="Wait time" type="number" value={10} onCommit={onCommit} />);
+    const user = userEvent.setup();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Wait time" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    const input = screen.getByRole("spinbutton", { name: "Wait time" });
+    expect(input).toHaveFocus();
+    await user.clear(input);
+    await user.type(input, "20{Enter}");
+    expect(onCommit).toHaveBeenCalledWith(20);
+  });
+
   it("text variant: shows value, click → input, Enter commits", async () => {
     const onCommit = vi.fn();
     render(<InlineEditRow label="L" type="text" value="abc" onCommit={onCommit} />);

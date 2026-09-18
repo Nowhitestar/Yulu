@@ -131,3 +131,16 @@
     padding: 0 2px 8px;
   }
 }
+
+/* Use available content width, including the user's sidebar choice. */
+@container (max-width: 800px) {
+  .masterdetail--inbox { flex-direction: column; }
+  .masterdetail--inbox > .rs-root { width: 100%; flex: 1; min-height: 0; }
+  .masterdetail--inbox > .rs-root > .rs-pane { width: 100% !important; flex: 1 !important; }
+  .masterdetail--inbox .masterdetail-list { height: 100%; max-height: none; border: 0; }
+  .masterdetail--mobile-detail-focus:has(.masterdetail-detail:not(:empty)) > .rs-root { display: none; }
+  .masterdetail--inbox .masterdetail-detail:empty { display: none; }
+  .masterdetail--inbox .masterdetail-detail:not(:empty) { height: 100%; min-height: 0; overflow-y: auto; }
+  .reader-mobile-back { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; margin-bottom: 12px; color: var(--fg-2); }
+  .reader-header, .reader-body { padding-inline: 20px; }
+}

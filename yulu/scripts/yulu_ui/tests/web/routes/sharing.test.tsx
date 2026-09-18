@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { LanguageProvider, translate } from "../../../web/src/i18n/LanguageProvider.js";
 
 const { actions, viewState, mutationState } = vi.hoisted(() => ({
@@ -47,7 +47,7 @@ vi.mock("../../../web/src/trpc.js", () => {
   const mutation = (spy: ReturnType<typeof vi.fn>) => ({
     useMutation: (options: { onSuccess?: typeof mutationState.saved }) => {
       if (spy === actions.saveDestination) mutationState.saved = options.onSuccess;
-      return { mutate: spy, isPending: spy === actions.testShare && mutationState.sending };
+      return { mutate: spy, mutateAsync: spy, isPending: spy === actions.testShare && mutationState.sending };
     },
   });
   return {
@@ -86,18 +86,39 @@ describe("SharingSettings", () => {
     };
   });
 
-  it("shows discovery and Connector Readiness separately without treating a suggestion as configured", () => {
+  it("keeps discovery optional and never treats a suggested destination as saved", () => {
     const view = render(<LanguageProvider><SharingSettings /></LanguageProvider>);
+    expect(view.getByRole("button", { name: translate("zh", "sharing.check") })).toBeInTheDocument();
+    expect(view.getByText("Product Notes").closest("details")).not.toHaveAttribute("open");
+    expect(view.getByText(translate("zh", "sharing.destination.notConfigured"))).toBeInTheDocument();
+    expect(view.queryByText(translate("zh", "sharing.destination.configured"))).toBeNull();
+    expect(actions.discover).not.toHaveBeenCalled();
+    expect(actions.probe).not.toHaveBeenCalled();
+    expect(actions.testShare).not.toHaveBeenCalled();
+  });
 
-    expect(view.getByRole("heading", { name: translate("zh", "sharing.discovery.title") }))
-      .toBeInTheDocument();
-    expect(view.getByRole("heading", { name: translate("zh", "sharing.connectorReadiness.title") }))
-      .toBeInTheDocument();
-    expect(view.getByText("Product Notes")).toBeInTheDocument();
-    expect(view.getByText(translate("zh", "sharing.destination.notConfigured")))
-      .toBeInTheDocument();
-    expect(view.queryByText(translate("zh", "sharing.destination.configured")))
-      .toBeNull();
+  it("checks a newly chosen service before saving a destination, without sending", async () => {
+    const view = render(<LanguageProvider><SharingSettings /></LanguageProvider>);
+    fireEvent.change(view.getByRole("combobox", { name: translate("zh", "sharing.connector") }), { target: { value: "zulip" } });
+    expect(actions.select).not.toHaveBeenCalled();
+    expect(view.getByRole("button", { name: translate("zh", "sharing.destination.save") })).toBeDisabled();
+    fireEvent.click(view.getByRole("button", { name: translate("zh", "sharing.check") }));
+    await waitFor(() => expect(actions.probe).toHaveBeenCalledOnce());
+    expect(actions.select).toHaveBeenCalledWith({ connectionId: "codex", connector: "zulip" });
+    expect(actions.select.mock.invocationCallOrder[0]!).toBeLessThan(actions.probe.mock.invocationCallOrder[0]!);
+    expect(actions.discover).not.toHaveBeenCalled();
+    expect(actions.saveDestination).not.toHaveBeenCalled();
+    expect(actions.testShare).not.toHaveBeenCalled();
+  });
+
+  it("stops when selecting an account fails", async () => {
+    actions.select.mockRejectedValueOnce(new Error("Account unavailable"));
+    const view = render(<LanguageProvider><SharingSettings /></LanguageProvider>);
+    fireEvent.change(view.getByRole("combobox", { name: translate("zh", "sharing.connector") }), { target: { value: "zulip" } });
+    fireEvent.click(view.getByRole("button", { name: translate("zh", "sharing.check") }));
+    await waitFor(() => expect(view.getByRole("alert")).toHaveTextContent("Account unavailable"));
+    expect(actions.probe).not.toHaveBeenCalled();
+    expect(actions.testShare).not.toHaveBeenCalled();
   });
 
   it("explains exact page links and submits the pasted value without silently sending", () => {

@@ -392,25 +392,53 @@ function LocationProbe() {
   return <output>{`${location.pathname}${location.search}`}</output>;
 }
 
-function mount(lang: "zh" | "en" = "zh", initialEntry = "/settings/llm") {
+function mount(lang: "zh" | "en" = "zh", initialEntry = "/settings/llm", expandControls = true) {
   localStorage.setItem("yulu_ui.lang", lang);
-  return render(
+  const rendered = render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <LanguageProvider>
         <AgentConnections />
       </LanguageProvider>
     </MemoryRouter>,
   );
+  // Existing action-contract tests exercise the controls after their disclosures are opened.
+  if (expandControls) rendered.container.querySelectorAll("details").forEach((element) => { element.open = true; });
+  return rendered;
 }
 
+const initialView = structuredClone(mocks.view);
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  Object.assign(mocks.view, structuredClone(initialView));
   const claude = mocks.view.connections.find((connection) => connection.id === "claude-code");
   if (claude) claude.settings.summaryModel = "claude-sonnet-5";
 });
 
-describe("shared Agent Connection Center", () => {
+describe("shared AI services", () => {
+  it("starts with current uses and reveals just the chosen capability without sending a request", async () => {
+    const { container } = mount("en", "/settings/connections", false);
+    expect(container.querySelectorAll("details[open]")).toHaveLength(0);
+    expect(screen.getByLabelText("Services in use")).toHaveTextContent("xAI");
+    await userEvent.setup().click(screen.getByRole("button", { name: "Configure Summary" }));
+    expect(screen.getByTestId("connection-capability-summary")).toHaveAttribute("open");
+    expect(screen.getByTestId("connection-capability-conversation")).not.toHaveAttribute("open");
+    expect(mocks.select).not.toHaveBeenCalled();
+    expect(mocks.probe).not.toHaveBeenCalled();
+    expect(mocks.acceptDisclosure).not.toHaveBeenCalled();
+  });
+
+  it("requires a changed model to be checked before selecting it", async () => {
+    mount("en");
+    const user = userEvent.setup();
+    const summary = screen.getByTestId("connection-capability-codex-summary");
+    await user.clear(within(summary).getByRole("textbox", { name: "Codex Summary model" }));
+    await user.type(within(summary).getByRole("textbox", { name: "Codex Summary model" }), "new-untested-model");
+    expect(within(summary).getByRole("button", { name: "Select Codex for future summaries" })).toBeDisabled();
+    expect(mocks.select).not.toHaveBeenCalled();
+    expect(mocks.probe).not.toHaveBeenCalled();
+  });
+
   it("rechecks an unreadable saved credential without starting OAuth or changing the selected source", async () => {
     const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
     const saved = { ...direct.authorization };
@@ -527,11 +555,13 @@ describe("shared Agent Connection Center", () => {
   });
 
   it("focuses the exact connection capability from a remediation deep link without probing", async () => {
-    mount("en", "/settings/llm?connection=codex&capability=summary");
+    mount("en", "/settings/llm?connection=codex&capability=summary", false);
 
     const target = screen.getByTestId("connection-capability-codex-summary");
     await vi.waitFor(() => expect(target).toHaveFocus());
     expect(target).toHaveAttribute("aria-current", "location");
+    expect(target).toHaveAttribute("open");
+    expect(target.closest(".agent-provider-details")).toHaveAttribute("open");
     expect(mocks.probe).not.toHaveBeenCalled();
   });
 
@@ -559,7 +589,7 @@ describe("shared Agent Connection Center", () => {
     expect(mocks.probe).not.toHaveBeenCalled();
 
     const user = userEvent.setup();
-    await user.click(within(target).getByRole("button", { name: "Scan installed runtimes" }));
+    await user.click(within(target).getByRole("button", { name: "Find installed apps" }));
     expect(mocks.refresh).toHaveBeenCalledOnce();
     mocks.view.connections = saved;
   });
@@ -567,7 +597,7 @@ describe("shared Agent Connection Center", () => {
   it("opens without a probe and distinguishes candidates, legacy connections, current readiness, and history", () => {
     mount();
 
-    expect(screen.getByRole("heading", { name: "Agent 连接中心" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "AI 服务" })).toBeInTheDocument();
     expect(screen.getAllByText("候选连接，不是已连接")).toHaveLength(4);
     expect(screen.getByText("旧版自定义连接不能证明能力就绪")).toBeInTheDocument();
     const summary = screen.getByTestId("connection-capability-summary");
@@ -587,7 +617,7 @@ describe("shared Agent Connection Center", () => {
     mount("en");
 
     const guidance = screen.getByTestId("agent-runtime-install-guidance");
-    expect(within(guidance).getByRole("heading", { name: "Install or locate a runtime" }))
+    expect(within(guidance).getByRole("heading", { name: "Can’t find your app?" }))
       .toBeInTheDocument();
     expect(within(guidance).getByText(/Codex.*codex executable.*Yulu Host PATH/i)).toBeInTheDocument();
     expect(within(guidance).getByText(/Claude Code.*claude executable.*Yulu Host PATH/i)).toBeInTheDocument();
@@ -642,7 +672,7 @@ describe("shared Agent Connection Center", () => {
     expect(within(conversation).getByText("Conversation Data Path Disclosure · xai-conversation-v1"))
       .toBeInTheDocument();
     expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeDisabled();
-    expect(within(screen.getByRole("heading", { name: "xAI" }).closest("section")!)
+    expect(within(screen.getByRole("heading", { name: "xAI" }).closest("details")!)
       .getByRole("button", { name: "Reconnect Grok OAuth" })).toBeEnabled();
     expect(mocks.probe).not.toHaveBeenCalled();
 
@@ -654,7 +684,7 @@ describe("shared Agent Connection Center", () => {
   it("stores an API key separately from explicitly selecting it as the xAI Credential Source", async () => {
     mount("en");
     const user = userEvent.setup();
-    const xai = screen.getByRole("heading", { name: "xAI" }).closest("section")!;
+    const xai = screen.getByRole("heading", { name: "xAI" }).closest("details")!;
     expect(within(xai).getByText(
       "Write-only and stored in macOS Keychain. Saving does not select it; Yulu never shows it again or silently falls back to it.",
     )).toBeInTheDocument();
@@ -740,7 +770,7 @@ describe("shared Agent Connection Center", () => {
 
     const card = screen.getByTestId("agent-connection-codex");
     expect(within(card).getByText("API key (not Runtime-owned OAuth)")).toBeInTheDocument();
-    expect(within(card).getByText(remediation).parentElement).toHaveAttribute("role", "alert");
+    expect(within(card).getByText(remediation)).toHaveAttribute("role", "alert");
     expect(within(card).getByRole("button", { name: "Select Codex for future summaries" })).toBeDisabled();
     expect(within(card).getByRole("button", { name: "Test summary" })).toBeDisabled();
 
@@ -859,7 +889,7 @@ describe("shared Agent Connection Center", () => {
 
     const card = screen.getByTestId(`agent-connection-${adapter}`);
     expect(within(card).queryByRole("heading", { name: "Summary" })).not.toBeInTheDocument();
-    expect(within(card).getByText(/Conversation-only.*tool-free background Summary/)).toBeInTheDocument();
+    expect(within(card).getByText(/Supports conversations only/)).toBeInTheDocument();
     expect(within(card).getByText(/never reads or copies.*credentials/i)).toBeInTheDocument();
     const conversation = within(card).getByTestId(`connection-capability-${adapter}-conversation`);
     expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeDisabled();
@@ -939,7 +969,7 @@ describe("shared Agent Connection Center", () => {
     summary.disclosure.required = false;
     mount();
     const user = userEvent.setup();
-    const xaiCard = screen.getByRole("heading", { name: "xAI" }).closest("section")!;
+    const xaiCard = screen.getByRole("heading", { name: "xAI" }).closest("details")!;
 
     await user.click(within(screen.getByTestId("connection-capability-summary"))
       .getByRole("button", { name: "测试摘要" }));
@@ -976,9 +1006,9 @@ describe("shared Agent Connection Center", () => {
   it("provides bilingual accessible status and exact repair guidance", () => {
     mount("en");
 
-    expect(screen.getByRole("heading", { name: "Agent Connection Center" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "AI services" })).toBeInTheDocument();
     expect(screen.getAllByText("Connection candidate, not connected")).toHaveLength(4);
-    expect(screen.getByText(/Open this same center from Activation, Settings, or Agent Console/)).toBeInTheDocument();
+    expect(screen.getByText(/Changes apply to new work/)).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "xAI connection status" })).toHaveTextContent("Connected");
   });
 

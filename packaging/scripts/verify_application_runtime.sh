@@ -43,6 +43,7 @@ REQUIRED_FILES=(
   "Contents/Resources/runtime/python/bin/python3"
   "Contents/Resources/runtime/runtime-versions.json"
   "Contents/Resources/runtime/yulu/scripts/record_audio.py"
+  "Contents/Resources/runtime/yulu/scripts/reminder_services.py"
   "Contents/Resources/runtime/yulu/scripts/application_migration.py"
   "Contents/Resources/runtime/yulu/scripts/application_update.py"
   "Contents/Resources/runtime/yulu/scripts/initialize_host_databases.py"

@@ -7,6 +7,8 @@ import { LanguageProvider } from "../../web/src/i18n/LanguageProvider.js";
 const update = vi.fn(async () => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] }));
 let recordingState = "idle";
 let localInstalled = false;
+let engine = "local";
+let sessionActive = false;
 const installLocal = vi.fn();
 const uninstallLocal = vi.fn();
 const testLocal = vi.fn();
@@ -24,7 +26,7 @@ vi.mock("../../web/src/ws.js", () => ({
 vi.mock("../../web/src/trpc.js", () => ({
   trpc: {
     config: {
-      get: { useQuery: () => ({ data: { transcription: { engine: "local", language: "auto" } }, isPending: false }) },
+      get: { useQuery: () => ({ data: { transcription: { engine, language: "auto" } }, isPending: false }) },
       schema: { useQuery: () => ({ data: schema, isPending: false }) },
       update: { useMutation: () => ({ mutateAsync: update }) },
     },
@@ -35,7 +37,7 @@ vi.mock("../../web/src/trpc.js", () => ({
         operation: "idle",
         runtimeBytes: localInstalled ? 80_000_000 : 0,
         modelBytes: localInstalled ? 240_000_000 : 0,
-        sessionActive: false,
+        sessionActive,
         message: null,
         error: null,
       } }) },
@@ -89,6 +91,8 @@ beforeEach(() => {
   update.mockClear();
   recordingState = "idle";
   localInstalled = false;
+  engine = "local";
+  sessionActive = false;
   installLocal.mockClear();
   uninstallLocal.mockClear();
   testLocal.mockClear();
@@ -101,8 +105,8 @@ describe("TranscriptionSection", () => {
     mount();
     expect(screen.getByText(/模型尚未就绪/)).toBeInTheDocument();
     const languageRow = screen.getByText("语言").closest(".row") as HTMLElement;
-    await userEvent.click(within(languageRow).getByText("auto"));
-    expect(within(languageRow).queryByRole("option", { name: "ja" })).toBeNull();
+    await userEvent.click(within(languageRow).getByText("自动识别"));
+    expect(within(languageRow).queryByRole("option", { name: "日语" })).toBeNull();
   });
 
   it("presents one explicit audio engine and links to the shared xAI connection", () => {
@@ -110,9 +114,8 @@ describe("TranscriptionSection", () => {
     expect(screen.getByText("音频引擎")).toBeInTheDocument();
     expect(screen.getByText("语言")).toBeInTheDocument();
     expect(screen.getByText("本地音频引擎")).toBeInTheDocument();
-    expect(screen.getByText("xAI 连接")).toBeInTheDocument();
+    expect(screen.queryByText("xAI 连接")).toBeNull();
     expect(screen.getByRole("button", { name: "安装本地模型" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute("href", "/settings/llm");
     expect(screen.queryByRole("button", { name: "使用 Grok 账号连接" })).toBeNull();
     expect(screen.getByRole("link", { name: /管理术语表/ })).toHaveAttribute("href", "/knowledge/glossary");
 
@@ -130,16 +133,26 @@ describe("TranscriptionSection", () => {
   it("shows model test and confirms uninstall after installation", async () => {
     localInstalled = true;
     mount();
+    await userEvent.setup().click(screen.getByText("模型维护"));
     expect(screen.getByRole("button", { name: "测试模型" })).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "卸载" }));
     expect(window.confirm).toHaveBeenCalledOnce();
     expect(uninstallLocal).toHaveBeenCalledOnce();
   });
 
+  it("keeps uninstall unavailable during an active recording", async () => {
+    localInstalled = true;
+    sessionActive = true;
+    mount();
+    await userEvent.setup().click(screen.getByText("模型维护"));
+    expect(screen.getByRole("button", { name: "卸载" })).toBeDisabled();
+    expect(uninstallLocal).not.toHaveBeenCalled();
+  });
+
   it("persists the language without requesting a daemon restart", async () => {
     mount();
     const row = screen.getByText("语言").closest(".row") as HTMLElement;
-    await userEvent.setup().click(within(row).getByText("auto"));
+    await userEvent.setup().click(within(row).getByText("自动识别"));
     await userEvent.setup().selectOptions(within(row).getByRole("combobox"), "zh");
     await vi.waitFor(() => expect(update).toHaveBeenCalledWith({ key: "transcription.language", value: "zh" }));
   });
@@ -148,22 +161,24 @@ describe("TranscriptionSection", () => {
     recordingState = "recording";
     mount();
     const row = screen.getByText("语言").closest(".row") as HTMLElement;
-    expect(within(row).getByText("auto")).toBeInTheDocument();
+    expect(within(row).getByText("自动识别")).toBeInTheDocument();
     expect(within(row).queryByText(/录音中不可改/)).toBeNull();
   });
 
   it("keeps xAI authorization on the shared provider route", () => {
+    engine = "xai";
     mount();
-    expect(screen.getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute("href", "/settings/llm");
+    expect(screen.getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute("href", "/settings/connections?connection=direct-xai&capability=transcription#ai-connections");
   });
 
   it("keeps the compact xAI projection localized without rendering backend detail", () => {
+    engine = "xai";
     mount("en");
 
     expect(screen.getByText("xAI connection")).toBeInTheDocument();
     expect(screen.getByText("Not connected")).toBeInTheDocument();
     expect(screen.getByText("Not tested")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/llm");
+    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/connections?connection=direct-xai&capability=transcription#ai-connections");
     expect(screen.queryByText("需要在 Yulu 中连接 xAI")).toBeNull();
   });
 });

@@ -23,6 +23,7 @@ export function AgentCalendarConnectorSection() {
   const [selectionOverride, setSelectionOverride] = useState(state.data?.selection ?? null);
   const [readinessOverride, setReadinessOverride] = useState(state.data?.readiness ?? null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const selection = selectionOverride ?? state.data?.selection ?? null;
   const readiness = readinessOverride ?? state.data?.readiness;
@@ -39,12 +40,15 @@ export function AgentCalendarConnectorSection() {
   };
   const run = async <T,>(action: () => Promise<T>, onSuccess?: (result: T) => void) => {
     setError(null);
+    setBusy(true);
     try {
       const result = await action();
       onSuccess?.(result);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -54,6 +58,24 @@ export function AgentCalendarConnectorSection() {
   if (state.isError || !state.data) {
     return <section className="settings-section"><p role="alert">{t("settings.agentCalendarConnector.unavailable")}</p></section>;
   }
+
+  const changed = selection?.connectionId !== connectionId || selection?.connector !== connectorName.trim();
+  const status = changed ? "untested" : readiness?.status ?? "untested";
+  const connect = () => run(async () => {
+    if (changed) {
+      const selected = await select.mutateAsync({ connectionId, connector: connectorName.trim() });
+      setSelectionOverride(selected.selection);
+      setReadinessOverride(selected.readiness);
+    }
+    const checked = await probe.mutateAsync();
+    setSelectionOverride(checked.selection);
+    setReadinessOverride(checked.readiness);
+    // A different selection (for example from another window) must not be adopted.
+    if (checked.selection?.connectionId !== connectionId || checked.selection?.connector !== connectorName.trim()) {
+      throw new Error(t("settings.calendarSource.selectionChanged"));
+    }
+    if (checked.readiness.status === "ready") await adopt.mutateAsync();
+  });
 
   return (
     <section
@@ -73,7 +95,7 @@ export function AgentCalendarConnectorSection() {
       <div className="agent-calendar-connector-fields">
         <label>
           <span>{t("settings.agentCalendarConnector.connection")}</span>
-          <select value={connectionId} onChange={(event) => setConnectionIdOverride(event.currentTarget.value)}>
+          <select disabled={busy} value={connectionId} onChange={(event) => setConnectionIdOverride(event.currentTarget.value)}>
             <option value="">{t("settings.agentCalendarConnector.connection.choose")}</option>
             {state.data.connections.map((connection) => (
               <option key={connection.id} value={connection.id}>{connection.label}</option>
@@ -83,58 +105,34 @@ export function AgentCalendarConnectorSection() {
         <label>
           <span>{t("settings.agentCalendarConnector.connector")}</span>
           <input
+            disabled={busy}
+            maxLength={100}
             value={connectorName}
             onChange={(event) => setConnectorNameOverride(event.currentTarget.value)}
             placeholder="google_calendar"
           />
         </label>
-        <button
-          type="button"
-          disabled={!connectionId || !connectorName.trim() || select.isPending}
-          onClick={() => void run(
-            () => select.mutateAsync({ connectionId, connector: connectorName.trim() }),
-            (result) => {
-              setSelectionOverride(result.selection);
-              setReadinessOverride(result.readiness);
-            },
-          )}
-        >
-          {t("settings.agentCalendarConnector.select")}
-        </button>
       </div>
 
-      <div className="agent-calendar-connector-readiness" data-status={readiness?.status ?? "untested"}>
-        <strong>{t("settings.agentCalendarConnector.readiness")}</strong>
-        {readiness?.failure && <span>{t(FAILURE_LABELS[readiness.failure])}</span>}
-        <span>{readiness?.detail ?? t("settings.agentCalendarConnector.readiness.untested")}</span>
-        {readiness?.remediation && <small>{readiness.remediation}</small>}
-        <button
-          type="button"
-          disabled={!selection || probe.isPending}
-          onClick={() => void run(() => probe.mutateAsync(), (result) => setReadinessOverride(result.readiness))}
-        >
-          {t("settings.agentCalendarConnector.probe")}
-        </button>
-      </div>
-
-      {!outcome && (
-        <div className="agent-calendar-connector-actions">
-          <button
-            type="button"
-            disabled={readiness?.status !== "ready" || adopt.isPending}
-            onClick={() => void run(() => adopt.mutateAsync())}
-          >
-            {t("onboarding.action.adoptAgentCalendarConnector")}
-          </button>
-          <button
-            type="button"
-            disabled={defer.isPending}
-            onClick={() => void run(() => defer.mutateAsync({ capability: "agent-calendar-connector" }))}
-          >
-            {t("settings.agentCalendarConnector.defer")}
+      <div className="agent-calendar-connector-readiness" data-status={status}>
+        <div className="settings-inline-actions">
+          <span className={`sharing-badge ${status}`}>{t(`sharing.status.${status}`)}</span>
+          <button className="settings-action" type="button"
+            disabled={!connectionId || !connectorName.trim() || busy}
+            onClick={() => void connect()}>
+            {busy ? t("sharing.checking") : t("settings.agentCalendarConnector.connect")}
           </button>
         </div>
-      )}
+        {!changed && readiness?.status === "failed" && <div role="alert" className="calendar-source-error">
+          {readiness.failure && <strong>{t(FAILURE_LABELS[readiness.failure])}</strong>}
+          <p>{readiness.detail}</p>
+          {readiness.remediation && <p>{readiness.remediation}</p>}
+        </div>}
+      </div>
+      {!outcome && !selection && <button type="button" className="settings-text-link" disabled={busy}
+        onClick={() => void run(() => defer.mutateAsync({ capability: "agent-calendar-connector" }))}>
+        {t("settings.agentCalendarConnector.defer")}
+      </button>}
 
       {error && <p role="alert" className="calendar-source-error">{error}</p>}
     </section>

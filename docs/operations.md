@@ -86,6 +86,27 @@ owned native work runs, then reject new commands until update completion. A fail
 or timed-out toggle is not replayed automatically; confirm the current recording
 state before explicitly trying again.
 
+### Meeting reminder services in the product App
+
+The installed App also owns the calendar poller, scheduler, and meeting detector.
+They start after migration and native-control readiness, respect the saved
+calendar/detection settings, and recover exited children. Closing the window
+keeps them running; quitting or updating Yulu drains the services and their
+pending prompt processes. There are no additional reminder LaunchAgents to load
+manually for the DMG installation.
+
+Use Settings → Meeting reminders to inspect the selected calendar, access check,
+schedule freshness, and meeting-detection toggle. Runtime status → Advanced
+diagnostics retains the schedule, service controls, and logs. For an installed
+App these controls reach the App-owned supervisor rather than retired user
+LaunchAgents. Restarting a stopped reminder service does not enable a disabled
+calendar or detector preference.
+
+The internal `YULU_MANAGE_REMINDERS=1` flag enables supervision only in the
+installed native App. Its children receive `YULU_MANAGED_REMINDERS=1` so dialogs
+remain in the supervisor-owned process groups. No user environment change,
+credential migration, or calendar reauthorization is required when updating.
+
 ### 1. Native capture
 
 ```bash

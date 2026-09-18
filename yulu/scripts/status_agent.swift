@@ -20,12 +20,14 @@ let HOME_DIR = nativeEnvironment["HOME"] ?? FileManager.default.homeDirectoryFor
 /// The same implementation remains usable by the legacy standalone entry point.
 public final class NativeRecordingControls {
     private let controller: StatusAgentApp
+    private let reminders: NativeReminderServices
     private var prepared = false
     private var active = false
 
     public init(environment: [String: String], openRoute: @escaping (String) -> Void) {
         embeddedEnvironment = environment
         controller = StatusAgentApp()
+        reminders = NativeReminderServices(environment: environment)
         controller.openRoute = openRoute
     }
 
@@ -47,23 +49,81 @@ public final class NativeRecordingControls {
 
     public func activate() throws {
         try prepare()
-        guard !active else { nativeWork.resume(); return }
+        guard !active else { nativeWork.resume(); reminders.resume(); return }
         nativeWork.resume()
         try controller.startNativeControls()
         active = true
+        reminders.resume()
     }
 
     /// Same fail-closed recording observation consumed by Application Update.
     public func quiesce(captureRecording: Bool?) -> Bool? {
         guard captureRecording == false else { return captureRecording }
-        return !nativeWork.quiesce()
+        let remindersStopped = reminders.quiesce()
+        return !nativeWork.quiesce() || !remindersStopped
     }
 
     public func stop() {
         guard prepared else { return }
         controller.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+        _ = reminders.quiesce()
         active = false
         prepared = false
+    }
+}
+
+/// Own the reminder supervisor alongside native controls, after migration only.
+/// It uses bundled Python and drains its process groups before an update.
+private final class NativeReminderServices {
+    private let environment: [String: String]
+    private let queue = DispatchQueue(label: "com.yulu.reminder-lifecycle")
+    private var process: Process?
+    private var timer: DispatchSourceTimer?
+    private var accepting = false
+
+    init(environment: [String: String]) { self.environment = environment }
+
+    func resume() {
+        guard environment["YULU_MANAGE_REMINDERS"] == "1" else { return }
+        queue.sync {
+            accepting = true
+            launchIfNeeded()
+            guard timer == nil else { return }
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + 5, repeating: 5)
+            timer.setEventHandler { [weak self] in self?.launchIfNeeded() }
+            self.timer = timer
+            timer.resume()
+        }
+    }
+
+    func quiesce() -> Bool {
+        queue.sync {
+            accepting = false
+            timer?.cancel()
+            timer = nil
+            guard let process, process.isRunning else { self.process = nil; return true }
+            process.terminate()
+            return false
+        }
+    }
+
+    private func launchIfNeeded() {
+        guard accepting, process?.isRunning != true,
+              let python = environment["YULU_PYTHON"],
+              let scripts = environment["YULU_SCRIPT_DIR"] else { return }
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: python)
+        child.arguments = ["\(scripts)/reminder_services.py"]
+        child.currentDirectoryURL = URL(fileURLWithPath: scripts)
+        child.environment = environment
+        child.standardInput = FileHandle.nullDevice
+        do {
+            try child.run()
+            process = child
+        } catch {
+            log("Meeting reminder supervisor could not start: \(error.localizedDescription)")
+        }
     }
 }
 

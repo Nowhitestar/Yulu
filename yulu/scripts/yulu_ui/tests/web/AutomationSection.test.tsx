@@ -49,7 +49,7 @@ vi.mock("../../web/src/trpc.js", () => ({
   },
 }));
 
-import { AutomationSection } from "../../web/src/components/settings/AutomationSection.js";
+import { AutomationSection, RecordingProcessingSection } from "../../web/src/components/settings/AutomationSection.js";
 
 const tracker = { record: vi.fn(), statusFor: () => null, clear: vi.fn(), pending: {} } as never;
 
@@ -67,10 +67,10 @@ beforeEach(() => {
   configReturn = { data: baseConfig(), isPending: false };
 });
 
-function mount() {
+function mount(processing = false) {
   return render(
     <MemoryRouter>
-      <AutomationSection tracker={tracker} />
+      {processing ? <RecordingProcessingSection tracker={tracker} /> : <AutomationSection tracker={tracker} />}
     </MemoryRouter>,
   );
 }
@@ -78,13 +78,12 @@ function mount() {
 describe("AutomationSection — meeting detection (P2-3)", () => {
   it("renders all four meeting_detection fields with their current values", () => {
     mount();
-    expect(screen.getByText("自动化")).toBeInTheDocument();
-    expect(screen.getByText("录音处理管线")).toBeInTheDocument();
-    expect(screen.getByText("自动处理录音")).toBeInTheDocument();
-    expect(screen.getByText("会议检测")).toBeInTheDocument();
-    expect(screen.getByText("轮询间隔（秒）")).toBeInTheDocument();
-    expect(screen.getByText("稳定窗口（秒）")).toBeInTheDocument();
-    expect(screen.getByText("提示冷却（秒）")).toBeInTheDocument();
+    expect(screen.getByText("发现正在进行的会议")).toBeVisible();
+    expect(screen.queryByText("生成转写与摘要")).toBeNull();
+    expect(screen.getByText("提醒我录音")).toBeInTheDocument();
+    expect(screen.getByText("检查间隔（秒）")).toBeInTheDocument();
+    expect(screen.getByText("提示前等待（秒）")).toBeInTheDocument();
+    expect(screen.getByText("忽略后等待（秒）")).toBeInTheDocument();
   });
 
   it("resumes automatic recording processing through the production config seam", async () => {
@@ -95,7 +94,7 @@ describe("AutomationSection — meeting detection (P2-3)", () => {
       },
       isPending: false,
     };
-    mount();
+    mount(true);
     const row = screen.getByText("自动处理录音").closest(".row")!;
     const user = userEvent.setup();
     await user.click(within(row as HTMLElement).getByRole("switch"));
@@ -107,7 +106,7 @@ describe("AutomationSection — meeting detection (P2-3)", () => {
 
   it("toggling Meeting detection commits meeting_detection.enabled", async () => {
     mount();
-    const row = screen.getByText("会议检测").closest(".row")!;
+    const row = screen.getByText("提醒我录音").closest(".row")!;
     const sw = within(row as HTMLElement).getByRole("switch");
     const user = userEvent.setup();
     await user.click(sw);
@@ -118,8 +117,9 @@ describe("AutomationSection — meeting detection (P2-3)", () => {
 
   it("editing Poll interval commits meeting_detection.interval_sec as a number", async () => {
     mount();
-    const row = screen.getByText("轮询间隔（秒）").closest(".row")!;
+    const row = screen.getByText("检查间隔（秒）").closest(".row")!;
     const user = userEvent.setup();
+    await user.click(screen.getByText("高级检测设置"));
     await user.click(within(row as HTMLElement).getByText("10"));
     const input = within(row as HTMLElement).getByRole("spinbutton") as HTMLInputElement;
     await user.clear(input);
@@ -133,14 +133,14 @@ describe("AutomationSection — meeting detection (P2-3)", () => {
   it("falls back to defaults when meeting_detection is absent (no crash)", () => {
     configReturn = { data: {}, isPending: false };
     expect(() => mount()).not.toThrow();
-    const row = screen.getByText("轮询间隔（秒）").closest(".row")!;
+    const row = screen.getByText("检查间隔（秒）").closest(".row")!;
     expect(within(row as HTMLElement).getByText("10")).toBeInTheDocument();
   });
 
   it("recording-guard — while recording, the restart-class fields lock and edits are dropped", async () => {
     recordingState = "recording";
     mount();
-    const row = screen.getByText("会议检测").closest(".row")!;
+    const row = screen.getByText("提醒我录音").closest(".row")!;
     // The interactive switch is replaced by a read-only display + a 录音中 note.
     expect(within(row as HTMLElement).queryByRole("switch")).toBeNull();
     expect(within(row as HTMLElement).getByText(/录音中/)).toBeInTheDocument();
@@ -156,7 +156,7 @@ describe("AutomationSection — advanced match arrays disclosure (P3-2)", () => 
     // Collapsed by default.
     expect(disclosure.open).toBe(false);
     // The "change with care" note is on the summary.
-    expect(screen.getByText(/谨慎更改/i)).toBeInTheDocument();
+    expect(screen.getByText("检查间隔（秒）")).not.toBeVisible();
     // The array field labels are in the DOM (details keeps children mounted) but
     // the summary itself is the only thing visible until expanded.
     expect(screen.getByText("窗口标题关键词")).toBeInTheDocument();

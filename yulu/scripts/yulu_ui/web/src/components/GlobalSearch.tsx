@@ -6,7 +6,7 @@ import { Search as SearchIcon, X } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useDebounced } from "../hooks/useDebounced.js";
 import { useSettingsSchema } from "../hooks/useSettingsSchema.js";
-import { categoryLabelKey, categoryMeta } from "./settings/categories.js";
+import { categoryLabelKey, categoryMeta, settingsTarget } from "./settings/categories.js";
 import { useT, type TFunc } from "../i18n/LanguageProvider.js";
 import "./GlobalSearch.css";
 
@@ -24,6 +24,7 @@ interface SettingHit {
   kind: "setting";
   category: string;
   label: string;
+  href: string;
 }
 
 type Item = ({ t: "hit" } & Hit) | ({ t: "setting" } & SettingHit);
@@ -45,14 +46,16 @@ function buildSettingHits(
   for (const s of schema) {
     if (RETIRED_LLM_SETTINGS.has(s.path)) continue;
     if (!categoryMeta(s.category)) continue;
-    const catLabel = t(categoryLabelKey(s.category));
+    const target = settingsTarget(s.category, "", s.path);
+    const catLabel = t(categoryLabelKey(target.id));
     const matches =
       s.label.toLowerCase().includes(q) ||
       s.category.toLowerCase().includes(q) ||
+      t(`settings.category.${s.category}.label`).toLowerCase().includes(q) ||
       catLabel.toLowerCase().includes(q);
     if (!matches) continue;
-    if (!byCategory.has(s.category)) {
-      byCategory.set(s.category, { kind: "setting", category: s.category, label: catLabel });
+    if (!byCategory.has(target.id)) {
+      byCategory.set(target.id, { kind: "setting", category: target.id, label: catLabel, href: `/settings/${target.id}${target.hash}` });
     }
   }
   return Array.from(byCategory.values()).slice(0, 5);
@@ -111,7 +114,7 @@ function hitTargetUrl(h: Hit): string {
 }
 
 function itemTargetUrl(item: Item): string {
-  return item.t === "setting" ? `/settings/${item.category}` : hitTargetUrl(item);
+  return item.t === "setting" ? item.href : hitTargetUrl(item);
 }
 
 function itemKey(item: Item, i: number): string {

@@ -1,4 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router";
+import { taskStateKey } from "./taskStatus.js";
 import { trpc } from "../../trpc.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import "./ControlSections.css";
@@ -58,10 +60,11 @@ export function AgentQueueSection() {
         </div>
       </div>
 
+      {(retryMut.error || confirmMut.error || abandonMut.error) && <p role="alert">{retryMut.error?.message || confirmMut.error?.message || abandonMut.error?.message}</p>}
       <div className="control-stats">
         <span className="control-pill">{t("health.queue.total", { n: entries.length })}</span>
         {Object.entries(stats).map(([status, count]) => (
-          <span key={status} className="control-pill" data-status={status}>{status}: {count}</span>
+          <span key={status} className="control-pill" data-status={status}>{t(taskStateKey(status))}: {count}</span>
         ))}
       </div>
 
@@ -76,21 +79,21 @@ export function AgentQueueSection() {
               <div className="control-card-head">
                 <div>
                   <div className="control-card-title">{entry.title || entry.id}</div>
-                  <div className="control-card-sub">{entry.recordingStem} · {entry.createdAt}</div>
+                  <Link className="runtime-feature-action" to={`/inbox/${encodeURIComponent(entry.recordingStem)}`}>{t("runtime.openRecording")}</Link>
                 </div>
                 <span className="control-pill" data-status={entry.state}>
-                  {entry.state}
+                  {t(taskStateKey(entry.state))}
                 </span>
               </div>
-              <div className="control-meta">
+              <details className="control-meta"><summary>{t("runtime.taskDetails")}</summary>
                 <div>{t("health.queue.phase")}: {entry.phase}</div>
                 <div>{t("health.queue.provider")}: {entry.agentProvider}</div>
                 <div>{t("health.queue.attempt")}: {entry.attempt}</div>
                 <div>{t("health.queue.updated")}: {entry.updatedAt}</div>
-                {entry.state === "delivery_unverified" && <div>{t("health.queue.deliveryUnverified")}</div>}
-                {entry.state === "execution_unverified" && <div>{t("health.queue.executionUnverified")}</div>}
                 {entry.error && <div>{t("health.queue.error")}: {entry.error}</div>}
-              </div>
+              </details>
+              {entry.state === "delivery_unverified" && <p>{t("health.queue.deliveryUnverified")}</p>}
+              {entry.state === "execution_unverified" && <p>{t("health.queue.executionUnverified")}</p>}
               {RETRYABLE_STATES.has(entry.state) && !entries.some((other) => (
                 other.id !== entry.id &&
                 other.recordingStem === entry.recordingStem &&

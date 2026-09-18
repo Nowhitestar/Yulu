@@ -101,9 +101,9 @@ function TextValue({ value, onCommit, emptyLabel, ariaLabel }: TextProps & { ari
   if (!editing) {
     const isEmpty = value.trim().length === 0;
     return (
-      <span className={"value-display" + (isEmpty ? " value-display--empty" : "")} onClick={() => setEditing(true)}>
+      <button type="button" aria-label={ariaLabel} className={"value-display" + (isEmpty ? " value-display--empty" : "")} onClick={() => setEditing(true)}>
         {displayOrUnset(value, t, emptyLabel)}
-      </span>
+      </button>
     );
   }
   const commit = () => { setEditing(false); if (draft !== value) onCommit(draft); };
@@ -121,14 +121,14 @@ function TextValue({ value, onCommit, emptyLabel, ariaLabel }: TextProps & { ari
   );
 }
 
-function NumberValue({ value, onCommit, min, max, step }: NumberProps) {
+function NumberValue({ value, onCommit, min, max, step, label }: NumberProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value));
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
   useEffect(() => { setDraft(String(value)); }, [value]);
 
-  if (!editing) return <span className="value-display" onClick={() => setEditing(true)}>{value}</span>;
+  if (!editing) return <button type="button" aria-label={label} className="value-display" onClick={() => setEditing(true)}>{value}</button>;
   const commit = () => {
     setEditing(false);
     const n = parseFloat(draft);
@@ -140,6 +140,7 @@ function NumberValue({ value, onCommit, min, max, step }: NumberProps) {
       ref={ref}
       className="value-input"
       type="number"
+      aria-label={label}
       value={draft}
       min={min} max={max} step={step}
       onChange={(e) => setDraft(e.target.value)}
@@ -149,7 +150,7 @@ function NumberValue({ value, onCommit, min, max, step }: NumberProps) {
   );
 }
 
-function SelectValue({ value, options, onCommit, emptyLabel }: SelectProps) {
+function SelectValue({ value, options, onCommit, emptyLabel, label }: SelectProps) {
   const t = useT();
   const [editing, setEditing] = useState(false);
   const ref = useRef<HTMLSelectElement>(null);
@@ -158,15 +159,16 @@ function SelectValue({ value, options, onCommit, emptyLabel }: SelectProps) {
     const rawLabel = options.find((o) => o.value === value)?.label ?? value;
     const isEmpty = rawLabel.trim().length === 0;
     return (
-      <span className={"value-display" + (isEmpty ? " value-display--empty" : "")} onClick={() => setEditing(true)}>
+      <button type="button" aria-label={label} className={"value-display" + (isEmpty ? " value-display--empty" : "")} onClick={() => setEditing(true)}>
         {displayOrUnset(rawLabel, t, emptyLabel)}
-      </span>
+      </button>
     );
   }
   return (
     <select
       ref={ref}
       className="value-input"
+      aria-label={label}
       value={value}
       onChange={(e) => { setEditing(false); if (e.target.value !== value) onCommit(e.target.value); }}
       onBlur={() => setEditing(false)}

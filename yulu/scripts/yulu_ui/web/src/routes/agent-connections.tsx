@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useSearchParams } from "react-router";
+import { AdvancedDisclosure } from "../components/settings/AdvancedDisclosure.js";
 import { trpc } from "../trpc.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./agent-connections.css";
@@ -118,6 +119,19 @@ function readinessFailure(
     : t("agentConnections.remediation.probeFailed", { model: readiness.model, source });
 }
 
+/** Reveal the exact task's controls, including remediation links into collapsed groups. */
+function revealConnection(id: string) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  let element: HTMLElement | null = target;
+  while (element) {
+    if (element instanceof HTMLDetailsElement) element.open = true;
+    element = element.parentElement;
+  }
+  target.focus();
+  target.scrollIntoView?.({ block: "nearest" });
+}
+
 export function AgentConnections({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useT();
   const [searchParams] = useSearchParams();
@@ -156,14 +170,16 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   const remediationTargetId = remediationConnection && remediationCapability &&
     ["transcription", "summary", "conversation"].includes(remediationCapability)
     ? `agent-connection-${remediationConnection}-${remediationCapability}`
-    : remediationConnection ? `agent-connection-${remediationConnection}` : null;
+    : remediationConnection ? `agent-connection-${remediationConnection}`
+    : searchParams.get("candidate") ? `agent-candidate-${searchParams.get("candidate")}`
+    : searchParams.get("legacy") ? `agent-legacy-${searchParams.get("legacy")}` : null;
 
   useEffect(() => {
     if (!view.data || !remediationTargetId || focusedRemediation.current === remediationTargetId) return;
     const target = document.getElementById(remediationTargetId);
     if (!target) return;
     focusedRemediation.current = remediationTargetId;
-    target.focus();
+    revealConnection(remediationTargetId);
     target.scrollIntoView?.({
       block: "center",
       behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth",
@@ -282,21 +298,41 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
     <Page className={`agent-connections-page${embedded ? " embedded" : ""}`} aria-labelledby="agent-connections-title">
       <header className="agent-connections-hero">
         <div>
-          <p className="agent-connections-eyebrow">Yulu Host</p>
-          <Title id="agent-connections-title">{t("agentConnections.title")}</Title>
+            <Title id="agent-connections-title">{t("agentConnections.title")}</Title>
           <p>{t("agentConnections.subtitle")}</p>
         </div>
-        <button
-          type="button"
-          className="agent-connection-button"
-          disabled={refreshCandidates.isPending}
-          onClick={() => void run(() => refreshCandidates.mutateAsync())}
-        >
-          {t("agentConnections.refreshCandidates")}
-        </button>
       </header>
 
-      <p className="agent-connections-shared-note">{t("agentConnections.sharedDestination")}</p>
+      <div className="agent-usage-list" aria-label={t("agentConnections.usage")}>
+        {(["transcription", "summary", "conversation"] as const).map((capability) => {
+          const selection = view.data.selections[capability];
+          const selected = view.data.connections.find((item) => item.id === selection.connectionId);
+          const readiness = selected?.capabilities.find((item) => item.capability === capability)?.currentReadiness;
+          const local = capability === "transcription" && !selection.connectionId && selection.model === "local";
+          return <div className="agent-usage-row" key={capability}>
+            <div><strong>{capabilityLabel(t, capability)}</strong>
+              <span>{local ? t("settings.transcription.engine.local") : selected?.label ?? t("agentConnections.noSelection")}</span>
+              {!local && <small className={`agent-usage-status ${readiness?.status ?? "untested"}`}>
+                {selected && !selected.authorization.connected
+                  ? selected.id === connection?.id && credentialReadFailed
+                    ? t("agentConnections.credentialAccess.unavailable")
+                    : t("agentConnections.disconnected")
+                  : t(`agentConnections.readiness.${readiness?.status ?? "untested"}`)}
+              </small>}
+            </div>
+            {capability === "transcription" ? (
+              <Link className="settings-text-link" to="/settings/recording#transcription">{t("agentConnections.change")}</Link>
+            ) : (
+              <button className="settings-text-link" type="button"
+                aria-label={t("agentConnections.configureCapability", { capability: capabilityLabel(t, capability) })}
+                onClick={() => revealConnection(selected ? `agent-connection-${selected.id}-${capability}` : "agent-managed-connections")}>
+                {t("agentConnections.change")}
+              </button>
+            )}
+          </div>;
+        })}
+      </div>
+      <h3 className="settings-subheading" id="agent-managed-connections" tabIndex={-1}>{t("agentConnections.accounts")}</h3>
       {actionError && (
         <p className="agent-connection-error" role="alert">
           {t("agentConnections.actionFailedDetail", { reason: actionError })}
@@ -332,14 +368,15 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
       )}
 
       {connection && (
-        <section
+        <details
           id={`agent-connection-${connection.id}`}
-          className="agent-connection-card"
+          className="agent-connection-card agent-provider-details"
+          role="region"
           aria-labelledby="direct-xai-title"
           aria-current={remediationTargetId === `agent-connection-${connection.id}` ? "location" : undefined}
           tabIndex={-1}
         >
-          <div className="agent-connection-card-head">
+          <summary className="agent-connection-card-head">
             <div>
               <h2 id="direct-xai-title">xAI</h2>
               <p>{t("agentConnections.xai.description")}</p>
@@ -355,8 +392,10 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                   ? t("agentConnections.credentialAccess.unavailable")
                   : t("agentConnections.disconnected")}
             </span>
-          </div>
+          </summary>
 
+          <details className="agent-auth-details" open={!connection.authorization.connected || authorizing}>
+            <summary>{t("agentConnections.accountSettings")}</summary>
           <div className="agent-connection-actions">
             {authorizing ? (
               <button type="button" onClick={() => void run(() => cancelAuthorization.mutateAsync())}>
@@ -432,6 +471,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             </div>
           )}
 
+          <AdvancedDisclosure title={t("agentConnections.apiKey.label")} note="">
           <form
             className="agent-connection-api-key"
             onSubmit={(event) => {
@@ -461,19 +501,22 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             </div>
             <small>{t("agentConnections.apiKey.help")}</small>
           </form>
+          </AdvancedDisclosure>
+          </details>
 
           <div className="agent-connection-capabilities">
             {connection.capabilities.map((item) => {
               const capability = item.capability as Capability;
               const testing = probe.isPending && probe.variables?.capability === capability;
-              const current = testing ? "testing" : item.currentReadiness.status;
               const history = item.readinessHistory[0];
               const model = modelDrafts[capability] ?? item.currentReadiness.model;
+              const modelChanged = model !== item.currentReadiness.model;
+              const current = testing ? "testing" : modelChanged ? "untested" : item.currentReadiness.status;
               const requiresNewAttempt = capability === "conversation" &&
                 ((item.currentReadiness.reason === "unknown_outcome" && item.currentReadiness.model === model) ||
                   (history?.reason === "unknown_outcome" && history.model === model));
               return (
-                <article
+                <details
                   id={`agent-connection-${connection.id}-${capability}`}
                   className="agent-connection-capability"
                   data-testid={`connection-capability-${capability}`}
@@ -481,10 +524,10 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                   tabIndex={-1}
                   key={capability}
                 >
-                  <div className="agent-connection-capability-head">
+                  <summary className="agent-connection-capability-head">
                     <div>
-                      <h3>{capabilityLabel(t, capability)}</h3>
-                      <p>{item.currentReadiness.model}</p>
+                      <h3>{capabilityLabel(t, capability)}{item.selected && view.data.selections[capability].model === model && <small className="agent-selected-label">{t("agentConnections.inUse")}</small>}</h3>
+                      <p>{model}</p>
                     </div>
                     <span
                       className={`agent-capability-state ${current}`}
@@ -492,15 +535,17 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     >
                       {t(`agentConnections.readiness.${current}`)}
                     </span>
-                  </div>
+                  </summary>
                   {item.currentReadiness.status === "failed" && (
                     <p className="agent-capability-detail">{readinessFailure(t, capability, item.currentReadiness)}</p>
                   )}
                   {history && (
+                    <AdvancedDisclosure title={t("agentConnections.historyTitle")} note="">
                     <p className="agent-readiness-history">
                       {t("agentConnections.readiness.history", { state: t(`agentConnections.readiness.${history.status}`) })}
                       {" · "}{history.model}{" · "}{history.testedAt.slice(0, 16).replace("T", " ")}
                     </p>
+                    </AdvancedDisclosure>
                   )}
                   {capability !== "transcription" && (
                     <label className="agent-connection-model" htmlFor={`agent-connection-model-${capability}`}>
@@ -517,6 +562,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                       />
                     </label>
                   )}
+                  {modelChanged && <p className="agent-capability-detail">{t("agentConnections.saveModelFirst")}</p>}
                   {item.disclosure?.required && (
                     <div className="agent-connection-guidance" role="alert">
                       <strong>{t(`agentConnections.disclosure.title.${capability}`, {
@@ -549,7 +595,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     )}
                     <button
                       type="button"
-                      disabled={!connection.authorization.connected || !item.selected ||
+                      disabled={!connection.authorization.connected || !item.selected || modelChanged ||
                         item.disclosure?.required === true || probe.isPending ||
                         createConversationProbeAttempt.isPending}
                       onClick={() => void run(() => requiresNewAttempt
@@ -566,7 +612,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                           : t(`agentConnections.test.${capability}`)}
                     </button>
                   </div>
-                </article>
+                </details>
               );
             })}
           </div>
@@ -586,7 +632,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
           >
             {t("agentConnections.delete")}
           </button>
-        </section>
+        </details>
       )}
       {!connection && (
         <section className="agent-connection-card" aria-labelledby="restore-direct-xai-title">
@@ -606,16 +652,17 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
       {supportedAgentConnections.map((agent) => {
         const copy = supportedAgentCopy(agent.adapter);
         return (
-          <section
+          <details
             id={`agent-connection-${agent.id}`}
-            className="agent-connection-card"
+            className="agent-connection-card agent-provider-details"
+            role="region"
             data-testid={`agent-connection-${agent.adapter}`}
             aria-labelledby={`${agent.id}-title`}
             aria-current={remediationTargetId === `agent-connection-${agent.id}` ? "location" : undefined}
             tabIndex={-1}
             key={agent.id}
           >
-            <div className="agent-connection-card-head">
+            <summary className="agent-connection-card-head">
               <div>
                 <h2 id={`${agent.id}-title`}>{agent.label}</h2>
                 <p>{t(`${copy}.description`)}</p>
@@ -632,8 +679,13 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                   ? t("agentConnections.connected")
                   : t("agentConnections.disconnected")}
               </span>
-            </div>
+            </summary>
 
+            <details className="agent-auth-details" open={!agent.authorization.connected}>
+              <summary>{t("agentConnections.accountSettings")}</summary>
+              {nativeAuthorizationActions(agent.id, agent.label)}
+              {agent.authorization.remediation && <p role="alert">{agent.authorization.remediation}</p>}
+              <AdvancedDisclosure title={t("agentConnections.technicalDetails")} note="">
             <dl className="agent-connection-runtime-details">
               <div>
                 <dt>{t(`${copy}.version`)}</dt>
@@ -664,9 +716,11 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
               <code>{agent.authorization.loginCommand}</code>
               <br />
               <code>{agent.authorization.statusCommand}</code>
-              {agent.authorization.remediation && <p>{agent.authorization.remediation}</p>}
-              {nativeAuthorizationActions(agent.id, agent.label)}
+
             </div>
+
+              </AdvancedDisclosure>
+            </details>
 
             <div className="agent-connection-capabilities">
               {agent.capabilities.map((item) => {
@@ -679,14 +733,14 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                 const model = agentModelDrafts[modelKey] ?? configuredModel;
                 const testing = probe.isPending && probe.variables?.connectionId === agent.id &&
                   probe.variables.capability === capability;
-                const current = testing ? "testing" : item.currentReadiness.status;
+                const current = testing ? "testing" : model !== item.currentReadiness.model ? "untested" : item.currentReadiness.status;
                 const history = item.readinessHistory[0];
                 const requiresNewAttempt = capability === "conversation" &&
                   ((item.currentReadiness.reason === "unknown_outcome" && item.currentReadiness.model === model) ||
                     (history?.reason === "unknown_outcome" && history.model === model));
                 const disclosureAcceptedLocally = acceptedSupportedDisclosures.has(modelKey);
                 return (
-                  <article
+                  <details
                     id={`agent-connection-${agent.id}-${capability}`}
                     className="agent-connection-capability"
                     data-testid={`connection-capability-${agent.adapter}-${capability}`}
@@ -694,10 +748,10 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     tabIndex={-1}
                     key={capability}
                   >
-                    <div className="agent-connection-capability-head">
+                    <summary className="agent-connection-capability-head">
                       <div>
-                        <h3>{capabilityLabel(t, capability)}</h3>
-                        <p>{item.currentReadiness.model}</p>
+                        <h3>{capabilityLabel(t, capability)}{item.selected && view.data.selections[capability].model === model && <small className="agent-selected-label">{t("agentConnections.inUse")}</small>}</h3>
+                        <p>{model}</p>
                       </div>
                       <span
                         className={`agent-capability-state ${current}`}
@@ -705,7 +759,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                       >
                         {t(`agentConnections.readiness.${current}`)}
                       </span>
-                    </div>
+                    </summary>
                     {item.currentReadiness.status === "failed" && (
                       <p className="agent-capability-detail">
                         {item.currentReadiness.detail}
@@ -742,7 +796,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                       <button
                         type="button"
                         disabled={!agent.authorization.connected || !model.trim() ||
-                          item.currentReadiness.status !== "ready"}
+                          item.currentReadiness.status !== "ready" || model !== item.currentReadiness.model}
                         onClick={() => void run(() => select.mutateAsync({
                           connectionId: agent.id,
                           capability,
@@ -774,7 +828,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                             : t(`agentConnections.test.${capability}`)}
                       </button>
                     </div>
-                  </article>
+                  </details>
                 );
               })}
             </div>
@@ -793,29 +847,20 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             >
               {t("agentConnections.delete")}
             </button>
-          </section>
+          </details>
         );
       })}
 
-      <section
-        className="agent-connections-list"
-        data-testid="agent-runtime-install-guidance"
-        aria-labelledby="agent-runtime-install-guidance-title"
-      >
-        <h2 id="agent-runtime-install-guidance-title">{t("agentConnections.install.title")}</h2>
-        <p>{t("agentConnections.install.explanation")}</p>
-        <ul>
-          {SUPPORTED_RUNTIME_GUIDANCE.map((runtime) => (
-            <li key={runtime.adapter}>
-              {t("agentConnections.install.runtime", {
-                agent: runtime.label,
-                command: runtime.command,
-              })}
-            </li>
-          ))}
-        </ul>
-      </section>
-
+      <details className="agent-add-details" id="agent-add-connection">
+        <summary>{t("agentConnections.add")}</summary>
+        <button
+          type="button"
+          className="agent-connection-button"
+          disabled={refreshCandidates.isPending}
+          onClick={() => void run(() => refreshCandidates.mutateAsync())}
+        >
+          {t("agentConnections.refreshCandidates")}
+        </button>
       <section className="agent-connections-list" aria-labelledby="agent-candidates-title">
         <h2 id="agent-candidates-title">{t("agentConnections.candidates.title")}</h2>
         <p>{t("agentConnections.candidates.explanation")}</p>
@@ -823,8 +868,8 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
           <details
             className="agent-connection-card compact"
             data-testid={`agent-candidate-${candidate.adapter}`}
-            open={candidate.adapter === "codex" || candidate.adapter === "claude-code" ||
-              candidate.adapter === "hermes" || candidate.adapter === "openclaw"}
+            id={`agent-candidate-${candidate.id}`}
+            tabIndex={-1}
             key={candidate.id}
           >
             <summary>
@@ -870,17 +915,40 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
         {view.data.candidates.length === 0 && <p>{t("agentConnections.candidates.empty")}</p>}
       </section>
 
+        <AdvancedDisclosure title={t("agentConnections.install.title")} note="">
+      <section
+        className="agent-connections-list"
+        data-testid="agent-runtime-install-guidance"
+        aria-labelledby="agent-runtime-install-guidance-title"
+      >
+        <h2 id="agent-runtime-install-guidance-title">{t("agentConnections.install.title")}</h2>
+        <p>{t("agentConnections.install.explanation")}</p>
+        <ul>
+          {SUPPORTED_RUNTIME_GUIDANCE.map((runtime) => (
+            <li key={runtime.adapter}>
+              {t("agentConnections.install.runtime", {
+                agent: runtime.label,
+                command: runtime.command,
+              })}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+        </AdvancedDisclosure>
+      </details>
+
       {view.data.legacyConnections.length > 0 && (
-        <section className="agent-connections-list" aria-labelledby="legacy-connections-title">
-          <h2 id="legacy-connections-title">{t("agentConnections.legacy.title")}</h2>
+        <details className="agent-add-details" aria-labelledby="legacy-connections-title">
+          <summary id="legacy-connections-title">{t("agentConnections.legacy.title")}</summary>
           <p role="note">{t("agentConnections.legacy.explanation")}</p>
           {view.data.legacyConnections.map((legacy) => (
-            <div className="agent-connection-card compact" key={legacy.id}>
+            <div id={`agent-legacy-${legacy.id}`} tabIndex={-1} className="agent-connection-card compact" key={legacy.id}>
               <strong>{legacy.label}</strong>
               <p>{t("agentConnections.legacy.manualOnly")}</p>
             </div>
           ))}
-        </section>
+        </details>
       )}
 
       {!embedded && (

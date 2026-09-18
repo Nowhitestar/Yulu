@@ -106,7 +106,7 @@ export function VoiceInput() {
             ? dictation?.prompt_slug || "dictation-cleanup"
             : id === "translate"
               ? dictation?.translate_prompt_slug || "dictation-translate"
-              : "Agent Console";
+              : t("nav.agentConsole");
           return (
             <section key={id} className="voice-action">
               <div className="voice-action-icon"><Icon size={18} strokeWidth={1.9} /></div>

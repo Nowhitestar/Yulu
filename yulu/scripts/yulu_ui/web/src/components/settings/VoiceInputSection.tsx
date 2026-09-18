@@ -1,7 +1,8 @@
 import { Link } from "react-router";
-import { useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Pencil } from "lucide-react";
 import { trpc } from "../../trpc.js";
+import { AdvancedDisclosure } from "./AdvancedDisclosure.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { useUndoToast } from "../UndoToast.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
@@ -82,29 +83,45 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
   });
   const [capturing, setCapturing] = useState<HotkeyAction | null>(null);
   const [captureError, setCaptureError] = useState("");
+  const [savingHotkey, setSavingHotkey] = useState(false);
+  const savingRef = useRef(false);
+  const captureButton = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (!capturing) return;
     const onKeyDown = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
+      if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        setCapturing(null);
+        setCaptureError("");
+        captureButton.current?.focus();
+        return;
+      }
+      if (event.repeat || savingRef.current) return;
+      if (["Meta", "Shift", "Control", "Alt"].includes(event.key)) return;
       const next = shortcutFromEvent(event);
       if (!next) {
         setCaptureError(t("settings.voice.hotkey.unsupported"));
         return;
       }
       setCaptureError("");
-      void (async () => {
-        const keyCommit = commit(`status_agent.hotkeys.${capturing}.key`)(next.key);
-        if (keyCommit) await keyCommit;
-        const modsCommit = commit(`status_agent.hotkeys.${capturing}.modifiers`)(next.modifiers);
-        if (modsCommit) await modsCommit;
-        setCapturing(null);
-      })();
+      savingRef.current = true;
+      setSavingHotkey(true);
+      setCapturing(null);
+      // Save the whole shortcut once, preserving optional fields and one-step undo.
+      const previous = cfg?.status_agent.hotkeys?.[capturing] ?? DEFAULT_HOTKEYS[capturing];
+      void Promise.resolve(commit(`status_agent.hotkeys.${capturing}`)({ ...previous, ...next }))
+        .catch((error: unknown) => setCaptureError(error instanceof Error ? error.message : String(error)))
+        .finally(() => {
+          savingRef.current = false;
+          setSavingHotkey(false);
+          captureButton.current?.focus();
+        });
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [capturing, commit, t]);
+  }, [capturing, commit, cfg, t]);
 
   if (!cfg) return null;
 
@@ -135,7 +152,7 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
       <p className="settings-section-sub">{t("settings.voice.sub")}</p>
 
       <InlineEditRow
-        label={t("settings.hotkey.statusAgent.label")}
+        label={t("settings.voice.enabled")}
         help={agentHelp}
         type="toggle"
         value={agentEnabled}
@@ -144,19 +161,16 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
         status={tracker.statusFor("status_agent.enabled")}
       />
 
+      {statusAgent && agentEnabled !== agentRunning && <Link className="settings-text-link" to="/settings/general#capabilities">{t("settings.voice.checkService")}</Link>}
+      <div className="voice-feedback">
       <InlineEditRow
         label={t("settings.voice.feedbackSounds")}
+        help={t("settings.voice.feedbackSoundsHelp")}
         type="toggle"
         value={cfg.status_agent.feedback_sounds ?? true}
         onCommit={commit("status_agent.feedback_sounds")}
         status={tracker.statusFor("status_agent.feedback_sounds")}
       />
-      <div className="row">
-        <div className="row-label">
-          <div>{t("settings.voice.previewSound")}</div>
-          <div className="row-help">{t("settings.voice.feedbackSoundsHelp")}</div>
-        </div>
-        <div className="row-value">
           <button
             type="button"
             className="path-btn"
@@ -165,10 +179,12 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
           >
             {t("settings.voice.preview")}
           </button>
-        </div>
-        <div className="row-status" />
       </div>
 
+      <h3 className="settings-subheading">{t("settings.voice.shortcuts")}</h3>
+      <p className="settings-section-sub">{t("settings.voice.hotkey.help")}</p>
+      {captureError && !capturing && <p className="calendar-source-error" role="alert">{captureError}</p>}
+      {savingHotkey && <p role="status">{t("settings.voice.hotkey.saving")}</p>}
       {ACTIONS.map((action) => {
         const spec = hotkeys[action];
         const fallback = DEFAULT_HOTKEYS[action];
@@ -176,9 +192,9 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
           <div key={action} className="row row--wide">
             <div className="row-label">
               <div>{t(`settings.voice.hotkey.${action}`)}</div>
-              <div className="row-help">
-                {capturing === action ? captureError || t("settings.voice.hotkey.capture") : t("settings.voice.hotkey.help")}
-              </div>
+              {capturing === action && <div className="row-help" role={captureError ? "alert" : "status"}>
+                {captureError || t("settings.voice.hotkey.capture")}
+              </div>}
             </div>
             <div className="row-value">
               <div className="voice-hotkey-display">
@@ -189,15 +205,18 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
                 <button
                   type="button"
                   className="voice-hotkey-capture"
+                  aria-pressed={capturing === action}
                   aria-label={`${t(`settings.voice.hotkey.${action}`)} ${t("settings.voice.hotkey.reconfigure")}`}
                   title={t("settings.voice.hotkey.reconfigure")}
-                  disabled={isBlocked("status_agent.hotkeys")}
-                  onClick={() => {
+                  disabled={isBlocked("status_agent.hotkeys") || savingHotkey}
+                  onClick={(event) => {
+                    captureButton.current = event.currentTarget;
                     setCaptureError("");
-                    setCapturing(action);
+                    setCapturing(capturing === action ? null : action);
                   }}
                 >
-                  <X size={14} strokeWidth={2.1} />
+                  <Pencil size={14} strokeWidth={2.1} />
+                  <span>{capturing === action ? t("danger.cancel") : t("settings.voice.hotkey.reconfigure")}</span>
                 </button>
               </div>
             </div>
@@ -206,6 +225,19 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
         );
       })}
 
+      <InlineEditRow
+        label={t("settings.voice.targetLanguage")}
+        type="text"
+        value={dictation.target_language ?? "English"}
+        onCommit={commit("transcription.dictation.target_language") as (v: string) => void}
+      />
+
+      <div className="row">
+        <div className="row-label">{t("settings.voice.glossary")}</div>
+        <div className="row-value"><Link to="/knowledge/glossary">{t("settings.voice.openGlossary")}</Link></div>
+        <div className="row-status" />
+      </div>
+      <AdvancedDisclosure title={t("settings.voice.templates")} note="">
       <InlineEditRow
         label={t("settings.voice.prompt.dictate")}
         type="select"
@@ -220,18 +252,8 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
         options={ensurePrompt(dictation.translate_prompt_slug ?? "dictation-translate")}
         onCommit={commit("transcription.dictation.translate_prompt_slug") as (v: string) => void}
       />
-      <InlineEditRow
-        label={t("settings.voice.targetLanguage")}
-        type="text"
-        value={dictation.target_language ?? "English"}
-        onCommit={commit("transcription.dictation.target_language") as (v: string) => void}
-      />
-
-      <div className="row">
-        <div className="row-label">{t("settings.voice.glossary")}</div>
-        <div className="row-value"><Link to="/knowledge/glossary">{t("settings.voice.openGlossary")}</Link></div>
-        <div className="row-status" />
-      </div>
+        <Link className="settings-text-link" to="/knowledge/prompts">{t("settings.voice.manageTemplates")}</Link>
+      </AdvancedDisclosure>
     </section>
   );
 }

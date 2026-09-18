@@ -383,7 +383,7 @@ def prompt_recording(title):
         [sys.executable, str(daemon), "ask_record", title, f"detected::{signature('', title)}"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        start_new_session=os.environ.get("YULU_MANAGED_REMINDERS") != "1",
     )
 
 

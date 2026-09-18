@@ -52,3 +52,15 @@
     padding: 8px 12px;
   }
 }
+.health-page { width: 100%; max-width: 960px; margin: 0 auto; box-sizing: border-box; min-height: 100%; padding: 30px clamp(18px, 4vw, 46px); }
+.runtime-diagnostics { margin-top: 28px; }
+.runtime-diagnostics-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 12px; padding: 16px 0; border: 0; background: transparent; text-align: left; color: var(--fg-2); cursor: pointer; }
+.runtime-diagnostics-toggle strong { font-weight: 600; font-size: 13px; color: var(--fg); }
+.runtime-diagnostics-toggle small { display: block; font-size: 11px; margin-top: 5px; line-height: 1.6; }
+.runtime-diagnostics-toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.health-page :is(button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.health-tabs { display: flex; max-width: 100%; overflow-x: auto; margin: 12px 0 18px; }
+.health-tab { flex-shrink: 0; }
+.health-tabpanel, .control-card, .control-toolbar-title { min-width: 0; }
+.control-pre { max-width: 100%; overflow-x: auto; box-sizing: border-box; }
+@media (max-width: 760px) { .health-page { padding: 22px 14px 32px; } .control-toolbar { flex-wrap: wrap; } .health-tab { padding: 8px 10px; } }
