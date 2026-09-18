@@ -56,16 +56,13 @@ def _existing_schedule_has_future_events():
     return False
 
 
-def _notify_system(title, message):
+def _notify_system():
     try:
         subprocess.Popen(
             [
                 sys.executable,
                 str(SCRIPT_DIR / "notify.py"),
-                "remind",
-                title,
-                message,
-                "日历健康检查",
+                "calendar_empty",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -115,7 +112,7 @@ def sync_calendar_to_schedule():
 
         if not meetings and _existing_schedule_has_future_events():
             log("⚠️ 本次日历返回 0，但当前 schedule 仍有未来事件；保留旧 schedule")
-            _notify_system("Meeting Assistant 日历同步异常", "本次拉取返回 0 个会议，已保留现有提醒。")
+            _notify_system()
             return
 
         events = []

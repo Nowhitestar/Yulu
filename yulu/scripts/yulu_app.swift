@@ -4441,6 +4441,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     #endif
     private var migrationCommitted = false
     private var nativeRecordingReady = false
+    private var pendingNativeRoute: String?
     private var migrationStarted = false
     private var migrationRetryAvailable = false
     private var hostPollAttempts = 0
@@ -4466,6 +4467,9 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if canImport(YuluNativeRecording)
+        YuluNotificationPresenter.shared.configure { [weak self] route in self?.openNativeRoute(route) }
+        #endif
         installMainMenu()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
@@ -5011,7 +5015,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             environment["YULU_MANAGE_REMINDERS"] = "1"
             nativeRecording = NativeRecordingControls(
                 environment: environment,
-                openRoute: { [weak self] route in self?.open(route: route) }
+                openRoute: { [weak self] route in self?.openNativeRoute(route) }
             )
         }
         try nativeRecording?.prepare()
@@ -5088,8 +5092,9 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
                 self.refreshServiceWindow()
                 if responseHealthy {
                     self.hostPollAttempts = 0
-                    if self.migrationCommitted && self.nativeRecordingReady && self.webView == nil {
-                        self.open(route: "/")
+                    if self.migrationCommitted && self.nativeRecordingReady && (self.webView == nil || self.pendingNativeRoute != nil) {
+                        self.open(route: self.pendingNativeRoute ?? "/")
+                        self.pendingNativeRoute = nil
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                         self.pollHost(generation: generation)
@@ -5135,6 +5140,16 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
                 self.refreshServiceWindow()
             }
         }
+    }
+
+    private func openNativeRoute(_ route: String) {
+        if launchPolicy.installed && (!migrationCommitted || !nativeRecordingReady || !hostEvidence.running) {
+            pendingNativeRoute = route
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        open(route: route)
     }
 
     private func open(route: String) {

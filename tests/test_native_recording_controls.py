@@ -25,6 +25,7 @@ def native_controls_binary(tmp_path_factory):
             "-emit-library", "-static", "-emit-module", "-module-name", "YuluNativeRecording",
             "-emit-module-path", str(build / "YuluNativeRecording.swiftmodule"),
             "-o", str(build / "libYuluNativeRecording.a"), str(SCRIPTS / "status_agent.swift"),
+            str(SCRIPTS / "native_notifications.swift"), "-framework", "UserNotifications",
             "-module-cache-path", "/private/tmp/yulu-swift-module-cache",
             "-framework", "Cocoa", "-framework", "Carbon", "-framework", "WebKit",
         ], capture_output=True, text=True, check=False,
@@ -233,10 +234,24 @@ def test_second_native_owner_cannot_replace_a_live_control_socket(native_control
             duplicate.communicate(timeout=5)
 
 
+def test_notification_ipc_validates_events_without_impersonating_the_app(running_controls):
+    _, socket_path, _, _ = running_controls
+    assert ipc(socket_path, "notify", kind="unknown", id="test") == {
+        "ok": False, "error": "invalid_notification",
+    }
+    assert ipc(socket_path, "notify", kind="recording_saved", id="test", stem="../outside") == {
+        "ok": False, "error": "invalid_notification",
+    }
+    assert ipc(socket_path, "notify", kind="recording_saved", id="test", stem="test") == {
+        "ok": False, "error": "notification_app_unavailable",
+    }
+    assert ipc(socket_path, "status")["ok"] is True
+
+
 @pytest.mark.parametrize("action", [
     "toggle", "stop", "dictate_toggle", "dictate_translate", "voice_chat",
     "open_inbox", "open_agent_console", "open_voice_chat", "paste_clipboard",
-    "preview_sound", "search",
+    "preview_sound", "search", "notify",
 ])
 def test_quiesced_controls_reject_work_until_resumed(running_controls, action):
     process, socket_path, _, _ = running_controls

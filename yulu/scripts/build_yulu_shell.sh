@@ -16,7 +16,8 @@ swiftc -target arm64-apple-macosx13.0 -module-cache-path "$SWIFT_CACHE" \
   -emit-library -static -emit-module -module-name YuluNativeRecording \
   -emit-module-path "$MODULE_DIR/YuluNativeRecording.swiftmodule" \
   -o "$MODULE_DIR/libYuluNativeRecording.a" "$SCRIPT_DIR/status_agent.swift" \
-  -framework Cocoa -framework Carbon -framework WebKit
+  "$SCRIPT_DIR/native_notifications.swift" \
+  -framework Cocoa -framework Carbon -framework WebKit -framework UserNotifications
 swiftc -target arm64-apple-macosx13.0 -module-cache-path "$SWIFT_CACHE" \
   -I "$MODULE_DIR" -L "$MODULE_DIR" -lYuluNativeRecording \
   -o "$OUTPUT" "$SCRIPT_DIR/yulu_app.swift" \
