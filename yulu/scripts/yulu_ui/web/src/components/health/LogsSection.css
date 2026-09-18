@@ -39,3 +39,4 @@
     min-width: 0;
   }
 }
+.logs-context { color: var(--fg-2); font-size: 12px; line-height: 1.6; margin: 0 0 14px; }

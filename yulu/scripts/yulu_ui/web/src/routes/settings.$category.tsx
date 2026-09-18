@@ -1,7 +1,8 @@
 // web/src/routes/settings.$category.tsx
-import type { ReactNode } from "react";
-import { useParams, useOutletContext } from "react-router";
-import { categoryMeta } from "../components/settings/categories.js";
+import { useEffect, useRef, type ReactNode } from "react";
+import { Link, Navigate, useLocation, useParams, useOutletContext } from "react-router";
+import { ArrowLeft } from "lucide-react";
+import { categoryMeta, settingsTarget } from "../components/settings/categories.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import type { SettingsOutletContext } from "./settings.js";
 import type { SettingsRestartTracker } from "../hooks/useSettingsRestartTracker.js";
@@ -12,77 +13,107 @@ import { AudioSection } from "../components/settings/AudioSection.js";
 import { StorageSection } from "../components/settings/StorageSection.js";
 import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
 import { VoiceInputSection } from "../components/settings/VoiceInputSection.js";
-import { AutomationSection } from "../components/settings/AutomationSection.js";
+import { AutomationSection, RecordingProcessingSection } from "../components/settings/AutomationSection.js";
 import { AgentConnections } from "./agent-connections.js";
 import { SharingSettings } from "./sharing.js";
 import { CalendarSourceSection } from "../components/settings/CalendarSourceSection.js";
 import { AgentCalendarConnectorSection } from "../components/settings/AgentCalendarConnectorSection.js";
+import { AdvancedDisclosure } from "../components/settings/AdvancedDisclosure.js";
 
-/**
- * Maps a settings category to the rich section components that render its
- * fields. The sections own the per-field queries, capability report, and DB
- * stats — re-homing here keeps
- * all that behaviour intact while the registry-driven categories decide *where*
- * each block lives (P1 category→content map). The generic InlineEditRow rows are
- * rendered inside these sections; their input type/label/help already match the
- * registry.
- */
-const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => ReactNode> = {
-  general: (tracker) => (
-    <>
+import { AgentConnectorSettings } from "../components/settings/AgentConnectorSettings.js";
+
+function GeneralSettings() {
+  const t = useT();
+  return <>
+    <HotkeySection />
+    <AboutSection />
+    <AdvancedDisclosure title={t("settings.diagnostics")} note={t("settings.diagnostics.note")}>
       <CapabilitiesSection />
-      <HotkeySection />
-      <AboutSection />
-    </>
-  ),
-  audio: (tracker) => (
-    <>
-      <AudioSection tracker={tracker} />
-      <StorageSection tracker={tracker} />
-    </>
-  ),
-  transcription: (tracker) => <TranscriptionSection tracker={tracker} />,
-  llm: () => <AgentConnections embedded />,
-  sharing: () => <SharingSettings />,
-  integrations: () => (
-    <>
-      <CalendarSourceSection />
-      <AgentCalendarConnectorSection />
-    </>
-  ),
+      <Link className="settings-text-link" to="/health">{t("settings.diagnostics.open")}</Link>
+    </AdvancedDisclosure>
+  </>;
+}
+
+function ConnectionSettings() {
+  const t = useT();
+  return <>
+    <div id="ai-connections"><AgentConnections embedded /></div>
+    <AgentConnectorSettings />
+    <div id="sharing">
+      <AdvancedDisclosure title={t("settings.connections.sharing")} note={t("settings.connections.sharing.note")}>
+        <SharingSettings />
+      </AdvancedDisclosure>
+    </div>
+    <div className="settings-connection-disclosure">
+      <AdvancedDisclosure title={t("settings.connections.calendar")} note={t("settings.connections.calendar.note")}>
+        <AgentCalendarConnectorSection />
+      </AdvancedDisclosure>
+    </div>
+  </>;
+}
+
+const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => ReactNode> = {
+  general: () => <GeneralSettings />,
+  recording: (tracker) => <>
+    <AudioSection tracker={tracker} />
+    <TranscriptionSection tracker={tracker} />
+    <RecordingProcessingSection tracker={tracker} />
+    <StorageSection tracker={tracker} />
+  </>,
+  meetings: (tracker) => <><CalendarSourceSection /><AutomationSection tracker={tracker} /></>,
   voice: (tracker) => <VoiceInputSection tracker={tracker} />,
-  automation: (tracker) => <AutomationSection tracker={tracker} />,
+  connections: () => <ConnectionSettings />,
 };
 
-/**
- * SettingsCategory — the detail pane of the settings MasterDetail. Reads the
- * `:category` route param, then renders that category's re-homed section(s).
- * The sections own their headings, so desktop and mobile do not show duplicated
- * "detail title + section title" labels.
- */
 export function SettingsCategory() {
-  const { category } = useParams();
+  const { category = "" } = useParams();
+  const location = useLocation();
   const { tracker } = useOutletContext<SettingsOutletContext>();
+  const detailRef = useRef<HTMLDivElement>(null);
   const t = useT();
-  const meta = categoryMeta(category ?? "");
+  const target = settingsTarget(category, location.hash);
+  const meta = categoryMeta(target.id);
 
-  if (!meta) {
-    return (
-      <div className="settings-detail">
-        <div className="settings-detail-empty">{t("settings.detail.unknownCategory")}</div>
-      </div>
-    );
+  useEffect(() => {
+    const detail = detailRef.current;
+    if (!detail) return;
+    detail.parentElement?.scrollTo?.({ top: 0 });
+    if (!location.hash) return;
+    // Wait for query-backed sections before revealing legacy deep links.
+    const reveal = () => {
+      let id: string;
+      try { id = decodeURIComponent(location.hash.slice(1)); } catch { return false; }
+      const element = document.getElementById(id);
+      if (!element || !detail.contains(element)) return false;
+      let parent = element.parentElement;
+      while (parent && parent !== detail) {
+        if (parent instanceof HTMLDetailsElement) parent.open = true;
+        parent = parent.parentElement;
+      }
+      element.querySelector<HTMLDetailsElement>(":scope > details")?.setAttribute("open", "");
+      element.scrollIntoView?.({ block: "start" });
+      return true;
+    };
+    if (reveal()) return;
+    const observer = new MutationObserver(() => { if (reveal()) observer.disconnect(); });
+    observer.observe(detail, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [category, location.hash]);
+
+  if (category !== target.id) {
+    return <Navigate replace to={`/settings/${target.id}${location.search}${target.hash}`} />;
   }
 
-  const renderSections = CATEGORY_SECTIONS[meta.id];
-
   return (
-    <div className="settings-detail">
-      {renderSections ? (
-        renderSections(tracker)
-      ) : (
-        <div className="settings-detail-empty">{t("settings.detail.automationComingSoon")}</div>
-      )}
+    <div className="settings-detail" ref={detailRef}>
+      <Link className="settings-mobile-back settings-text-link" to="/settings"><ArrowLeft size={16} />{t("settings.allCategories")}</Link>
+      {meta ? <>
+        <header className="settings-detail-head">
+          <h1 className="settings-detail-title">{t(meta.labelKey)}</h1>
+          <p className="settings-detail-sub">{t(meta.descKey)}</p>
+        </header>
+        {CATEGORY_SECTIONS[meta.id]?.(tracker)}
+      </> : <p className="settings-detail-empty">{t("settings.detail.unknownCategory")}</p>}
     </div>
   );
 }

@@ -78,6 +78,7 @@ vi.mock("../../../web/src/trpc.js", () => {
     trpc: {
       useUtils: () => utils,
       agentConsole: {
+        meetings: { useQuery: () => ({ data: mockTasks, isPending: false }) },
         overview: {
           useQuery: () => ({
             data: {
@@ -228,13 +229,15 @@ function wrap(initialEntries = ["/agent-console"], lang?: "zh" | "en") {
   if (lang) localStorage.setItem("yulu_ui.lang", lang);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const console = <AgentConsole />;
-  return render(
+  const rendered = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={initialEntries}>
         {lang ? <LanguageProvider>{console}</LanguageProvider> : console}
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  if (mockSessions.length) fireEvent.click(rendered.getByRole("button", { name: lang === "en" ? "Conversation history" : "对话历史" }));
+  return rendered;
 }
 
 beforeEach(() => {
@@ -313,258 +316,50 @@ beforeEach(() => {
 });
 
 describe("AgentConsole", () => {
-  it("renders the primary work areas and opens Agents and Connectors on demand", () => {
-    const { container, getByText, queryByText } = wrap();
-    expect(getByText("最近三天")).toBeInTheDocument();
-    expect(container.querySelector(".agent-session-history")).toBeInTheDocument();
-    expect(container.querySelector(".agent-session-recent")).toBeInTheDocument();
-    expect(container.querySelector(".agent-session-resizer")).toHaveAttribute("role", "separator");
-    expect(container.querySelector(".agent-console-rail-left")).toBeNull();
-    expect(getByText("问会议")).toBeInTheDocument();
-    expect(queryByText("Agent 角色")).not.toBeInTheDocument();
-    fireEvent.click(getByText("Agents"));
-    expect(getByText("Agent 角色")).toBeInTheDocument();
-    expect(getByText("当前 Agent 的 Connectors")).toBeInTheDocument();
-  });
-
-  it("renders durable Agent task state in Run Tasks mode", () => {
-    const { getByText } = wrap();
-    fireEvent.click(getByText("跑任务"));
-
-    expect(getByText("Agent 任务")).toBeInTheDocument();
-    expect(getByText("Queued recording")).toBeInTheDocument();
-    expect(getByText("等待 1")).toBeInTheDocument();
-    expect(getByText("运行 1")).toBeInTheDocument();
-    expect(getByText("失败 1")).toBeInTheDocument();
-  });
-
-  it("supports keyboard resizing for the history and recent-meetings split", () => {
-    const { container } = wrap();
-    const separator = container.querySelector(".agent-session-resizer") as HTMLElement;
-    const history = container.querySelector(".agent-session-history") as HTMLElement;
-    expect(separator).toHaveAttribute("tabindex", "0");
-    expect(separator).toHaveAttribute("aria-valuenow", "300");
-    expect(history).toHaveStyle({ height: "300px" });
-
-    fireEvent.keyDown(separator, { key: "ArrowDown" });
-    expect(separator).toHaveAttribute("aria-valuenow", "320");
-    expect(history).toHaveStyle({ height: "320px" });
-  });
-
-  it("shows the two Agent roles and removes unrelated legacy sections", () => {
-    const { getByText, queryByText } = wrap();
-    fireEvent.click(getByText("Agents"));
-
-    expect(getByText("对话与手动操作")).toBeInTheDocument();
-    expect(getByText("实时字幕、转写与听写")).toBeInTheDocument();
-    expect(getByText("本地转写")).toBeInTheDocument();
-    expect(getByText("已选择 · 可用")).toBeInTheDocument();
-    expect(queryByText("语音输入")).not.toBeInTheDocument();
-    expect(queryByText("当前能力")).not.toBeInTheDocument();
-    expect(queryByText("本地状态")).not.toBeInTheDocument();
-    expect(queryByText("添加能力")).not.toBeInTheDocument();
-  });
-
-  it("routes completed recordings to their detail surface without sending meeting content", () => {
-    const { getByRole, getByText, queryByRole, container } = wrap();
-    expect(getByText("Product Sync")).toBeInTheDocument();
-    expect(container.querySelector(".agent-stage-line")).toBeNull();
-
-    fireEvent.click(getByRole("button", { name: "查看并分享" }));
-    expect(navigateMock).toHaveBeenCalledWith("/inbox/ProductSync_20260625_093000");
-    expect(queryByRole("menu", { name: "选择分享渠道" })).toBeNull();
-    expect(reprocessMutate).not.toHaveBeenCalled();
-  });
-
-  it("ignores a paused automatic task and still shows the artifact-derived next action", async () => {
-    mockDurableTasks = [{
-      id: "task-auto-paused",
-      recordingStem: "ProductSync_20260625_093000",
-      title: "Product Sync",
-      trigger: "automatic",
-      state: "awaiting_policy",
-      phase: "queued",
-      sendToNotion: false,
-      agentProvider: "hermes",
-      attempt: 0,
-      error: "Automatic Agent recording processing is paused by policy",
-      createdAt: "2026-06-25T09:31:00.000Z",
-      updatedAt: "2026-06-25T09:31:00.000Z",
-    }];
-    const { getByRole, queryByText } = wrap();
-
-    expect(queryByText("Agent 自动处理已暂停")).toBeNull();
-    const actionsButton = getByRole("button", { name: "查看并分享" });
-    expect(actionsButton).toBeEnabled();
-    expect(reprocessMutate).not.toHaveBeenCalled();
-  });
-
-  it("does not surface retired legacy queue state on a meeting with usable artifacts", () => {
-    mockTasks = [taskFixture({ error: "Legacy queue task retired without automatic execution" })];
-    mockDurableTasks = [{
-      id: "legacy-retired",
-      recordingStem: "ProductSync_20260625_093000",
-      title: "Product Sync",
-      trigger: "automatic",
-      state: "cancelled",
-      phase: "failed",
-      sendToNotion: false,
-      agentProvider: "hermes",
-      attempt: 0,
-      error: "Legacy queue task retired without automatic execution",
-      createdAt: "2026-06-25T09:31:00.000Z",
-      updatedAt: "2026-06-25T09:31:00.000Z",
-    }];
-    const { getByRole, queryByText } = wrap();
-
-    expect(queryByText(/Legacy queue task retired/)).toBeNull();
-    expect(queryByText("Hermes 任务已取消")).toBeNull();
-    expect(getByRole("button", { name: "查看并分享" })).toBeInTheDocument();
-  });
-
-  it("keeps an uncertain Notion delivery fenced in the main Agent Console", () => {
-    mockDurableTasks = [{
-      id: "task-delivery-uncertain",
-      recordingStem: "ProductSync_20260625_093000",
-      title: "Product Sync",
-      trigger: "manual",
-      state: "delivery_unverified",
-      phase: "failed",
-      sendToNotion: true,
-      agentProvider: "hermes",
-      attempt: 1,
-      error: "Host restarted during delivery",
-      createdAt: "2026-06-25T09:31:00.000Z",
-      updatedAt: "2026-06-25T09:32:00.000Z",
-    }];
-    const { getByText, queryByRole } = wrap();
-
-    expect(getByText("请核实 Notion 发送结果")).toBeInTheDocument();
-    expect(queryByRole("button", { name: "让 Hermes 处理" })).toBeNull();
-    expect(queryByRole("button", { name: "处理并发送 Notion" })).toBeNull();
-  });
-
-  it("uses the most recently updated durable task when a historical task id is reused", () => {
-    mockDurableTasks = [
-      {
-        id: "task-reused",
-        recordingStem: "ProductSync_20260625_093000",
-        title: "Product Sync",
-        trigger: "manual",
-        state: "queued",
-        phase: "queued",
-        sendToNotion: true,
-        agentProvider: "hermes",
-        attempt: 1,
-        error: null,
-        createdAt: "2026-06-20T09:00:00.000Z",
-        updatedAt: "2026-06-25T10:00:00.000Z",
-      },
-      {
-        id: "task-newer-created-history",
-        recordingStem: "ProductSync_20260625_093000",
-        title: "Product Sync",
-        trigger: "manual",
-        state: "completed",
-        phase: "completed",
-        sendToNotion: false,
-        agentProvider: "hermes",
-        attempt: 1,
-        error: null,
-        createdAt: "2026-06-24T09:00:00.000Z",
-        updatedAt: "2026-06-24T09:01:00.000Z",
-      },
-    ];
-    const { getByText, queryByRole } = wrap();
-
-    expect(getByText("已排队等待处理")).toBeInTheDocument();
-    expect(queryByRole("button", { name: "让 Hermes 处理" })).toBeNull();
-    expect(queryByRole("button", { name: "处理并发送 Notion" })).toBeNull();
-  });
-
-  it("shows Transcribe first when the recording has no transcript", () => {
-    mockTasks = [taskFixture({
-      stages: { transcribe: "idle", summarize: "idle", send: "idle" },
-      hasTranscript: false,
-      hasSummary: false,
-    })];
-    const { getByRole } = wrap();
-    fireEvent.click(getByRole("button", { name: "转录" }));
-    expect(reprocessMutate).not.toHaveBeenCalled();
-    expect(navigateMock).toHaveBeenCalledWith("/inbox/ProductSync_20260625_093000");
-  });
-
-  it("shows Summary after transcription and before sharing", () => {
-    mockTasks = [taskFixture({
-      stages: { transcribe: "done", summarize: "idle", send: "idle" },
-      hasTranscript: true,
-      hasSummary: false,
-    })];
-    const { queryByRole, getByRole } = wrap();
-    expect(queryByRole("button", { name: "处理并发送 Notion" })).toBeNull();
-    expect(getByRole("button", { name: "总结" })).toBeInTheDocument();
-    expect(reprocessMutate).not.toHaveBeenCalled();
-  });
-
-  it("keeps recording-content sharing out of Agent Console", () => {
-    mockZulipConfigured = true;
-    const { getByRole, queryByRole } = wrap();
-    fireEvent.click(getByRole("button", { name: "查看并分享" }));
-    expect(navigateMock).toHaveBeenCalledWith("/inbox/ProductSync_20260625_093000");
-    expect(queryByRole("menuitem", { name: /分享到 Notion/ })).toBeNull();
-    expect(queryByRole("menuitem", { name: /分享到 Zulip/ })).toBeNull();
-  });
-
-  it("opens the shared Agent Connection Center instead of mutating a separate Agent selection", () => {
-    const { getByText, getByRole } = wrap();
-    fireEvent.click(getByText("Agents"));
-    expect(getByRole("link", { name: "管理 Agent 连接" })).toHaveAttribute(
-      "href",
-      "/settings/llm?capability=conversation",
-    );
-    expect(connectAgentMutate).not.toHaveBeenCalled();
-  });
-
-  it("does not scan or probe runtimes merely by opening the Agent inspector", () => {
-    const { getByText } = wrap();
-    fireEvent.click(getByText("Agents"));
+  it("starts with one composer and no dashboard panels", () => {
+    const { getByRole, queryByText, container } = wrap();
+    expect(getByRole("textbox")).toBeInTheDocument();
+    expect(getByRole("button", { name: "对话历史" })).toHaveAttribute("aria-expanded", "false");
+    expect(queryByText("跑任务")).toBeNull();
+    expect(queryByText("Agents")).toBeNull();
+    expect(container.querySelector(".agent-session-recent")).toBeNull();
+    expect(getByRole("link", { name: /项需要处理/ })).toHaveAttribute("href", "/health#queue");
+    expect(configurePluginMutate).not.toHaveBeenCalled();
     expect(detectRefetch).not.toHaveBeenCalled();
   });
 
-  it("shows every Agent-owned Connector without add or remove controls", () => {
-    const { getByText, queryByLabelText } = wrap();
-    fireEvent.click(getByText("Agents"));
-
-    expect(getByText("Notion")).toBeInTheDocument();
-    expect(getByText("Zulip")).toBeInTheDocument();
-    expect(getByText("日历")).toBeInTheDocument();
-    expect(getByText("Connector 凭据保存在 Agent 内，不由 Yulu 保存。")).toBeInTheDocument();
-    expect(queryByLabelText(/移除/)).not.toBeInTheDocument();
+  it("opens history with focus and returns focus on Escape", () => {
+    const { getByRole, getByPlaceholderText, queryByLabelText } = wrap();
+    const toggle = getByRole("button", { name: "对话历史" });
+    fireEvent.click(toggle);
+    expect(getByPlaceholderText("搜索对话")).toHaveFocus();
+    fireEvent.keyDown(getByPlaceholderText("搜索对话"), { key: "Escape" });
+    expect(queryByLabelText("对话历史", { selector: "aside" })).toBeNull();
+    expect(toggle).toHaveFocus();
   });
 
-  it("keeps Agent Calendar Connector management separate from Calendar Source settings", () => {
-    const { getByText, getByLabelText, queryByText } = wrap();
-    fireEvent.click(getByText("Agents"));
-    const row = getByText("日历").closest(".agent-connector-row") as HTMLElement;
-    fireEvent.click(within(row).getByText("管理"));
-
-    expect(getByLabelText("日历 Connector 管理")).toBeInTheDocument();
-    expect(queryByText("+ macOS 日历")).toBeNull();
-    expect(queryByText("+ Google")).toBeNull();
+  it("adds a recent meeting reference to the editable question without sending it", () => {
+    const { getByRole, getByText, getByPlaceholderText } = wrap();
+    fireEvent.click(getByRole("button", { name: "引用会议" }));
+    fireEvent.click(getByText("Product Sync"));
+    expect(getByPlaceholderText("问会议记录、决策、行动项...")).toHaveValue("关于会议「Product Sync」（2026-06-25 09:30）：");
+    expect(askMutateAsync).not.toHaveBeenCalled();
+    expect(reprocessMutate).not.toHaveBeenCalled();
+    expect(getByRole("button", { name: "引用会议" })).toHaveFocus();
   });
 
-  it("opens native Connector management without automatic Agent discovery", async () => {
-    const { getByText, getByLabelText } = wrap();
-    fireEvent.click(getByText("Agents"));
-    const row = getByText("Notion").closest(".agent-connector-row") as HTMLElement;
-    fireEvent.click(within(row).getByText("管理"));
+  it("keeps unknown execution visible without a replay button", () => {
+    mockDurableTasks = [{ id: "uncertain", recordingStem: "meeting", state: "execution_unverified" }];
+    const { getByRole, queryByRole } = wrap();
+    expect(getByRole("link", { name: "1 项需要处理" })).toHaveAttribute("href", "/health#queue");
+    expect(queryByRole("button", { name: "重试" })).toBeNull();
+  });
 
-    const dialog = getByLabelText("Notion Connector 管理");
-    expect(within(dialog).getByText("codex mcp")).toBeInTheDocument();
-    expect(refreshDestinationMutate).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByText("复制管理命令"));
-    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("codex mcp"));
-    expect(within(dialog).getByText("已复制")).toBeInTheDocument();
+  it("does not submit while an IME composition is being confirmed", () => {
+    const { getByRole } = wrap();
+    fireEvent.change(getByRole("textbox"), { target: { value: "会议" } });
+    fireEvent.keyDown(getByRole("textbox"), { key: "Enter", isComposing: true });
+    expect(createSessionMutateAsync).not.toHaveBeenCalled();
   });
 
   it("renders Ask Meeting answers as Markdown", async () => {
@@ -660,7 +455,7 @@ describe("AgentConsole", () => {
 
     const { findByText, queryByText } = wrap();
 
-    expect(await findByText("只会使用有界的本地会议片段，不会调用 Web、X、文件或 Connectors。")).toBeInTheDocument();
+    expect(await findByText("本地会议片段")).toHaveAttribute("title", "只会使用有界的本地会议片段，不会调用 Web、X、文件或 Connectors。");
     expect(await findByText("xAI · grok-4.6-exact")).toBeInTheDocument();
     expect(queryByText("本地记录、Notion、Zulip 会自动进入上下文。")).not.toBeInTheDocument();
   });
@@ -823,8 +618,8 @@ describe("AgentConsole", () => {
       "href",
       "/settings/llm?connection=direct-xai&capability=conversation",
     );
-    expect(getAllByText("Provider changes apply to a new conversation.")).toHaveLength(2);
-    expect(getByText(/^xAI is pinned to this conversation · 2 messages · /)).toBeInTheDocument();
+    expect(getAllByText("Provider changes apply to a new conversation.")).toHaveLength(1);
+    expect(getByRole("link", { name: "xAI · grok-4.6-exact" })).toHaveAttribute("title", expect.stringContaining("xAI is pinned to this conversation · 2 messages"));
     expect(queryByText(/条消息/)).toBeNull();
   });
 
@@ -844,7 +639,7 @@ describe("AgentConsole", () => {
     const { getByText, findByText, queryByText } = wrap(["/agent-console"], "en");
     fireEvent.click(getByText("Pinned Claude"));
 
-    expect(await findByText(/^claude is pinned to this conversation/)).toBeInTheDocument();
+    expect(await findByText("claude · runtime-managed")).toHaveAttribute("title", expect.stringContaining("claude is pinned to this conversation"));
     expect(queryByText(/^Codex CLI is pinned to this conversation/)).toBeNull();
   });
 
@@ -862,8 +657,8 @@ describe("AgentConsole", () => {
     });
 
     const { getByText, getByPlaceholderText, getByLabelText, findByText, container } = wrap(["/agent-console"], "en");
-    expect(getByText("Only bounded local meeting excerpts are used. Web, X, files, and connectors stay off.")).toBeInTheDocument();
-    expect(getByText("xAI is selected for this new conversation · Session not created yet")).toBeInTheDocument();
+    expect(getByText("Local meeting excerpts")).toHaveAttribute("title", "Only bounded local meeting excerpts are used. Web, X, files, and connectors stay off.");
+    expect(getByText("xAI · grok-4.6-exact")).toHaveAttribute("title", expect.stringContaining("xAI is selected for this new conversation"));
     expect(container).not.toHaveTextContent("xAI is pinned to this conversation · Session not created yet");
     fireEvent.change(getByPlaceholderText("问会议记录、决策、行动项..."), { target: { value: "missing" } });
     fireEvent.click(getByLabelText("发送"));
@@ -991,7 +786,7 @@ describe("AgentConsole", () => {
     fireEvent.click(getByText("旧会话"));
     await waitFor(() => expect(getByText("旧回答")).toBeInTheDocument());
 
-    fireEvent.click(getByText("新对话"));
+    fireEvent.click(getByLabelText("新对话"));
     expect(container.querySelector(".agent-chat-thread.empty")).toBeInTheDocument();
     expect(container.querySelector(".agent-chat-composer textarea[placeholder='问会议记录、决策、行动项...']")).toBeInTheDocument();
     fireEvent.change(getByPlaceholderText("问会议记录、决策、行动项..."), { target: { value: "新的问题" } });

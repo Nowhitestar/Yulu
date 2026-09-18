@@ -4,7 +4,6 @@ import { Settings as SettingsIcon, HeartPulse, Mic, FileText, BookOpen, Bot, Aud
 import type { ReactNode } from "react";
 import type { CSSProperties } from "react";
 import { Logo } from "./Logo.js";
-import { useDaemonHealthState } from "../hooks/useDaemonHealthState.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./Sidebar.css";
 
@@ -32,7 +31,6 @@ const TOP_SECTIONS: { headingKey: string; items: NavItem[] }[] = [
 ];
 
 export function Sidebar() {
-  const health = useDaemonHealthState();
   const t = useT();
   return (
     <aside className="sidebar">
@@ -51,20 +49,14 @@ export function Sidebar() {
             <NavLink
               key={it.to}
               to={it.to}
+              title={t(it.labelKey)}
               data-depth={it.depth ?? 0}
               style={{ "--sidebar-indent": `${(it.depth ?? 0) * 12}px` } as CSSProperties}
               className={({ isActive }) => "sidebar-item" + (isActive ? " active" : "")}
             >
               {it.icon}
               <span className="sidebar-item-label">{t(it.labelKey)}</span>
-              {it.showHealth && (
-                <span
-                  className={`sidebar-health-dot health-${health}`}
-                  data-testid="health-dot"
-                  data-state={health}
-                  aria-label={t("nav.health.aria", { state: health })}
-                />
-              )}
+
             </NavLink>
           ))}
         </div>
@@ -72,15 +64,6 @@ export function Sidebar() {
 
       <div className="sidebar-spacer" />
 
-      <div className="sidebar-bottom" data-testid="sidebar-bottom">
-        <div className="sidebar-engine-card">
-          <span className={`sidebar-engine-dot health-${health}`} />
-          <div>
-            <strong>{t("sidebar.localEngine")}</strong>
-            <span>{t("sidebar.localEngine.sub")}</span>
-          </div>
-        </div>
-      </div>
     </aside>
   );
 }

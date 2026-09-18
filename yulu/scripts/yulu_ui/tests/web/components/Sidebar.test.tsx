@@ -26,8 +26,8 @@ describe("Sidebar", () => {
 
   it("keeps recordings under the workspace section, no Voicemails/Meetings/Search", () => {
     const { getByText, queryByText } = wrap(<Sidebar />);
-    expect(getByText("Agent Console")).toBeInTheDocument();
-    expect(getByText("Agent Console").closest("a")?.getAttribute("href")).toBe("/agent-console");
+    expect(getByText("会议助手")).toBeInTheDocument();
+    expect(getByText("会议助手").closest("a")?.getAttribute("href")).toBe("/agent-console");
     expect(getByText("录音")).toBeInTheDocument();
     expect(queryByText("Voicemails")).toBeNull();
     expect(queryByText("Meetings")).toBeNull();
@@ -43,7 +43,7 @@ describe("Sidebar", () => {
 
   it("renders an icon (svg) on each nav item", () => {
     const { getByText } = wrap(<Sidebar />);
-    for (const label of ["Agent Console", "录音", "模板", "术语表", "设置", "健康状态"]) {
+    for (const label of ["会议助手", "录音", "模板", "术语表", "设置", "运行状态"]) {
       const link = getByText(label).closest("a");
       expect(link?.querySelector("svg")).not.toBeNull();
     }
@@ -67,10 +67,11 @@ describe("Sidebar", () => {
     expect(getByText("新手引导").closest("a")?.getAttribute("href")).toBe("/onboarding");
   });
 
-  it("renders Health link in the System section with a health-state dot", () => {
+  it("renders Health link in the System section without a misleading daemon-only readiness dot", () => {
     const { container, getByText } = wrap(<Sidebar />);
-    expect(getByText("健康状态").closest("a")?.getAttribute("href")).toBe("/health");
-    expect(container.querySelector('[data-testid="health-dot"]')).not.toBeNull();
+    expect(getByText("运行状态").closest("a")?.getAttribute("href")).toBe("/health");
+    expect(container.querySelector('[data-testid="health-dot"]')).toBeNull();
+    expect(container).not.toHaveTextContent("0ms latency");
   });
 
   it("does NOT render any sidebar-count badges or '?' placeholders", () => {

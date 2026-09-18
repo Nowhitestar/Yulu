@@ -115,6 +115,7 @@ vi.mock("../../../web/src/trpc.js", () => {
           isPending: false,
         }) },
       },
+      scheduler: { overview: { useQuery: () => ({ data: { updatedAt: "", schedulerStatus: null, calendarStatus: null } }) } },
       recording: {
         state: { useQuery: () => ({ data: { state: recording.state } }) },
         previewSound: { useMutation: (opts?: { onError?: (error: Error) => void }) => ({
@@ -337,7 +338,7 @@ vi.mock("../../../web/src/trpc.js", () => {
 });
 
 import { useMatches } from "react-router";
-import { SettingsLayout, handle as settingsHandle } from "../../../web/src/routes/settings.js";
+import { SettingsLayout, SettingsIndex, handle as settingsHandle } from "../../../web/src/routes/settings.js";
 import { SettingsCategory } from "../../../web/src/routes/settings.$category.js";
 import { categoryLabelKey } from "../../../web/src/components/settings/categories.js";
 import { CATEGORIES } from "../../../web/src/components/settings/categories.js";
@@ -388,7 +389,7 @@ function routesTree() {
           Component: SettingsLayout,
           handle: settingsHandle,
           children: [
-            { index: true, element: <Navigate to="/settings/general" replace /> },
+            { index: true, Component: SettingsIndex },
             {
               path: ":category",
               Component: SettingsCategory,
@@ -418,12 +419,12 @@ function wrap(initial = "/settings/general") {
   return { ...result, router };
 }
 
-describe("Settings (3-column MasterDetail)", () => {
-  it("renders the MasterDetail shell", () => {
+describe("Settings navigation", () => {
+  it("renders a category list and content pane", () => {
     const { container } = wrap();
-    expect(container.querySelector(".masterdetail")).not.toBeNull();
-    expect(container.querySelector(".masterdetail-list")).not.toBeNull();
-    expect(container.querySelector(".masterdetail-detail")).not.toBeNull();
+    expect(container.querySelector(".settings-workspace")).not.toBeNull();
+    expect(container.querySelector(".settings-navigation")).not.toBeNull();
+    expect(container.querySelector(".settings-content")).not.toBeNull();
   });
 
   it("renders one category nav per registered category, with no emoji", () => {
@@ -439,46 +440,39 @@ describe("Settings (3-column MasterDetail)", () => {
 
   it("shows the Chinese category labels in the nav list", () => {
     const { container } = wrap();
-    const list = container.querySelector(".masterdetail-list")!;
+    const list = container.querySelector(".settings-navigation")!;
     const scoped = within(list as HTMLElement);
     expect(scoped.getByText("通用")).toBeInTheDocument();
-    expect(scoped.getByText("音频与存储")).toBeInTheDocument();
-    expect(scoped.getByText("转写")).toBeInTheDocument();
-    expect(scoped.getByText("智能服务")).toBeInTheDocument();
+    expect(scoped.getByText("录音与纪要")).toBeInTheDocument();
+    expect(scoped.getByText("会议提醒")).toBeInTheDocument();
+    expect(scoped.getByText("账号与连接")).toBeInTheDocument();
     expect(scoped.queryByText("AI 集成")).toBeNull();
     expect(scoped.queryByText("Agent Console")).toBeNull();
   });
 
   it("renders the breadcrumb as '设置 / <category>'", () => {
     const { container } = wrap("/settings/audio");
-    expect(container.querySelector(".topbar-breadcrumb")?.textContent).toBe("设置 / 音频与存储");
+    expect(container.querySelector(".topbar-breadcrumb")?.textContent).toBe("设置 / 录音与纪要");
   });
 
   it("marks the active category nav for the current route", () => {
     const { getAllByTestId } = wrap("/settings/audio");
     const active = getAllByTestId("settings-category").filter((n) => n.classList.contains("active"));
     expect(active.length).toBe(1);
-    expect(active[0]!.getAttribute("href")).toBe("/settings/audio");
+    expect(active[0]!.getAttribute("href")).toBe("/settings/recording");
   });
 
-  it("wires the settings index to redirect to /settings/general", () => {
-    // The index child is an element-based <Navigate> redirect (same pattern as
-    // the app's other index routes). createMemoryRouter doesn't pump a
-    // render-phase <Navigate> on initial load in jsdom, so we assert the
-    // configured redirect target rather than the post-redirect location.
-    const tree = routesTree();
-    const settingsRoute = tree[0]!.children!.find((c) => c.path === "settings")!;
-    const indexRoute = settingsRoute.children!.find((c) => "index" in c && c.index)!;
-    const el = indexRoute.element as React.ReactElement<{ to: string }>;
-    expect(el.props.to).toBe("/settings/general");
+  it("uses the responsive settings index", () => {
+    const settingsRoute = routesTree()[0]!.children!.find((route) => route.path === "settings")!;
+    expect(settingsRoute.children![0]!.Component).toBe(SettingsIndex);
   });
 
   it("renders the automation (meeting detection) section", () => {
     const { container } = wrap("/settings/automation");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    const detail = within(container.querySelector(".settings-content") as HTMLElement);
     // The section <h2> heading (distinct from the detail's <h1> title, which the
     // category label also renders as "自动化").
-    expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.automation.heading"));
+    expect(container.querySelector("#automation h2")?.textContent).toBe(translate("zh", "settings.automation.heading"));
     expect(detail.getByText(translate("zh", "settings.automation.enabled.label"))).toBeInTheDocument();
   });
 });
@@ -489,12 +483,13 @@ describe("Settings category detail content (re-homed widgets)", () => {
     previewSoundSpy.mockReset();
   });
 
-  it("general: capabilities (read-only) + theme + about", () => {
+  it("general: one appearance control, about, and collapsed diagnostics", () => {
     const { container } = wrap("/settings/general");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    const detail = within(container.querySelector(".settings-content") as HTMLElement);
     expect(detail.getByText(translate("zh", "settings.capabilities.heading"))).toBeInTheDocument();
     // Theme controls are re-homed here.
-    expect(container.querySelector('[role="group"][aria-label="主题"]')).not.toBeNull();
+    expect(container.querySelector('[role="group"][aria-label="主题"]')).toBeNull();
+    expect(detail.getByText(translate("zh", "settings.capabilities.heading")).closest("details")).not.toHaveAttribute("open");
     expect(container.querySelector('[role="group"][aria-label="主题明暗模式"]')).not.toBeNull();
     expect(container.querySelector('[role="group"][aria-label="主题家族"]')).not.toBeNull();
     expect(detail.queryByText(translate("zh", "settings.hotkey.statusAgent.label"))).toBeNull();
@@ -505,13 +500,13 @@ describe("Settings category detail content (re-homed widgets)", () => {
 
   it("general: exposes persistent Onboarding Home re-entry", () => {
     const { container } = wrap("/settings/general");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    const detail = within(container.querySelector(".settings-content") as HTMLElement);
     expect(detail.getByRole("link", { name: "打开新手引导" })).toHaveAttribute("href", "/onboarding");
   });
 
   it("audio: audio rows + storage dbStats/logs", () => {
     const { container } = wrap("/settings/audio");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    const detail = within(container.querySelector(".settings-content") as HTMLElement);
     expect(detail.getByText(translate("zh", "settings.audio.heading"))).toBeInTheDocument();
     expect(detail.getByText(translate("zh", "settings.audio.micDevice.label"))).toBeInTheDocument();
     // StorageSection is re-homed under audio (its "Storage" heading + Databases group).
@@ -534,13 +529,13 @@ describe("Settings category detail content (re-homed widgets)", () => {
 
   it("transcription: shows explicit local/xAI engine selection", () => {
     const { container } = wrap("/settings/transcription");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    const detail = within(container.querySelector(".settings-content") as HTMLElement);
     // Section <h2> heading is distinct from the detail <h1> title (the category
     // label also renders "转写").
-    expect(container.querySelector("h2.settings-section-h")?.textContent).toBe(translate("zh", "settings.transcription.heading"));
+    expect(container.querySelector("#transcription h2")?.textContent).toBe(translate("zh", "settings.transcription.heading"));
     expect(detail.getByText(translate("zh", "settings.transcription.engine.label"))).toBeInTheDocument();
     expect(detail.getByText(translate("zh", "settings.transcription.language.label"))).toBeInTheDocument();
-    expect(detail.getByText(translate("zh", "settings.providers.connection.title"))).toBeInTheDocument();
+    expect(detail.queryByText(translate("zh", "settings.providers.connection.title"))).toBeNull();
     expect(detail.queryByText(/MLX|说话人分离/)).toBeNull();
   });
 
@@ -548,17 +543,26 @@ describe("Settings category detail content (re-homed widgets)", () => {
     configUpdateSpy.mockClear();
     const { container } = wrap("/settings/voice");
     const voice = within(container.querySelector("#voice-input") as HTMLElement);
-    fireEvent.click(voice.getByLabelText("听写快捷键 重新配置"));
-    await waitFor(() => expect(voice.getByText("请按下新的快捷键")).toBeInTheDocument());
+    fireEvent.click(voice.getByLabelText("听写快捷键 更改"));
+    await waitFor(() => expect(voice.getByText("请按下组合键 · Esc 取消")).toBeInTheDocument());
     fireEvent.keyDown(window, { key: "F1", ctrlKey: true, altKey: true });
-    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
-      key: "status_agent.hotkeys.dictate.key",
-      value: "F1",
-    })));
-    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
-      key: "status_agent.hotkeys.dictate.modifiers",
-      value: ["ctrl", "alt"],
-    })));
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith({
+      key: "status_agent.hotkeys.dictate",
+      value: { key: "F1", modifiers: ["ctrl", "alt"] },
+    }));
+    expect(configUpdateSpy).toHaveBeenCalledOnce();
+  });
+
+  it("voice: Escape cancels shortcut capture without changing the saved key", () => {
+    configUpdateSpy.mockClear();
+    const { container } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    const change = voice.getByLabelText("听写快捷键 更改");
+    fireEvent.click(change);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(change).toHaveAttribute("aria-pressed", "false");
+    expect(change).toHaveFocus();
+    expect(configUpdateSpy).not.toHaveBeenCalled();
   });
 
   it("voice: shows configured state separately from the live StatusAgent state", () => {
@@ -643,7 +647,7 @@ describe("Settings category detail content (re-homed widgets)", () => {
 
   it("llm: hosts the authoritative Agent Connection Center", () => {
     const { container } = wrap("/settings/llm");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    const detail = within(container.querySelector(".settings-content") as HTMLElement);
     expect(detail.getByRole("heading", { name: translate("zh", "agentConnections.title") }))
       .toBeInTheDocument();
     expect(detail.queryByRole("link", { name: translate("zh", "settings.connectionCenter.open") }))
@@ -652,22 +656,22 @@ describe("Settings category detail content (re-homed widgets)", () => {
 
   it("sharing: reaches the reusable Sharing configuration surface from Settings", () => {
     const { container } = wrap("/settings/sharing");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    const detail = within(container.querySelector(".settings-content") as HTMLElement);
     expect(detail.getByRole("heading", { name: translate("zh", "sharing.title") }))
       .toBeInTheDocument();
     expect(detail.getByText(translate("zh", "sharing.noConnections"))).toBeInTheDocument();
-    expect(container.querySelector('[href="/settings/sharing"]')).not.toBeNull();
+    expect(container.querySelector("#sharing details")).toHaveAttribute("open");
   });
 
   it("integrations: hosts authoritative Calendar Sources and keeps Agent Calendar Connector separate", () => {
     const { container } = wrap("/settings/integrations");
-    const detail = within(container.querySelector(".masterdetail-detail") as HTMLElement);
+    const detail = within(container.querySelector(".settings-content") as HTMLElement);
     expect(detail.getByRole("heading", { name: translate("zh", "settings.calendarSource.heading") }))
       .toBeInTheDocument();
-    expect(detail.getByRole("link", { name: translate("zh", "settings.calendarSource.connector.open") }))
-      .toHaveAttribute("href", "/settings/integrations#agent-calendar-connector");
-    expect(detail.getByRole("heading", { name: translate("zh", "settings.agentCalendarConnector.heading") }))
-      .toBeInTheDocument();
+    expect(detail.getByRole("link", { name: translate("zh", "settings.calendarSource.connector.open"), hidden: true }))
+      .toHaveAttribute("href", "/settings/connections#agent-calendar-connector");
+    expect(detail.queryByRole("heading", { name: translate("zh", "settings.agentCalendarConnector.heading") }))
+      .toBeNull();
   });
 
   it("does not list the retired local transcription Advanced category", () => {
@@ -680,7 +684,7 @@ describe("Settings category detail content (re-homed widgets)", () => {
     const row = within(container.querySelector("#transcription") as HTMLElement)
       .getByText(translate("zh", "settings.transcription.language.label"))
       .closest(".row")!;
-    fireEvent.click(within(row as HTMLElement).getByText("auto"));
+    fireEvent.click(within(row as HTMLElement).getByText("自动识别"));
     fireEvent.change(within(row as HTMLElement).getByRole("combobox"), { target: { value: "zh" } });
     await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
       key: "transcription.language",
@@ -709,14 +713,14 @@ describe("Settings — recording-guard + undo (Task 5)", () => {
     recording.state = "recording";
     const { getByText } = wrap("/settings/transcription");
     const row = getByText(translate("zh", "settings.transcription.language.label")).closest(".row")!;
-    expect(within(row as HTMLElement).getByText("auto")).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText("自动识别")).toBeInTheDocument();
     expect(within(row as HTMLElement).queryByText(/录音中不可改/)).toBeNull();
   });
 
   it("a successful save shows an undo toast whose 撤销 re-commits the previous value", async () => {
     const { getByText, getByTestId } = wrap("/settings/transcription");
     const row = getByText(translate("zh", "settings.transcription.language.label")).closest(".row")!;
-    fireEvent.click(within(row as HTMLElement).getByText("auto"));
+    fireEvent.click(within(row as HTMLElement).getByText("自动识别"));
     fireEvent.change(within(row as HTMLElement).getByRole("combobox"), { target: { value: "zh" } });
     await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({ key: "transcription.language", value: "zh" })));
     const toast = await waitFor(() => getByTestId("undo-toast"));

@@ -188,6 +188,18 @@ describe("configRouter", () => {
     } finally { cleanup(); }
   });
 
+  it("saves a complete shortcut once and preserves its translation language", async () => {
+    const { ctx, sighup, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const shortcut = { key: "F2", modifiers: ["cmd", "shift"], target_language: "Japanese" };
+      const result = await caller.update({ key: "status_agent.hotkeys.translate", value: shortcut });
+      expect((await caller.get()).status_agent.hotkeys.translate).toEqual(shortcut);
+      expect(result.daemonsNeedingRestart).toEqual([]);
+      expect(sighup).toHaveBeenCalledExactlyOnceWith("com.yulu.statusagent");
+    } finally { cleanup(); }
+  });
+
   it("returns an apply error when a daemon SIGHUP fails", async () => {
     const { ctx, sighup, cleanup } = makeCtx();
     sighup.mockRejectedValueOnce(new Error("service unavailable"));

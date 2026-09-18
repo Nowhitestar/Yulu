@@ -3,7 +3,7 @@ import { createBrowserRouter, RouterProvider, Navigate, useParams, useSearchPara
 import { useState } from "react";
 import { trpc, makeTrpcClient } from "./trpc.js";
 import { ThemeConfigSync, ThemeProvider } from "./theme.js";
-import { LanguageConfigSync, LanguageProvider } from "./i18n/LanguageProvider.js";
+import { LanguageConfigSync, LanguageProvider, useT } from "./i18n/LanguageProvider.js";
 import { UndoToastProvider, useUndoToast } from "./components/UndoToast.js";
 import { WsProvider } from "./ws.js";
 import { RootLayout } from "./routes/root.js";
@@ -14,7 +14,7 @@ import { Prompts,    handle as promptsHandle    } from "./routes/knowledge/promp
 import { PromptsIndex } from "./routes/knowledge/prompts.index.js";
 import { PromptReaderRoute, handle as promptReaderHandle } from "./routes/knowledge/prompts.$id.js";
 import { Glossary,   handle as glossaryHandle   } from "./routes/knowledge/glossary.js";
-import { SettingsLayout, handle as settingsHandle } from "./routes/settings.js";
+import { SettingsLayout, SettingsIndex, handle as settingsHandle } from "./routes/settings.js";
 import { SettingsCategory } from "./routes/settings.$category.js";
 import { categoryLabelKey } from "./components/settings/categories.js";
 import { Health, handle as healthHandle } from "./routes/health.js";
@@ -80,7 +80,7 @@ const router = createBrowserRouter([
         Component: SettingsLayout,
         handle: settingsHandle,
         children: [
-          { index: true, element: <Navigate to="/settings/general" replace /> },
+          { index: true, Component: SettingsIndex },
           {
             path: ":category",
             Component: SettingsCategory,
@@ -88,9 +88,6 @@ const router = createBrowserRouter([
           },
         ],
       },
-      // Legacy deep-links: hotkey now lives under general, storage under audio.
-      { path: "settings/hotkey",        element: <Navigate to="/settings/general" replace /> },
-      { path: "settings/storage",       element: <Navigate to="/settings/audio"   replace /> },
       { path: "health",                 Component: Health,                handle: healthHandle },
       { path: "health/doctor",          element: <Navigate to="/health#doctor" replace /> },
       { path: "health/queue",           element: <Navigate to="/health#queue" replace /> },
@@ -111,9 +108,9 @@ export function App() {
     <trpc.Provider client={tc} queryClient={qc}>
       <QueryClientProvider client={qc}>
         <ThemeProvider>
-          <ThemeConfigSync />
           <LanguageProvider>
             <UndoToastProvider>
+              <ThemeConfigSyncWithToast />
               <LanguageConfigSyncWithToast />
               <WsProvider>
                 <RouterProvider router={router} />
@@ -129,4 +126,10 @@ export function App() {
 function LanguageConfigSyncWithToast() {
   const { showError } = useUndoToast();
   return <LanguageConfigSync onError={showError} />;
+}
+
+function ThemeConfigSyncWithToast() {
+  const { showError } = useUndoToast();
+  const t = useT();
+  return <ThemeConfigSync onError={(error) => showError(t("settings.save.failed", { error }))} />;
 }

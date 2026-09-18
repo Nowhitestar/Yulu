@@ -54,10 +54,10 @@ describe("GlobalSearch — settings scope", () => {
     const target = await waitFor(() => {
       const row = container.querySelector(".gs-result") as HTMLElement | null;
       expect(row).not.toBeNull();
-      return within(row!).getByText("音频与存储");
+      return within(row!).getByText("录音与纪要");
     });
     fireEvent.click(target);
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/settings/audio"));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/settings/recording#audio"));
   });
 
   it("does not surface removed LLM settings even if the backend schema still contains them", async () => {

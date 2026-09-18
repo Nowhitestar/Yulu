@@ -387,13 +387,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
-export function ThemeConfigSync() {
+export function ThemeConfigSync({ onError }: { onError?: (error: string) => void } = {}) {
   const { data: cfg } = trpc.config.get.useQuery();
   const updateMut = trpc.config.update.useMutation();
   const utils = trpc.useUtils();
   const theme = useTheme();
   const hydrated = useRef(false);
   const lastConfig = useRef("");
+  const applyingConfig = useRef<string | null>(null);
 
   useEffect(() => {
     if (!cfg) return;
@@ -402,6 +403,7 @@ export function ThemeConfigSync() {
     const serialized = serializeThemeConfig(next);
     if (serialized === lastConfig.current) return;
     lastConfig.current = serialized;
+    applyingConfig.current = serialized;
     hydrated.current = true;
     theme.applyConfig(next);
   }, [cfg]);
@@ -414,13 +416,28 @@ export function ThemeConfigSync() {
       custom: theme.customTheme,
     };
     const serialized = serializeThemeConfig(next);
+    if (applyingConfig.current !== null) {
+      if (serialized === applyingConfig.current) applyingConfig.current = null;
+      return;
+    }
     if (serialized === lastConfig.current) return;
     lastConfig.current = serialized;
     updateMut.mutate(
       { key: "ui.theme", value: next },
-      { onSettled: () => void utils.config.get.invalidate() },
+      {
+        onError: (error) => {
+          if (lastConfig.current === serialized) {
+            const previous = normalizeThemeConfig(cfg?.ui?.theme);
+            lastConfig.current = serializeThemeConfig(previous);
+            applyingConfig.current = lastConfig.current;
+            theme.applyConfig(previous);
+          }
+          onError?.(error.message);
+        },
+        onSettled: () => void utils.config.get.invalidate(),
+      },
     );
-  }, [theme.family, theme.mode, theme.customTheme, updateMut, utils]);
+  }, [theme.family, theme.mode, theme.customTheme, updateMut, utils, onError]);
 
   return null;
 }

@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -158,9 +159,10 @@ def test_release_please_leaves_the_finished_prerelease_line():
     assert "versioning" not in package
     assert package["prerelease"] is False
     assert "prerelease-type" not in package
-    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "0.23.0"
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
     manifest = json.loads((ROOT / ".release-please-manifest.json").read_text(encoding="utf-8"))
-    assert manifest["."] == "0.23.0"
+    assert manifest["."] == version
 
 
 def test_stable_publication_guidance_requires_the_current_accepted_candidate():
@@ -218,14 +220,15 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
     release_notes = (
         (ROOT / "docs" / "release-notes" / "v0.23.0-rc.19.md").read_text(encoding="utf-8")
         + (ROOT / "docs" / "release-notes" / "v0.23.0.md").read_text(encoding="utf-8")
+        + (ROOT / "docs" / "release-notes" / "v0.24.0.md").read_text(encoding="utf-8")
     )
 
     for guidance in (readme, readme_zh, skill, issue_template, release_notes):
         assert "CLIProxyAPI" not in guidance
     assert "Grok CLI-compatible OAuth" in readme
     assert "兼容 Grok CLI 的 OAuth" in readme_zh
-    assert "releases/latest" not in readme
-    assert "releases/latest" not in readme_zh
+    assert "latest stable Yulu" in readme
+    assert "Yulu 最新稳定版" in readme_zh
     assert "public release candidate" in readme
     assert "公开候选版" in readme_zh
     assert "xAI、Codex 或 Claude Code" in skill
@@ -233,13 +236,13 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
     assert "Hermes 租约任务规则" not in skill
     assert "手动 Share Action" in skill
     assert "Official GitHub Release DMG" in issue_template
-    assert 'placeholder: "Yulu 0.23.0"' in issue_template
+    assert 'placeholder: "Yulu 0.24.0"' in issue_template
     assert "bounded direct connector RPC" in readme
     assert "只读对账不会另建页面" in readme_zh
     for guidance in (readme, readme_zh):
-        assert "releases/tag/v0.23.0)" in guidance
+        assert "https://github.com/Nowhitestar/Yulu/releases/latest)" in guidance
         assert "releases/tag/v0.23.0-rc.21" not in guidance
-        assert "docs/release-notes/v0.23.0.md#acceptance-scope" in guidance
+        assert "docs/release-notes/v0.24.0.md" in guidance
     operations = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
     assert "For the `v0.23.0-rc.19` public-DMG acceptance harness" in operations
     assert "one-line installer" not in issue_template

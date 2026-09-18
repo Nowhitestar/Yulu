@@ -1,11 +1,11 @@
 // web/src/routes/settings.tsx
-import { Outlet } from "react-router";
+import { Outlet, Navigate, useParams } from "react-router";
+import { useEffect, useState } from "react";
 import type { inferProcedureInput } from "@trpc/server";
 import type { AppRouter } from "../../../src/routers/_app.js";
 import { trpc } from "../trpc.js";
 import { useSettingsRestartTracker, type SettingsRestartTracker } from "../hooks/useSettingsRestartTracker.js";
 import { RestartBanner } from "../components/RestartBanner.js";
-import { MasterDetail } from "../components/MasterDetail.js";
 import { SettingsCategoryList } from "../components/settings/SettingsCategoryList.js";
 import { useUndoToast } from "../components/UndoToast.js";
 import { DangerConfirmProvider } from "../components/DangerConfirm.js";
@@ -30,13 +30,19 @@ export interface SettingsOutletContext {
   tracker: SettingsRestartTracker;
 }
 
-/**
- * SettingsLayout — the settings page shell. Renders the app's 3-column
- * MasterDetail: a category NavList (master) + the category detail (`<Outlet/>`).
- * Owns the restart tracker and the RestartBanner so restart-class edits made in
- * any category surface one consolidated banner here.
- */
+export function SettingsIndex() {
+  const [wide, setWide] = useState(() => window.matchMedia("(min-width: 760px)").matches);
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 760px)");
+    const change = () => setWide(query.matches);
+    query.addEventListener("change", change);
+    return () => query.removeEventListener("change", change);
+  }, []);
+  return wide ? <Navigate to="/settings/general" replace /> : null;
+}
+
 export function SettingsLayout() {
+  const { category } = useParams();
   const tracker = useSettingsRestartTracker();
   const { showError } = useUndoToast();
   const t = useT();
@@ -68,15 +74,14 @@ export function SettingsLayout() {
 
   return (
     <DangerConfirmProvider>
-      <div className="settings-page">
+      <div className="settings-page" data-detail={Boolean(category)}>
         {banner && <div className="settings-banner">{banner}</div>}
-        <div className="settings-masterdetail">
-          <MasterDetail
-            className="masterdetail--settings-mobile-tabs"
-            storageKey="yulu_ui.settings.width"
-            listSlot={<SettingsCategoryList />}
-            detailSlot={<Outlet context={outletContext} />}
-          />
+        <div className="settings-workspace">
+          <aside className="settings-navigation">
+            <h1>{t("nav.settings")}</h1>
+            <SettingsCategoryList />
+          </aside>
+          <div className="settings-content"><Outlet context={outletContext} /></div>
         </div>
       </div>
     </DangerConfirmProvider>

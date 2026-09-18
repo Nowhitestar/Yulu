@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { LaunchctlClient } from "../src/launchctl.js";
 
 const execFileMock = vi.hoisted(() => vi.fn());
+const ipcMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({ execFile: execFileMock }));
+vi.mock("../src/ipc.js", () => ({ ipcSend: ipcMock }));
 
-beforeEach(() => execFileMock.mockReset());
+beforeEach(() => { execFileMock.mockReset(); ipcMock.mockReset(); });
 
 // execFile may be called as (cmd, args, cb) or (cmd, args, opts, cb).
 // Vitest cleanup hooks also invoke the mock with 0 args — ignore those.
@@ -29,6 +31,32 @@ function fail(code: number, stderr: string) {
 }
 
 describe("LaunchctlClient", () => {
+  it("reads and controls reminders through their App-owned supervisor", async () => {
+    const client = new LaunchctlClient("/unused", "/private/tmp/yulu/status_agent.pid", true);
+    ipcMock.mockResolvedValue({ ok: true, enabled: true, pid: 2468, exitStatus: 0 });
+    await expect(client.inspect("com.yulu.calendar")).resolves.toEqual({
+      state: "running", status: { label: "com.yulu.calendar", pid: 2468, exitStatus: 0 },
+    });
+    await client.restart("com.yulu.calendar");
+    expect(ipcMock).toHaveBeenLastCalledWith("/private/tmp/yulu/reminder_services.sock", { label: "com.yulu.calendar", action: "restart" }, { timeoutMs: 5000 });
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("does not revive retired LaunchAgents when the App supervisor is unavailable", async () => {
+    const client = new LaunchctlClient("/unused", "/private/tmp/yulu/status_agent.pid", true);
+    ipcMock.mockRejectedValue(new Error("unavailable"));
+    await expect(client.inspect("com.yulu.scheduler")).resolves.toEqual({ state: "not_loaded" });
+    await expect(client.start("com.yulu.scheduler")).rejects.toThrow("unavailable");
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes disabled reminders and uses the actual installed Host label", async () => {
+    const client = new LaunchctlClient("/unused", "/private/tmp/yulu/status_agent.pid", true);
+    ipcMock.mockResolvedValue({ ok: true, enabled: false, pid: 0, exitStatus: 0 });
+    await expect(client.inspect("com.yulu.calendar")).resolves.toEqual({ state: "disabled" });
+    ok("PID\tStatus\tLabel\n123\t0\tcom.yulu.app.host\n");
+    await expect(client.status("com.yulu.ui")).resolves.toEqual({ label: "com.yulu.ui", pid: 123, exitStatus: 0 });
+  });
   it("restart() runs unload then load", async () => {
     ok();
     const c = new LaunchctlClient("/Users/x/Library/LaunchAgents");

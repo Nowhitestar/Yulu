@@ -6,6 +6,7 @@ from pathlib import Path
 import select
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -122,6 +123,12 @@ def running_controls(native_controls_binary, request):
     with tempfile.TemporaryDirectory(prefix="yulu-nc-", dir="/private/tmp") as root:
         data_root = Path(root)
         python = "/usr/bin/false"
+        if getattr(request, "param", "normal") == "reminders":
+            python = sys.executable
+            (data_root / "data").mkdir()
+            (data_root / "data/config.json").write_text(
+                '{"calendars": [], "meeting_detection": {"enabled": false}}'
+            )
         if getattr(request, "param", "normal") == "slow-hotkeys":
             slow_python = data_root / "slow-python"
             slow_python.write_text(
@@ -150,11 +157,13 @@ def running_controls(native_controls_binary, request):
             "HOME": str(data_root),
             "YULU_APPLICATION_SUPPORT_DIR": str(data_root / "data"),
             "YULU_IPC_DIR": str(data_root / "ipc"),
+            "YULU_CACHE_DIR": str(data_root / "ipc"),
             "YULU_LOG_DIR": str(data_root / "logs"),
             "YULU_MEDIA_LIBRARY_DIR": str(data_root / "media"),
             "YULU_LEGACY_READ_ONLY_DATA_DIR": str(data_root / "legacy"),
             "YULU_SCRIPT_DIR": str(SCRIPTS),
             "YULU_PYTHON": python,
+            "YULU_MANAGE_REMINDERS": "1" if getattr(request, "param", "normal") == "reminders" else "0",
             "PATH": "/usr/bin:/bin",
         }), encoding="utf-8")
         started = time.monotonic()
@@ -345,3 +354,27 @@ def test_failed_stop_reports_terminal_failure_after_successful_spawn(running_con
         time.sleep(0.02)
     assert result["state"] == "failed"
     assert result["exit_status"] != 0
+
+
+@pytest.mark.parametrize("running_controls", ["reminders"], indirect=True)
+def test_app_owns_reminders_and_quiesces_them_before_updating(running_controls):
+    process, socket_path, _, _ = running_controls
+    reminder_socket = socket_path.parent / "reminder_services.sock"
+    deadline = time.monotonic() + 5
+    while not reminder_socket.exists():
+        assert time.monotonic() < deadline
+        time.sleep(.02)
+    status = ipc(reminder_socket, "status", label="com.yulu.scheduler")
+    assert status["pid"] > 0
+    assert ipc(reminder_socket, "status", label="com.yulu.calendar")["enabled"] is False
+    await_quiescence(process)
+    assert not reminder_socket.exists()
+    with pytest.raises(ProcessLookupError):
+        os.kill(status["pid"], 0)
+    assert lifecycle(process, "resume") == "resumed"
+    deadline = time.monotonic() + 5
+    while not reminder_socket.exists():
+        assert time.monotonic() < deadline
+        time.sleep(.02)
+    assert ipc(reminder_socket, "status", label="com.yulu.scheduler")["pid"] != status["pid"]
+    await_quiescence(process)

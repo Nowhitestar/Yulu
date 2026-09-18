@@ -2067,3 +2067,48 @@
     max-width: 90%;
   }
 }
+
+/* Conversation workspace: a single toolbar and an optional history pane. */
+.agent-chat-workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.assistant-toolbar { display: flex; align-items: center; gap: 10px; padding: 16px 20px; min-width: 0; }
+.assistant-tool { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: 0 0 auto; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--fg-2); cursor: pointer; }
+.assistant-tool:hover, .assistant-tool[aria-expanded="true"] { background: var(--row-hover); color: var(--fg); }
+.assistant-heading { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.assistant-heading strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistant-heading a { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-2); width: fit-content; max-width: 100%; overflow-wrap: anywhere; }
+.assistant-activity { color: var(--accent-on, var(--accent)); background: var(--accent-soft); padding: 5px 9px; border-radius: var(--radius-control); font-size: 11px; white-space: nowrap; }
+.agent-chat-workspace .agent-session-panel { width: 240px; border: 0; background: color-mix(in oklch, var(--fg) 2%, transparent); }
+.agent-chat-workspace .agent-session-history { flex: 1; max-height: none; min-height: 0; }
+.agent-chat-workspace .agent-chat-thread.empty { padding-bottom: 24px; }
+.agent-chat-workspace .agent-chat-start { gap: 15px; }
+.agent-chat-workspace .agent-chat-title { font-size: clamp(22px, 2.5vw, 28px); }
+.agent-chat-workspace .agent-chat-sub { line-height: 1.7; font-size: 13px; }
+.assistant-composer-tools { max-width: 760px; margin: 0 auto 8px; display: flex; align-items: center; gap: 12px; justify-content: space-between; color: var(--fg-3); font-size: 11px; }
+.assistant-composer-tools > span { text-align: right; }
+.assistant-reference { position: relative; min-width: 0; flex-shrink: 0; }
+.assistant-reference-toggle { display: inline-flex; gap: 6px; align-items: center; color: var(--fg-2); border: 0; padding: 5px 0; background: transparent; cursor: pointer; font-size: 12px; }
+.assistant-reference-toggle:disabled { opacity: .5; cursor: not-allowed; }
+.assistant-meeting-picker { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 10; width: min(360px, calc(100vw - 64px)); border-radius: var(--radius-inner); padding: 14px; background: var(--glass-paper); backdrop-filter: blur(36px); border: 1px solid var(--edge-card); box-shadow: var(--shadow); }
+.assistant-meeting-picker input { width: 100%; box-sizing: border-box; background: var(--row-hover); border: 1px solid var(--edge); color: var(--fg); border-radius: var(--radius-control); padding: 8px; }
+.assistant-meeting-picker p { font-size: 11px; color: var(--fg-2); line-height: 1.6; }
+.assistant-meeting-list { max-height: min(240px, 34dvh); overflow-y: auto; }
+.assistant-meeting-list button { display: grid; gap: 3px; width: 100%; text-align: left; padding: 9px 5px; color: var(--fg); border: 0; border-radius: var(--radius-control); background: transparent; cursor: pointer; }
+.assistant-meeting-list button:hover { background: var(--row-hover); }
+.assistant-meeting-list strong { font-size: 12px; overflow-wrap: anywhere; }
+.assistant-meeting-list span { color: var(--fg-3); font-size: 11px; }
+.assistant-meeting-picker > a { display: inline-block; padding-top: 10px; color: var(--accent-on, var(--accent)); }
+.agent-chat-workspace :is(button, a, input, textarea):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 760px) {
+  .agent-console-page { height: 100%; min-height: 0; overflow: hidden; }
+  .agent-console-center { min-height: 0; }
+  .assistant-toolbar { padding: 12px; gap: 7px; }
+  .agent-chat-workspace .agent-chat { position: relative; flex-direction: row; }
+  .agent-chat-workspace .agent-session-panel { width: 100%; height: auto; flex: 1; }
+  .agent-chat-workspace .history-open .agent-chat-main { display: none; }
+  .agent-chat-workspace .agent-chat-composer { padding: 10px 12px 14px; }
+  .agent-chat-workspace .agent-chat-start { gap: 13px; }
+  .assistant-composer-tools { gap: 8px; }
+}
+@media (max-height: 600px) {
+  .agent-chat-workspace .agent-chat-thread.empty { align-items: flex-start; }
+}

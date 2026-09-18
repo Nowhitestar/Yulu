@@ -90,7 +90,9 @@ def test_shell_webview_has_initial_layout_and_explicit_loading_outcomes():
     assert "webView.navigationDelegate = self" in web
     assert "window.contentLayoutRect.size" in web
     assert "container.layoutSubtreeIfNeeded()" in web
-    assert "webView.isHidden = false" in web
+    assert "webView.isHidden = true" not in web
+    assert "loadingView.isHidden = false" in web
+    assert "checkPageReady(generation:" in web
     assert "didFailProvisionalNavigation" in web
     assert "webViewWebContentProcessDidTerminate" in web
     assert "NSURLErrorCancelled" in web

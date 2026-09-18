@@ -43,37 +43,12 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
     prompt_cooldown_sec?: number;
     [key: string]: unknown;
   };
-  const pipeline = (cfg.agent_pipeline ?? {
-    enabled: true,
-    auto_process_recordings: true,
-  }) as {
-    enabled: boolean;
-    auto_process_recordings: boolean;
-  };
+
 
   return (
     <section id="automation" className="settings-section">
       <h2 className="settings-section-h">{t("settings.automation.heading")}</h2>
       <p className="settings-section-sub">{t("settings.automation.sub")}</p>
-
-      <InlineEditRow
-        label={t("settings.automation.pipeline.enabled.label")}
-        help={t("settings.automation.pipeline.enabled.help")}
-        type="toggle"
-        value={pipeline.enabled}
-        onCommit={commit("agent_pipeline.enabled") as (v: boolean) => void}
-        disabled={isBlocked("agent_pipeline.enabled")}
-        status={tracker.statusFor("agent_pipeline.enabled")}
-      />
-      <InlineEditRow
-        label={t("settings.automation.pipeline.autoProcess.label")}
-        help={t("settings.automation.pipeline.autoProcess.help")}
-        type="toggle"
-        value={pipeline.auto_process_recordings}
-        onCommit={commit("agent_pipeline.auto_process_recordings") as (v: boolean) => void}
-        disabled={isBlocked("agent_pipeline.auto_process_recordings")}
-        status={tracker.statusFor("agent_pipeline.auto_process_recordings")}
-      />
 
       <InlineEditRow
         label={t("settings.automation.enabled.label")}
@@ -84,6 +59,7 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
         disabled={isBlocked("meeting_detection.enabled")}
         status={tracker.statusFor("meeting_detection.enabled")}
       />
+      <AdvancedDisclosure title={t("settings.automation.match.heading")} note="">
       <InlineEditRow
         label={t("settings.automation.interval.label")}
         help={t("settings.automation.interval.help")}
@@ -118,7 +94,6 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
         status={tracker.statusFor("meeting_detection.prompt_cooldown_sec")}
       />
 
-      <AdvancedDisclosure title={t("settings.automation.match.heading")} note={t("settings.automation.match.note")}>
         {MATCH_ARRAYS.map(({ key, field, labelKey, helpKey }) => (
           <ArrayField
             key={key}
@@ -132,4 +107,41 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
       </AdvancedDisclosure>
     </section>
   );
+}
+
+/** Recording completion behavior belongs beside microphone and transcript settings. */
+export function RecordingProcessingSection({ tracker }: AutomationSectionProps) {
+  const { data: cfg } = trpc.config.get.useQuery();
+  const { commit, isBlocked } = useConfigField(tracker);
+  const t = useT();
+  if (!cfg) return null;
+  const pipeline = (cfg.agent_pipeline ?? {
+    enabled: true,
+    auto_process_recordings: true,
+  }) as {
+    enabled: boolean;
+    auto_process_recordings: boolean;
+  };
+  return <section id="recording-processing" className="settings-section">
+    <h2 className="settings-section-h">{t("settings.processing.heading")}</h2>
+      <InlineEditRow
+        label={t("settings.automation.pipeline.enabled.label")}
+        help={t("settings.automation.pipeline.enabled.help")}
+        type="toggle"
+        value={pipeline.enabled}
+        onCommit={commit("agent_pipeline.enabled") as (v: boolean) => void}
+        disabled={isBlocked("agent_pipeline.enabled")}
+        status={tracker.statusFor("agent_pipeline.enabled")}
+      />
+      <InlineEditRow
+        label={t("settings.automation.pipeline.autoProcess.label")}
+        help={t("settings.automation.pipeline.autoProcess.help")}
+        type="toggle"
+        value={pipeline.auto_process_recordings}
+        onCommit={commit("agent_pipeline.auto_process_recordings") as (v: boolean) => void}
+        disabled={isBlocked("agent_pipeline.auto_process_recordings")}
+        status={tracker.statusFor("agent_pipeline.auto_process_recordings")}
+      />
+
+  </section>;
 }

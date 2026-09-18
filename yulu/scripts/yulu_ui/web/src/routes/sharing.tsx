@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
+import { AdvancedDisclosure } from "../components/settings/AdvancedDisclosure.js";
 import { trpc } from "../trpc.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./sharing.css";
-
-type Status = "untested" | "ready" | "failed" | "unknown";
 
 export function SharingSettings() {
   const t = useT();
@@ -13,6 +12,9 @@ export function SharingSettings() {
   const [receiptId, setReceiptId] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
   const [error, setError] = useState("");
+  const [connectionDraft, setConnectionDraft] = useState<string | null>(null);
+  const [connectorDraft, setConnectorDraft] = useState<"notion" | "zulip" | null>(null);
+  const [checking, setChecking] = useState(false);
   const refresh = () => { void utils.sharing.view.invalidate(); };
   const failed = (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause));
   const select = trpc.sharing.select.useMutation({ onSuccess: refresh, onError: failed });
@@ -39,20 +41,31 @@ export function SharingSettings() {
   if (view.isError || !view.data) return <div className="sharing-settings sharing-error">{t("sharing.loadFailed")}</div>;
 
   const data = view.data;
-  const connectionId = data.selection?.connectionId ?? "";
-  const connector = data.selection?.connector ?? "notion";
-  const canSave = data.connectorReadiness.status === "ready" && destination.trim().length > 0;
+  const connectionId = connectionDraft ?? data.selection?.connectionId ?? "";
+  const connector = connectorDraft ?? data.selection?.connector ?? "notion";
+  const selectionChanged = connectionId !== data.selection?.connectionId || connector !== data.selection?.connector;
+  const busy = checking || select.isPending || probe.isPending || discover.isPending || save.isPending ||
+    testShare.isPending || reconcileUnknown.isPending || abandonUnknown.isPending;
+  const canSave = !selectionChanged && !busy && data.connectorReadiness.status === "ready" && destination.trim().length > 0;
   const canTest = canSave && data.destination.configured &&
     destination.trim() === data.destination.value && data.sharingReadiness.status !== "unknown";
-  const selectConfiguration = (nextConnectionId: string, nextConnector: "notion" | "zulip") => {
+  const checkConnection = async () => {
     setError("");
-    if (nextConnectionId) select.mutate({ connectionId: nextConnectionId, connector: nextConnector });
+    setChecking(true);
+    try {
+      if (selectionChanged) await select.mutateAsync({ connectionId, connector });
+      await probe.mutateAsync();
+      await utils.sharing.view.invalidate();
+    } catch (cause) {
+      failed(cause);
+    } finally {
+      setChecking(false);
+    }
   };
 
   return (
     <section className="sharing-settings" aria-labelledby="sharing-settings-title">
       <header>
-        <p className="sharing-eyebrow">{t("sharing.eyebrow")}</p>
         <h2 id="sharing-settings-title">{t("sharing.title")}</h2>
         <p>{t("sharing.subtitle")}</p>
       </header>
@@ -67,7 +80,8 @@ export function SharingSettings() {
             <select
               aria-label={t("sharing.agentConnection")}
               value={connectionId}
-              onChange={(event) => selectConfiguration(event.target.value, connector)}
+              disabled={busy}
+              onChange={(event) => setConnectionDraft(event.target.value)}
             >
               <option value="">{t("sharing.agentConnection.choose")}</option>
               {data.connections.map((connection) => (
@@ -80,7 +94,8 @@ export function SharingSettings() {
             <select
               aria-label={t("sharing.connector")}
               value={connector}
-              onChange={(event) => selectConfiguration(connectionId, event.target.value as "notion" | "zulip")}
+              disabled={busy}
+              onChange={(event) => setConnectorDraft(event.target.value as "notion" | "zulip")}
             >
               <option value="notion">Notion</option>
               <option value="zulip">Zulip</option>
@@ -89,28 +104,18 @@ export function SharingSettings() {
         </div>
       )}
 
-      <div className="sharing-state-grid">
-        <SharingState
-          title={t("sharing.discovery.title")}
-          status={data.connectorDiscovery.status}
-          detail={data.connectorDiscovery.detail}
-          remediation={data.connectorDiscovery.remediation}
-          action={t("sharing.discovery.action")}
-          disabled={!data.selection || discover.isPending}
-          onAction={() => { setError(""); discover.mutate(); }}
-          t={t}
-        />
-        <SharingState
-          title={t("sharing.connectorReadiness.title")}
-          status={data.connectorReadiness.status}
-          detail={data.connectorReadiness.detail}
-          remediation={data.connectorReadiness.remediation}
-          action={t("sharing.connectorReadiness.action")}
-          disabled={!data.selection || probe.isPending}
-          onAction={() => { setError(""); probe.mutate(); }}
-          t={t}
-        />
+      <div className="sharing-check-row">
+        <span className={`sharing-badge ${selectionChanged ? "untested" : data.connectorReadiness.status}`}>
+          {t(`sharing.status.${selectionChanged ? "untested" : data.connectorReadiness.status}`)}
+        </span>
+        <button type="button" disabled={!connectionId || busy} onClick={() => void checkConnection()}>
+          {checking ? t("sharing.checking") : t("sharing.check")}
+        </button>
+        <small>{t("sharing.checkHelp")}</small>
       </div>
+      {!selectionChanged && data.connectorReadiness.status === "failed" && (
+        <p className="sharing-error" role="alert">{data.connectorReadiness.detail} {data.connectorReadiness.remediation}</p>
+      )}
 
       <div className="sharing-destination">
         <div className="sharing-section-heading">
@@ -121,15 +126,6 @@ export function SharingSettings() {
               : t("sharing.destination.notConfigured")}
           </span>
         </div>
-        {data.connectorDiscovery.options.length > 0 && (
-          <div className="sharing-suggestions" aria-label={t("sharing.destination.suggestions")}>
-            {data.connectorDiscovery.options.map((option) => (
-              <button key={option.value} type="button" onClick={() => setDestination(option.value)}>
-                {option.label}
-              </button>
-            ))}
-          </div>
-        )}
         <label>
           {t("sharing.destination.input")}
           <input
@@ -139,6 +135,7 @@ export function SharingSettings() {
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="none"
+            disabled={busy}
             value={destination}
             maxLength={500}
             onChange={(event) => setDestination(event.target.value)}
@@ -152,6 +149,20 @@ export function SharingSettings() {
         >
           {t("sharing.destination.save")}
         </button>
+        <AdvancedDisclosure title={t("sharing.browseDestinations")} note="">
+          <button type="button" disabled={!data.selection || selectionChanged || busy}
+            onClick={() => { setError(""); discover.mutate(); }}>
+            {discover.isPending ? t("sharing.checking") : t("sharing.discovery.action")}
+          </button>
+          {data.connectorDiscovery.status === "failed" && <p role="alert">{data.connectorDiscovery.detail} {data.connectorDiscovery.remediation}</p>}
+          {data.connectorDiscovery.options.length > 0 && <label>
+            {t("sharing.destination.suggestions")}
+            <select value="" disabled={busy} onChange={(event) => setDestination(event.target.value)}>
+              <option value="">{t("sharing.chooseDestination")}</option>
+              {data.connectorDiscovery.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>}
+        </AdvancedDisclosure>
       </div>
 
       <div className="sharing-test-share">
@@ -165,7 +176,7 @@ export function SharingSettings() {
         {(testShare.isPending || reconcileUnknown.isPending) && (
           <p role="status">{t("sharing.testShare.pending")}</p>
         )}
-        <p>{data.sharingReadiness.detail}</p>
+        {["failed", "unknown"].includes(data.sharingReadiness.status) && <p role="alert">{data.sharingReadiness.detail}</p>}
         {data.sharingReadiness.remediation && <p className="sharing-remediation">{data.sharingReadiness.remediation}</p>}
         {data.sharingReadiness.receipt && (
           <p>{t("sharing.testShare.receipt", { id: data.sharingReadiness.receipt.id || data.sharingReadiness.receipt.url })}</p>
@@ -245,38 +256,6 @@ export function SharingSettings() {
           {t("sharing.testShare.action")}
         </button>
       </div>
-    </section>
-  );
-}
-
-function SharingState({
-  title,
-  status,
-  detail,
-  remediation,
-  action,
-  disabled,
-  onAction,
-  t,
-}: {
-  title: string;
-  status: Status;
-  detail: string;
-  remediation: string;
-  action: string;
-  disabled: boolean;
-  onAction: () => void;
-  t: (key: string) => string;
-}) {
-  return (
-    <section className="sharing-state-card">
-      <div className="sharing-section-heading">
-        <h3>{title}</h3>
-        <span className={`sharing-badge ${status}`}>{t(`sharing.status.${status}`)}</span>
-      </div>
-      <p>{detail}</p>
-      {remediation && <p className="sharing-remediation">{remediation}</p>}
-      <button type="button" disabled={disabled} onClick={onAction}>{action}</button>
     </section>
   );
 }

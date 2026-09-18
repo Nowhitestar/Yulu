@@ -151,6 +151,7 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 
     scripts = tmp_path / "scripts"
     write(scripts / "record_audio.py", b"print('record')\n")
+    write(scripts / "reminder_services.py", b"print('reminders')\n")
     write(scripts / "application_migration.py", b"print('migrate')\n")
     write(scripts / "application_update.py", b"print('update')\n")
     write(scripts / "initialize_host_databases.py", b"print('initialize')\n")

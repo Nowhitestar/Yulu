@@ -121,6 +121,7 @@ export function LanguageConfigSync({ onError }: { onError?: (message: string) =>
   const t = useT();
   const hydrated = useRef(false);
   const lastConfig = useRef<Lang | null>(null);
+  const applyingConfig = useRef<Lang | null>(null);
 
   useEffect(() => {
     if (!cfg) return;
@@ -128,11 +129,16 @@ export function LanguageConfigSync({ onError }: { onError?: (message: string) =>
     const next = isLang(raw) ? raw : DEFAULT_LANG;
     if (next === lastConfig.current) return;
     lastConfig.current = next;
+    applyingConfig.current = next;
     hydrated.current = true;
     setLang(next);
   }, [cfg, setLang]);
 
   useEffect(() => {
+    if (applyingConfig.current !== null) {
+      if (lang === applyingConfig.current) applyingConfig.current = null;
+      return;
+    }
     if (!hydrated.current || lang === lastConfig.current) return;
     lastConfig.current = lang;
     updateMut.mutate(

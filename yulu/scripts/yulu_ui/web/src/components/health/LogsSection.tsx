@@ -40,6 +40,7 @@ export function LogsSection() {
 
   return (
     <div className="logs-section">
+      <p className="logs-context">{t("runtime.logs.note")}</p>
       <div className="logs-toolbar">
         <select
           aria-label={t("health.logs.daemon.aria")}

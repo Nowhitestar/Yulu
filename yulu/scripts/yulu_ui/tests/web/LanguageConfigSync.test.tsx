@@ -62,6 +62,13 @@ beforeEach(() => {
 });
 
 describe("LanguageConfigSync", () => {
+  it("loads the saved language without writing the browser's previous language back", () => {
+    localStorage.setItem("yulu_ui.lang", "en");
+    mount();
+    expect(document.documentElement.lang).toBe("zh-CN");
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
   it("shows when the language preference saved but StatusAgent did not apply it", async () => {
     mount();
     fireEvent.click(screen.getByRole("button", { name: "English" }));

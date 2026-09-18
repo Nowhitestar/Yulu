@@ -4025,49 +4025,124 @@ final class SparkleUpdateAdapter: NSObject, SPUUpdaterDelegate {
 }
 #endif
 
+private final class WindowChromeMessages: NSObject, WKScriptMessageHandler {
+    weak var window: NSWindow?
+    let port: Int
+    init(port: Int) { self.port = port }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let origin = message.frameInfo.securityOrigin
+        guard message.frameInfo.isMainFrame, origin.protocol == "http",
+              origin.host == "127.0.0.1", origin.port == port,
+              let action = message.body as? String, let window else { return }
+        if action == "zoom" { window.performZoom(nil) }
+        // WebKit delivers the bridge asynchronously; currentEvent may already
+        // be a drag event. Keep the native drag tied to a held left mouse button.
+        if action == "drag", NSEvent.pressedMouseButtons & 1 != 0,
+           let event = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: window.convertPoint(fromScreen: NSEvent.mouseLocation),
+            modifierFlags: NSApp.currentEvent?.modifierFlags ?? [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1
+           ) {
+            window.performDrag(with: event)
+        }
+    }
+}
+
+func configureWindowChrome(_ window: NSWindow) {
+    window.styleMask.insert(.fullSizeContentView)
+    window.titleVisibility = .hidden
+    window.titlebarAppearsTransparent = true
+    window.titlebarSeparatorStyle = .none
+    window.minSize = NSSize(width: 420, height: 400)
+}
+
 final class ApplicationWebContent: NSObject, WKUIDelegate, WKNavigationDelegate {
     let webView: WKWebView
-    private let container = NSView()
+    private let container: NSView
+    private let loadingView = NSView()
     private let statusLabel = NSTextField(wrappingLabelWithString: "Opening Yulu…")
+    private let retryButton = NSButton(title: "Retry", target: nil, action: nil)
     private let port: Int
     private let openExternalURL: (URL) -> Bool
+    private let chromeMessages: WindowChromeMessages
+    private var requestedURL: URL?
+    private var loadGeneration = 0
+    private var loadTimeout: DispatchWorkItem?
+    private var activeNavigation: WKNavigation?
+    private var pageLoadPending = false
+    private(set) var isPageReady = false
 
     init(
         port: Int,
         configuration: WKWebViewConfiguration = WKWebViewConfiguration(),
+        initialSize: NSSize = NSSize(width: 960, height: 680),
         openExternalURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) {
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        chromeMessages = WindowChromeMessages(port: port)
+        configuration.userContentController.add(chromeMessages, name: "yuluWindow")
+        configuration.userContentController.addUserScript(WKUserScript(source: """
+            if (location.origin === 'http://127.0.0.1:\(port)') {
+              const markNative = () => { document.documentElement.dataset.yuluNative = 'true'; };
+              if (document.documentElement) markNative();
+              else document.addEventListener('DOMContentLoaded', markNative, { once: true });
+            }
+            """, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // Keep a sized WebView in the visible hierarchy throughout loading.
+        // Hiding it also suppresses WebKit's initial rendering work.
+        let initialFrame = NSRect(origin: .zero, size: initialSize)
+        container = NSView(frame: initialFrame)
+        webView = WKWebView(frame: initialFrame, configuration: configuration)
         self.port = port
         self.openExternalURL = openExternalURL
         super.init()
         container.autoresizingMask = [.width, .height]
+        loadingView.wantsLayer = true
+        loadingView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        loadingView.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.alignment = .center
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         webView.translatesAutoresizingMaskIntoConstraints = false
-        webView.isHidden = true
-        container.addSubview(statusLabel)
         container.addSubview(webView)
+        container.addSubview(loadingView)
+        loadingView.addSubview(statusLabel)
+        retryButton.target = self
+        retryButton.action = #selector(retryLoad)
+        retryButton.translatesAutoresizingMaskIntoConstraints = false
+        retryButton.isHidden = true
+        loadingView.addSubview(retryButton)
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             webView.topAnchor.constraint(equalTo: container.topAnchor),
             webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            statusLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            statusLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 32),
-            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -32),
+            loadingView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            loadingView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            loadingView.topAnchor.constraint(equalTo: container.topAnchor),
+            loadingView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            statusLabel.centerXAnchor.constraint(equalTo: loadingView.centerXAnchor),
+            statusLabel.centerYAnchor.constraint(equalTo: loadingView.centerYAnchor),
+            statusLabel.leadingAnchor.constraint(greaterThanOrEqualTo: loadingView.leadingAnchor, constant: 32),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: loadingView.trailingAnchor, constant: -32),
+            retryButton.centerXAnchor.constraint(equalTo: loadingView.centerXAnchor),
+            retryButton.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 16),
         ])
         webView.uiDelegate = self
         webView.navigationDelegate = self
     }
 
     func attach(to window: NSWindow) {
+        chromeMessages.window = window
         // Give WebKit a laid-out host before loading. Replacing the window's root
         // directly with a zero-frame WKWebView could leave its first paint blank
         // until a user resized the window, even though its document had loaded.
-        container.frame = NSRect(origin: .zero, size: window.contentLayoutRect.size)
+        let size = window.styleMask.contains(.fullSizeContentView)
+            ? window.frame.size : window.contentLayoutRect.size
+        container.frame = NSRect(origin: .zero, size: size)
         if window.contentView !== container { window.contentView = container }
         container.needsLayout = true
         container.layoutSubtreeIfNeeded()
@@ -4075,36 +4150,91 @@ final class ApplicationWebContent: NSObject, WKUIDelegate, WKNavigationDelegate 
 
     func load(_ url: URL, in window: NSWindow) {
         attach(to: window)
+        requestedURL = url
+        beginPageLoad()
+        activeNavigation = webView.load(URLRequest(url: url))
+    }
+
+    private func beginPageLoad() {
+        loadGeneration += 1
+        pageLoadPending = true
+        isPageReady = false
         statusLabel.stringValue = "Opening Yulu…"
-        statusLabel.isHidden = false
-        webView.isHidden = true
-        webView.load(URLRequest(url: url))
+        loadingView.isHidden = false
+        retryButton.isHidden = true
+        loadTimeout?.cancel()
+        let generation = loadGeneration
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, generation == self.loadGeneration, !self.isPageReady else { return }
+            self.showLoadFailure("The page did not become ready.")
+        }
+        loadTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard webView === self.webView else { return }
+        activeNavigation = navigation
+        beginPageLoad()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard webView === self.webView else { return }
-        // A visibility/layout transition starts the initial compositing pass
-        // without requiring a window resize or changing any user preferences.
-        statusLabel.isHidden = true
-        webView.isHidden = false
-        container.needsLayout = true
-        container.layoutSubtreeIfNeeded()
-        webView.needsDisplay = true
+        guard webView === self.webView, navigation === activeNavigation, pageLoadPending else { return }
+        // Navigation completion only proves that the document loaded. React's
+        // first commit happens later; don't uncover an empty #root meanwhile.
+        checkPageReady(generation: loadGeneration)
+    }
+
+    private func checkPageReady(generation: Int) {
+        guard generation == loadGeneration, pageLoadPending else { return }
+        webView.evaluateJavaScript("""
+            (() => {
+              const shell = document.querySelector('[data-yulu-ready]');
+              if (!shell) return false;
+              const bounds = shell.getBoundingClientRect();
+              return bounds.width > 0 && bounds.height > 0;
+            })()
+            """) { [weak self] result, error in
+                guard let self, generation == self.loadGeneration, self.pageLoadPending else { return }
+                if result as? Bool == true {
+                    self.pageLoadPending = false
+                    self.isPageReady = true
+                    self.loadTimeout?.cancel()
+                    self.loadingView.isHidden = true
+                } else if error != nil {
+                    self.showLoadFailure("The page could not initialize.")
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                        self?.checkPageReady(generation: generation)
+                    }
+                }
+            }
+    }
+
+    @objc private func retryLoad() {
+        guard let requestedURL, let window = container.window else { return }
+        load(requestedURL, in: window)
     }
 
     private func showLoadFailure(_ detail: String) {
-        webView.isHidden = true
-        statusLabel.stringValue = "Yulu could not display its page. \(detail) Choose Navigate > Open Yulu to retry."
-        statusLabel.isHidden = false
+        loadGeneration += 1
+        pageLoadPending = false
+        loadTimeout?.cancel()
+        isPageReady = false
+        statusLabel.stringValue = "Yulu could not display its page. \(detail)"
+        loadingView.isHidden = false
+        retryButton.isHidden = requestedURL == nil
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        guard webView === self.webView, (error as NSError).code != NSURLErrorCancelled else { return }
+        guard webView === self.webView, navigation === activeNavigation,
+              (error as NSError).code != NSURLErrorCancelled else { return }
         showLoadFailure("Navigation error \((error as NSError).code).")
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        guard webView === self.webView, (error as NSError).code != NSURLErrorCancelled else { return }
+        guard webView === self.webView, navigation === activeNavigation,
+              (error as NSError).code != NSURLErrorCancelled else { return }
         showLoadFailure("Navigation error \((error as NSError).code).")
     }
 
@@ -4136,6 +4266,8 @@ final class ApplicationWebContent: NSObject, WKUIDelegate, WKNavigationDelegate 
 struct WebNavigationSmokeReport: Encodable {
     let classification = "development_web_navigation"
     let browserOpenCount: Int
+    let delayedApplicationReady = true
+    let webProcessFailureRecovery = true
     let formalAcceptance = false
 }
 
@@ -4152,14 +4284,15 @@ func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
         contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
         styleMask: [.titled], backing: .buffered, defer: false
     )
+    configureWindowChrome(window)
     content.attach(to: window)
-    guard content.webView.frame.size == window.contentLayoutRect.size,
+    guard content.webView.frame.size == window.frame.size,
           content.webView.frame.width > 0, content.webView.frame.height > 0 else {
         throw NSError(domain: "WebNavigationSmoke", code: 5,
                       userInfo: [NSLocalizedDescriptionKey: "initial WebView viewport was not laid out"])
     }
     let origin = URL(string: "http://127.0.0.1:17891/")!
-    content.webView.loadHTMLString("<html><body>Yulu web navigation fixture</body></html>", baseURL: origin)
+    content.webView.loadHTMLString("<html><body><div id='root'></div></body></html>", baseURL: origin)
     let loadDeadline = Date().addingTimeInterval(10)
     while content.webView.isLoading && Date() < loadDeadline {
         RunLoop.current.run(until: Date().addingTimeInterval(0.02))
@@ -4168,16 +4301,40 @@ func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
         throw NSError(domain: "WebNavigationSmoke", code: 1,
                       userInfo: [NSLocalizedDescriptionKey: "local WebView fixture did not load"])
     }
-    guard !content.webView.isHidden else {
+    guard !content.webView.isHidden, !content.isPageReady else {
         throw NSError(domain: "WebNavigationSmoke", code: 6,
-                      userInfo: [NSLocalizedDescriptionKey: "completed page did not become visible without resizing"])
+                      userInfo: [NSLocalizedDescriptionKey: "document loading must not uncover an empty application"])
+    }
+    // Simulate the SPA's asynchronous first commit, after didFinishNavigation.
+    content.webView.evaluateJavaScript("document.getElementById('root').innerHTML = '<main data-yulu-ready>Yulu web navigation fixture</main>'; true")
+    let readyDeadline = Date().addingTimeInterval(5)
+    while !content.isPageReady && Date() < readyDeadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+    guard content.isPageReady, !content.webView.isHidden else {
+        throw NSError(domain: "WebNavigationSmoke", code: 8,
+                      userInfo: [NSLocalizedDescriptionKey: "first application commit did not become visible without resizing"])
+    }
+    content.webViewWebContentProcessDidTerminate(content.webView)
+    guard !content.isPageReady else {
+        throw NSError(domain: "WebNavigationSmoke", code: 9,
+                      userInfo: [NSLocalizedDescriptionKey: "web process failure did not restore the native loading UI"])
+    }
+    content.webView.loadHTMLString("<html><body><main data-yulu-ready>Recovered fixture</main></body></html>", baseURL: origin)
+    let recoveryDeadline = Date().addingTimeInterval(5)
+    while !content.isPageReady && Date() < recoveryDeadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+    guard content.isPageReady else {
+        throw NSError(domain: "WebNavigationSmoke", code: 10,
+                      userInfo: [NSLocalizedDescriptionKey: "application did not recover on the next navigation"])
     }
     // A native service/status view must not permanently detach a reused WebView.
     window.contentView = NSView()
     content.attach(to: window)
     guard content.webView.window === window,
-          content.webView.frame.size == window.contentLayoutRect.size,
-          !content.webView.isHidden else {
+          content.webView.frame.size == window.frame.size,
+          !content.webView.isHidden, content.isPageReady else {
         throw NSError(domain: "WebNavigationSmoke", code: 7,
                       userInfo: [NSLocalizedDescriptionKey: "reused WebView did not reattach"])
     }
@@ -4317,6 +4474,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             defer: false
         )
         window.title = "Yulu"
+        configureWindowChrome(window)
         self.window = window
         if let guidance = launchPolicy.guidance {
             window.contentView = centeredMessage(guidance, detail: "Yulu runs services and updates only from /Applications/Yulu.app.")
@@ -4849,8 +5007,10 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         }
         #if canImport(YuluNativeRecording)
         if nativeRecording == nil {
+            var environment = bundledProcessEnvironment(layout: layout, applicationPaths: applicationPaths)
+            environment["YULU_MANAGE_REMINDERS"] = "1"
             nativeRecording = NativeRecordingControls(
-                environment: bundledProcessEnvironment(layout: layout, applicationPaths: applicationPaths),
+                environment: environment,
                 openRoute: { [weak self] route in self?.open(route: route) }
             )
         }
@@ -4978,14 +5138,14 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     }
 
     private func open(route: String) {
+        guard let window, let url = URL(string: "http://127.0.0.1:\(port)\(route)") else { return }
         let content: ApplicationWebContent
         if let webContent {
             content = webContent
         } else {
-            content = ApplicationWebContent(port: port)
+            content = ApplicationWebContent(port: port, initialSize: window.frame.size)
             webContent = content
         }
-        guard let window, let url = URL(string: "http://127.0.0.1:\(port)\(route)") else { return }
         content.load(url, in: window)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

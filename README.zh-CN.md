@@ -117,12 +117,10 @@ Grok OAuth 会在系统默认浏览器中打开。在浏览器中完成账号登
 
 ### 安装
 
-[Yulu v0.23.0 稳定版](https://github.com/Nowhitestar/Yulu/releases/tag/v0.23.0)
-包含迁移、初始化、采集打包、原生窗口启动及手动分享修复，并修复了本地 Runtime Pack
-校验对开发工具的依赖、导入检查修改签名包及旧菜单栏 App 未退出的问题。
-稳定版与已接受的 RC21 使用同一源码，没有插入新的产品修改。
-[验收范围与保留风险](docs/release-notes/v0.23.0.md#acceptance-scope)明确区分本机验证、
-复用证据及未重新执行的最终公开版完整安装、升级路径。
+下载 [Yulu 最新稳定版](https://github.com/Nowhitestar/Yulu/releases/latest)。
+v0.24.0 恢复了应用内的会议提醒，简化设置、会议助手和运行状态页面，
+并优化原生标题栏、自适应布局及启动加载过程。
+详见[更新说明与验证范围](docs/release-notes/v0.24.0.md)。
 
 旧候选版遇到数据库或无声录音问题时，请查看
 [首次安装数据库准备](docs/operations.md#fresh-install-database-preparation)及

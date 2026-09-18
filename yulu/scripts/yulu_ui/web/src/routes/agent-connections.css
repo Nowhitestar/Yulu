@@ -210,3 +210,61 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Task overview first, one account or capability's setup at a time. */
+.agent-connections-page { font-size: 13px; line-height: 1.6; }
+.agent-connections-hero h2 { margin: 0; font-size: 14px; }
+.agent-connections-hero p { margin: 4px 0 16px; color: var(--fg-2); font-size: 12px; }
+.agent-usage-list { padding: 0 16px; border-radius: 10px; background: var(--glass-2); }
+.agent-usage-row { display: flex; align-items: center; gap: 18px; padding: 14px 0; }
+.agent-usage-row + .agent-usage-row { border-top: 1px solid var(--edge); }
+.agent-usage-row > div { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; min-width: 0; }
+.agent-usage-row strong { width: 52px; font-size: 13px; }
+.agent-usage-row span { color: var(--fg-2); overflow-wrap: anywhere; }
+.agent-usage-status { color: var(--fg-2); font-size: 11px; }
+.agent-usage-status.failed { color: var(--red); }
+.agent-usage-status.ready { color: var(--green); }
+.agent-usage-row > :is(button, a) { flex-shrink: 0; border: 0; background: transparent; cursor: pointer; }
+.agent-provider-details { padding: 14px 0; margin: 0; border: 0; border-bottom: 1px solid var(--edge); border-radius: 0; background: transparent; }
+.agent-provider-details > summary { cursor: pointer; gap: 10px; }
+.agent-provider-details > summary > div { flex: 1; min-width: 0; }
+.agent-provider-details > summary h2 { font-size: 14px; font-weight: 600; }
+.agent-provider-details > summary p { margin: 3px 0 0; color: var(--fg-2); font-size: 12px; }
+.agent-provider-details > summary::after, .agent-connection-capability > summary::after { content: "›"; color: var(--fg-2); font-size: 20px; line-height: 1; }
+.agent-provider-details[open] > summary::after, .agent-connection-capability[open] > summary::after { transform: rotate(90deg); }
+.agent-provider-details summary::-webkit-details-marker { display: none; }
+.agent-provider-details > .agent-connection-capabilities { grid-template-columns: 1fr; gap: 0; margin-top: 12px; padding: 0 12px; border-radius: 8px; background: var(--glass-2); }
+.agent-connection-capability { min-width: 0; padding: 12px 0; border: 0; border-radius: 0; }
+.agent-connection-capability + .agent-connection-capability { border-top: 1px solid var(--edge); }
+.agent-connection-capability > summary { cursor: pointer; gap: 10px; }
+.agent-connection-capability > summary > div { flex: 1; min-width: 0; }
+.agent-connection-capability > summary h3 { font-size: 13px; font-weight: 500; }
+.agent-connection-capability > summary p { margin: 2px 0 0; font-size: 11px; color: var(--fg-2); }
+.agent-selected-label { margin-left: 8px; color: var(--green); font-size: 10px; font-weight: 400; }
+.agent-connection-state, .agent-capability-state { flex-shrink: 0; padding: 2px 6px; font-size: 11px; border: 0; }
+.agent-auth-details { margin-top: 12px; font-size: 12px; }
+.agent-auth-details > summary, .agent-add-details > summary { padding: 8px 0; cursor: pointer; color: var(--fg-2); }
+.agent-connection-model { margin: 12px 0; }
+.agent-connection-model input { padding: 8px 10px; box-sizing: border-box; width: 100%; }
+.agent-connection-api-key > div { flex-wrap: wrap; }
+.agent-connection-api-key input { min-width: 0; flex: 1; max-width: 100%; }
+.agent-connection-credential-source { flex-wrap: wrap; }
+.agent-connection-runtime-details > div { grid-template-columns: minmax(80px, .5fr) minmax(0, 1fr); gap: 10px; margin: 6px 0; }
+.agent-connection-guidance { margin: 12px 0; background: transparent; font-size: 12px; overflow-wrap: anywhere; }
+.agent-connection-guidance button { display: block; margin-top: 10px; }
+.agent-connection-actions button, .agent-connection-button, .agent-connection-api-key button, .agent-connection-delete { padding: 7px 11px; font-size: 12px; line-height: 1.5; }
+.agent-connection-delete { margin-top: 12px; background: transparent; border: 0; padding-left: 0; }
+.agent-add-details { margin: 14px 0; padding: 0; border: 0; }
+.agent-add-details .agent-connections-list { margin: 12px 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.agent-add-details .agent-connections-list h2 { font-size: 13px; }
+.agent-add-details .agent-connection-card { padding: 12px; border-radius: 8px; }
+.agent-connections-page :is(summary, button, a, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 759px) {
+  .agent-usage-row > div { column-gap: 8px; }
+  .agent-usage-status { width: 100%; padding-left: 60px; }
+  .agent-provider-details > summary { flex-wrap: wrap; }
+  .agent-provider-details > summary > div { flex-basis: 55%; }
+  .agent-connection-state { white-space: normal; max-width: 40%; text-align: right; }
+  .agent-connection-dialog { box-sizing: border-box; }
+  .agent-connections-list dl > div { grid-template-columns: 1fr; gap: 4px; }
+}

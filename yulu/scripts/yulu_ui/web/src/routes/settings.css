@@ -1,223 +1,84 @@
-/* web/src/routes/settings.css */
-
-/* Page shell (moved here from the now-deleted SettingsPage component). The
-   banner sticks above the 3-column MasterDetail, which fills the rest. */
-.settings-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.calendar-source-section {
-  display: grid;
-  gap: 16px;
-}
-
-.calendar-source-outcome,
-.calendar-source-readiness,
-.calendar-source-connector-boundary {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-  border: 1px solid var(--edge-card);
-  border-radius: 12px;
-  background: var(--glass-2);
-}
-
-.calendar-source-card {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  padding: 16px;
-  border: 1px solid var(--edge-card);
-  border-radius: 12px;
-}
-
-.calendar-source-card[data-selected="true"] {
-  border-color: var(--accent);
-}
-
-.calendar-source-card h3,
-.calendar-source-card p {
-  margin: 4px 0;
-}
-
-.calendar-source-badge {
-  display: inline-flex;
-  padding: 2px 8px;
-  border-radius: 999px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.calendar-source-badge.advanced {
-  color: var(--text-secondary);
-  background: var(--glass-2);
-}
-
-.calendar-source-onboarding-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.calendar-source-oauth-guidance {
-  display: grid;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.calendar-source-oauth-guidance code {
-  width: fit-content;
-  max-width: 100%;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: var(--glass-2);
-  overflow-wrap: anywhere;
-}
-
-.calendar-source-error {
-  color: var(--red);
-}
-
-@media (max-width: 720px) {
-  .calendar-source-card {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-.settings-banner {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-}
-
-/* The settings page now hosts the app's 3-column MasterDetail. The banner sits
-   above it; the MasterDetail fills the remaining height. */
-.settings-masterdetail {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  container: settings / inline-size;
-}
-.settings-masterdetail .masterdetail {
-  flex: 1;
-  min-width: 0;
-}
-
-@container settings (max-width: 900px) {
-  .masterdetail--settings-mobile-tabs {
-    flex-direction: column;
-    min-height: 0;
-  }
-  .masterdetail--settings-mobile-tabs > .rs-root {
-    width: 100%;
-    height: auto;
-    flex: 0 0 auto;
-  }
-  .masterdetail--settings-mobile-tabs > .rs-root > .rs-pane {
-    width: 100% !important;
-    height: auto;
-    flex: none !important;
-  }
-  .masterdetail--settings-mobile-tabs > .rs-root > .rs-handle { display: none; }
-  .masterdetail--settings-mobile-tabs .masterdetail-list {
-    height: auto;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-  .masterdetail--settings-mobile-tabs .masterdetail-detail {
-    height: auto;
-    min-height: 0;
-  }
-  .settings-category-list { flex-direction: row; min-width: max-content; }
-  .settings-category-row { flex: 0 0 auto; min-height: 0; white-space: nowrap; }
-  .settings-category-desc { display: none; }
-}
-
-/* Detail pane (category content). Mirrors the inbox reader's calm aesthetic —
-   comfortable padding, a quiet page heading, fg-3 sub — using shared tokens so
-   it sits in the app's existing detail-pane family rather than a new look. */
-.settings-detail {
-  max-width: 896px;
-  padding: 24px 32px 90px;
-}
-.settings-detail-head {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 22px;
-}
-.settings-detail-title {
-  font-family: var(--font-heading);
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--fg);
-  margin: 0;
-}
-.settings-detail-sub {
-  color: var(--fg-3);
-  font-size: 11.5px;
-  margin: 0;
-}
-.settings-detail-empty {
-  padding: 40px 4px;
-  color: var(--fg-3);
-  font-size: 13px;
-}
-/* Spacing between re-homed rich section blocks within a category detail. */
-.settings-detail .settings-section + .settings-section {
-  margin-top: 28px;
-}
-.settings-section {
-  scroll-margin-top: 60px;
-  padding: 18px;
-  border: 1px solid var(--edge-card);
-  border-radius: var(--radius-panel);
-  background: var(--glass-paper);
-  box-shadow: var(--shadow-paper);
-  backdrop-filter: blur(40px) saturate(200%);
-  -webkit-backdrop-filter: blur(40px) saturate(200%);
-}
-.settings-section-h {
-  font-family: var(--font-heading);
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--fg);
-  margin: 0 0 3px 0;
-  padding-top: 0;
-  border-top: 0;
-}
-.settings-section:first-child .settings-section-h {
-  padding-top: 0;
-  border-top: 0;
-}
-.settings-section-sub {
-  color: var(--fg-3);
-  font-size: 11.5px;
-  margin: 0 0 14px 0;
-}
-.settings-link-button {
-  display: inline-flex;
-  align-items: center;
-  min-height: 36px;
-  padding: 0 14px;
-  border: 1px solid var(--edge-card);
-  border-radius: 10px;
-  color: var(--fg);
-  background: var(--field-bg);
-  font-size: 12px;
-  font-weight: 600;
-  text-decoration: none;
-}
-.settings-link-button:hover,
-.settings-link-button:focus-visible {
-  border-color: var(--accent);
-  outline: none;
+.settings-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.settings-banner { flex-shrink: 0; }
+.settings-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); flex: 1; min-height: 0; }
+.settings-navigation { padding: 28px 12px; overflow-y: auto; }
+.settings-navigation h1 { font-family: var(--font-heading); font-size: 24px; margin: 0 12px 24px; }
+.settings-content { min-width: 0; overflow-y: auto; overscroll-behavior: contain; background: var(--glass-paper); border-radius: 16px; }
+.settings-detail { width: 100%; max-width: 900px; margin: 0 auto; padding: 32px clamp(20px, 4vw, 56px) 64px; box-sizing: border-box; }
+.settings-detail-head { margin-bottom: 32px; }
+.settings-detail-title { margin: 0 0 8px; font-family: var(--font-heading); font-size: 24px; font-weight: 600; color: var(--fg); }
+.settings-detail-sub { margin: 0; color: var(--fg-2); font-size: 13px; line-height: 1.6; }
+.settings-detail-empty { padding: 32px 0; color: var(--fg-2); }
+.settings-section { scroll-margin-top: 24px; padding: 0; margin-bottom: 32px; }
+.settings-section-h { font-size: 14px; font-weight: 600; margin: 0 0 8px; color: var(--fg); }
+.settings-section-sub { color: var(--fg-2); font-size: 12px; line-height: 1.6; margin: 0 0 18px; }
+.settings-section + .settings-section { padding-top: 24px; border-top: 1px solid var(--edge); }
+.settings-section .row { padding: 13px 0; border-radius: 0; border: 0; grid-template-columns: minmax(160px, 1fr) minmax(0, 1.1fr) 20px; gap: 16px; }
+.settings-section .row:hover { background: transparent; }
+.settings-section .row-help { color: var(--fg-2); font-size: 12px; line-height: 1.5; font-weight: 400; }
+.settings-section .row-value { justify-content: flex-end; }
+.settings-section .row--wide .row-value { justify-content: flex-start; }
+.settings-appearance { padding: 22px 0; }
+.settings-appearance .theme-preset-stack { width: 100%; }
+.settings-appearance .theme-family-picker { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 4px; }
+.settings-appearance .theme-family-picker button { box-shadow: none; flex-direction: column; align-items: flex-start; padding: 12px; border-radius: 9px; gap: 10px; }
+.settings-appearance .theme-preset-swatch { width: 100%; height: 26px; border-radius: 5px; box-shadow: none; }
+.settings-install-details { font-size: 12px; color: var(--fg-2); margin-top: 8px; overflow-wrap: anywhere; }
+.settings-install-details summary { cursor: pointer; width: fit-content; }
+.settings-mobile-back { display: none !important; }
+.settings-text-link { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; line-height: 1.5; color: var(--accent-on, var(--accent)); text-decoration: none; padding: 4px 0; }
+.settings-text-link:hover { text-decoration: underline; }
+.settings-action, .settings-link-button { display: inline-flex; justify-content: center; align-items: center; min-height: 34px; padding: 7px 12px; border: 1px solid var(--edge); border-radius: 8px; color: var(--fg); background: var(--field-bg); font-size: 12px; text-decoration: none; white-space: nowrap; }
+.settings-action:hover:not(:disabled) { background: var(--row-hover); }
+.settings-action.primary { background: var(--accent); color: white; border-color: transparent; }
+.settings-action:disabled, .settings-text-link:disabled { opacity: .5; cursor: default; }
+.settings-page :is(button, a, select, input, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.calendar-connection { display: flex; align-items: center; gap: 14px; padding: 18px; background: var(--glass-2); border-radius: 10px; }
+.calendar-connection > svg { color: var(--fg-2); flex-shrink: 0; }
+.calendar-connection-copy { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
+.calendar-connection-copy strong { font-size: 14px; }
+.calendar-account { font-size: 12px; color: var(--fg-2); overflow-wrap: anywhere; }
+.calendar-status { display: flex; align-items: center; gap: 6px; color: var(--fg-2); font-size: 12px; }
+.calendar-status i { width: 6px; height: 6px; background: var(--fg-3); border-radius: 50%; flex-shrink: 0; }
+.calendar-connection[data-status="ready"] .calendar-status i { background: var(--green); }
+.calendar-connection[data-status="failed"] .calendar-status i { background: var(--red); }
+.calendar-sync { display: grid; gap: 6px; padding: 12px 0; color: var(--fg-2); font-size: 12px; line-height: 1.6; }
+.calendar-sync-warning { color: var(--fg-2); }
+.calendar-success { display: flex; align-items: center; gap: 6px; color: var(--green); font-size: 12px; }
+.calendar-source-error { color: var(--red); font-size: 12px; line-height: 1.6; margin: 12px 0; overflow-wrap: anywhere; }
+.calendar-source-option { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 18px 0 10px; font-size: 13px; }
+.calendar-source-option p { color: var(--fg-2); font-size: 12px; line-height: 1.6; margin: 5px 0 0; }
+.calendar-google-option { align-items: flex-start; flex-direction: column; gap: 12px; }
+.calendar-account-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; max-width: 100%; }
+.calendar-account-picker select { min-width: 0; max-width: 100%; padding: 8px; border: 1px solid var(--edge); border-radius: 8px; background: var(--field-bg); color: var(--fg); }
+.calendar-source-oauth-guidance { display: grid; gap: 10px; }
+.calendar-source-oauth-guidance code { font-size: 11px; overflow-wrap: anywhere; }
+.calendar-source-section > .adv-disclosure { margin-top: 18px; }
+.settings-detail .adv-disclosure { background: transparent; box-shadow: none; border-radius: 8px; border-color: var(--edge); }
+.settings-detail .adv-summary-note:empty { display: none; }
+.settings-detail .adv-summary-note { color: var(--fg-2); background: none; margin-left: auto; text-align: right; }
+.settings-detail .adv-body { padding: 12px 16px; font-size: 12px; line-height: 1.6; color: var(--fg-2); overflow-wrap: anywhere; }
+.settings-detail .adv-body .settings-section { margin-bottom: 12px; }
+.settings-detail > :is(#sharing, .settings-connection-disclosure) { margin-top: 16px; }
+.settings-detail .agent-connections-page.embedded { padding: 0; }
+@media (max-width: 759px) {
+  .settings-workspace { display: block; overflow: hidden; }
+  .settings-navigation { height: 100%; padding: 24px 16px; box-sizing: border-box; }
+  .settings-page[data-detail="true"] .settings-navigation, .settings-page[data-detail="false"] .settings-content { display: none; }
+  .settings-content { height: 100%; border-radius: 12px; }
+  .settings-detail { padding: 20px 22px 48px; }
+  .settings-mobile-back { display: inline-flex !important; margin-bottom: 22px; }
+  .settings-detail-head { margin-bottom: 28px; }
+  .settings-section .row { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
+  .settings-section .row-status:empty { display: none; }
+  .settings-section .row-status { grid-column: 1 / -1; }
+  .settings-section .row-value { width: auto; }
+  .settings-section .row:has(.path-value, .value-input, .value-display, .value-disabled, .theme-mode-toggle) { display: flex; flex-direction: column; align-items: stretch; }
+  .settings-section .row:has(.path-value, .value-input, .value-display, .value-disabled) .row-value { justify-content: flex-start; }
+  .settings-appearance .theme-family-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .calendar-source-option { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .calendar-connection { flex-wrap: wrap; }
+  .calendar-connection > .settings-action { margin-left: 38px; }
 }
 
 .local-caption-card {
@@ -1192,30 +1053,7 @@
 .danger-confirm-accept { background: var(--accent); color: white; }
 .danger-confirm-accept:hover { background: var(--accent); opacity: 0.9; color: white; }
 
-@media (max-width: 760px) {
-  .settings-page,
-  .settings-masterdetail {
-    min-height: 0;
-  }
-
-  .settings-detail {
-    max-width: none;
-    width: 100%;
-    padding: 8px 8px 96px;
-  }
-
-  .settings-detail-head {
-    margin-bottom: 16px;
-  }
-
-  .settings-detail .settings-section + .settings-section {
-    margin-top: 28px;
-  }
-
-  .settings-section-h {
-    padding-top: 12px;
-  }
-
+@media (max-width: 759px) {
   .cap-head,
   .integration-header,
   .ai-integration-section-head,
@@ -1342,3 +1180,40 @@
     flex-wrap: wrap;
   }
 }
+
+.settings-detail .status-restart { animation: none; }
+
+/* Common controls stay in the reading flow; maintenance is revealed on demand. */
+.settings-subheading { margin: 26px 0 10px; color: var(--fg); font-size: 13px; font-weight: 600; }
+.settings-inline-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.settings-detail .local-caption-card { padding: 16px; border-radius: 10px; box-shadow: none; background: var(--glass-2); }
+.settings-detail .local-caption-head { align-items: flex-start; flex-wrap: wrap; }
+.settings-detail .local-caption-title { font-size: 13px; }
+.settings-detail .local-caption-sub { color: var(--fg-2); font-size: 12px; line-height: 1.6; }
+.settings-detail .local-caption-actions { flex-wrap: wrap; }
+.settings-detail .local-caption-actions > .adv-disclosure { width: 100%; }
+.settings-detail .provider-install-hint, .settings-detail .provider-status-note { color: var(--fg-2); font-size: 12px; line-height: 1.6; }
+.settings-detail .provider-status-note--bad { color: var(--red); }
+.voice-feedback { display: flex; align-items: center; gap: 12px; }
+.voice-feedback > .row { flex: 1; }
+.voice-feedback > .path-btn { flex-shrink: 0; }
+.settings-detail .voice-hotkey-capture { width: auto; min-width: 60px; gap: 6px; padding: 6px 9px; font-size: 12px; }
+.settings-detail .voice-hotkey-capture[aria-pressed="true"] { color: var(--accent-on, var(--accent)); outline: 2px solid var(--accent); }
+.settings-detail .voice-hotkey-display { flex-wrap: wrap; }
+.settings-detail .agent-calendar-connector-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.settings-detail .agent-calendar-connector-fields label { display: grid; gap: 7px; }
+.settings-detail .agent-calendar-connector-fields :is(select, input) { width: 100%; min-width: 0; min-height: 36px; padding: 7px 9px; box-sizing: border-box; border: 1px solid var(--edge); border-radius: 8px; background: var(--field-bg); color: var(--fg); }
+.settings-detail .agent-calendar-connector-readiness { padding: 16px 0 0; border: 0; background: transparent; }
+@media (max-width: 759px) {
+  .voice-feedback { flex-wrap: wrap; }
+  .voice-feedback > .row { min-width: 190px; }
+  .settings-detail .agent-calendar-connector-fields { grid-template-columns: 1fr; }
+  .settings-detail .local-caption-actions .path-btn { white-space: normal; }
+}
+.settings-connector-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
+.settings-connector-row strong { flex: 1; font-size: 13px; }
+.settings-connector-row > span { color: var(--fg-2); font-size: 12px; }
+.settings-connector-guide { display: grid; gap: 10px; padding: 16px 0; font-size: 12px; }
+.settings-connector-guide p { margin: 0; color: var(--fg-2); line-height: 1.7; }
+.settings-connector-guide code { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--row-hover); padding: 10px; border-radius: var(--radius-control); }
+.settings-connector-guide button { justify-self: start; }
