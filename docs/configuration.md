@@ -60,6 +60,7 @@ capability silently falls back to another provider or model.
   },
   "status_agent": {
     "enabled": true,
+    "voice_input_mode": "toggle",
     "hotkeys": {
       "dictate": { "key": "Space", "modifiers": ["ctrl", "alt"] },
       "translate": {
@@ -169,17 +170,27 @@ and the committed transcript. Requests use the exact pinned model with response
 storage disabled; the returned Markdown must pass Host staging validation before
 the transcript/summary pair and artifact provenance are committed.
 
-xAI conversations search only local meeting summaries and transcripts before a
-request. Yulu sends at most 8 normalized sources, 1,200 characters per excerpt,
+xAI conversations pin their scope when created. General questions send the
+question and bounded conversation history without searching recordings. Meeting
+questions search local meeting summaries and transcripts before a request.
+Yulu sends at most 8 normalized sources, 1,200 characters per excerpt,
 6,000 characters total across source titles, dates, kinds, and excerpts, and a
 local-history tail of at most 12 messages and 12,000 characters. No matching
-excerpt sends no request. Requests use the pinned model and credential source
+excerpt sends no request in meeting scope. Existing conversations retain meeting
+scope during migration; changing scope requires a new conversation.
+Requests use the pinned model and credential source
 with `store:false` and no tools, files, collections, Web/X search, connectors,
 or response chaining, and reject a different response model. Source cards come
 from those local search hits, not model output. A retrieval or request failure
 pauses the local session without changing its identity or deleting messages and
 sources. Explicit retry is one Host mutation and reuses the persisted evidence
 snapshot; current settings and a fresh search cannot replace it.
+
+xAI answers use the [Responses streaming protocol](https://docs.x.ai/developers/model-capabilities/text/streaming).
+Partial text appears in the existing conversation UI and voice answer panel;
+only a validated completed response is stored as the final answer. A lost stream
+is an Unknown Outcome and is never silently replayed. The answer panel opens
+without activating Yulu, and follow-up voice questions retain their session.
 
 ## `transcription`
 
@@ -190,6 +201,8 @@ and dictation. The default is local and there is no automatic fallback.
 |---|---:|---|
 | `engine` | `"local"` | `local` or `xai`; the selected value is used exactly for all audio transcription paths. |
 | `language` | `"zh"` | `zh`, `en`, `ja`, or `auto`. Japanese requires the `xai` engine; Settings rejects the unsupported `local` + `ja` combination. |
+| `dictation.cleanup_enabled` | `true` | Clean up normal xAI dictation through the explicitly selected and authorized xAI conversation connection. Local dictation stays on-device; short text and failed cleanup keep the original transcript. |
+| `dictation.voice_chat_scope` | `"general"` | Default voice-question scope: `general` uses conversation history only; `meetings` enables meeting questions. Changing this setting starts a new voice conversation on the next question. |
 | `dictation.prompt_slug` | `"dictation-cleanup"` | Local prompt selected for normal dictation cleanup. |
 | `dictation.translate_prompt_slug` | `"dictation-translate"` | Local prompt selected for quick translation. |
 | `dictation.target_language` | `"English"` | Default target for dictation translation and the realtime-caption language selector. |
@@ -198,6 +211,21 @@ and dictation. The default is local and there is no automatic fallback.
 | `dictation.timeout_sec` | `30` | Host/Agent request budget used by installed shortcuts. |
 | `dictation.translate_deadline_sec` | `30` | Translation-specific deadline override. |
 | `dictation.translate_timeout_sec` | `30` | Translation-specific request override. |
+
+Dictation cleanup is a bounded text transform in the Host using the existing
+stateless xAI client. It sends only the current utterance and its selected
+prompt/glossary, with no meeting retrieval, history or tools. It requires current
+xAI conversation disclosure and never switches providers. Cleanup has at most
+eight seconds within the remaining dictation deadline; setting `prompt_slug` to
+`"none"` also disables it. Translation and voice questions skip normal cleanup.
+History retains both the recognized text and final text when cleanup runs.
+
+Realtime xAI requests include the current glossary keyterms. Dictation,
+translation and voice questions can reuse a trusted realtime transcript;
+startup/finalization are bounded and cancellation clears the matching session.
+Automatic insertion reports success only after Accessibility read-back confirms
+the text. If insertion cannot be verified, the text is kept on the clipboard for
+manual paste.
 
 The Host accepts on-demand audio only from the configured recordings directory
 or `~/Library/Application Support/Yulu/dictation`, and only as a valid absolute
@@ -374,6 +402,20 @@ are `cmd`, `shift`, `alt`, and `ctrl`. The default shortcuts are:
 - `ctrl+alt+A`: voice question into Agent Console.
 
 Use `yulu status-agent hotkeys` to inspect the effective values.
+
+`voice_input_mode` defaults to `"toggle"`: press once to start and again to
+finish. The optional `"hold"` mode starts on key down and finishes on key release
+for all three shortcuts. A release before capture starts queues one stop after
+confirmation; repeated key events cannot start another recording. Canceling
+clears the pending gesture, and callbacks from an older command cannot restore
+its overlay. Both modes are available in Voice Input settings.
+
+The native voice panel follows the system light/dark appearance. While recording,
+it shows the input level, finish and cancel controls. An unverified or failed
+insertion keeps the recognized text visible with a Copy Text button until
+dismissed or another recording starts. The complete text remains in local
+dictation history even if the destination application or clipboard fails.
+Only verified insertion displays the brief Inserted confirmation.
 
 ## Calendars and meeting detection
 

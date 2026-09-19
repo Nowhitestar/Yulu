@@ -36,6 +36,14 @@ export class PubSub<Channels extends Record<string, unknown>> {
 }
 
 export type AppChannels = {
+  "conversation": {
+    sessionId: string;
+    executionId: string;
+    afterMessageCount: number;
+    status: "streaming" | "completed" | "failed";
+    text: string;
+    error?: string;
+  };
   "recording":       { state: "idle" | "recording" | "processing" | "meetingBusy" | "daemonDown"; file?: string; elapsedSec?: number; level?: number; };
   "daemons":         { name: string; status: "running" | "idle" | "stopped" | "crashed"; pid: number; lastLog?: string; };
   "recordings-changed": { reason: "added" | "removed" | "changed" };

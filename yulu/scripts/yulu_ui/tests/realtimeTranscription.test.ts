@@ -50,6 +50,107 @@ function monoPcm(seconds: number, sample: number): Buffer {
 }
 
 describe("RealtimeTranscriptionCoordinator", () => {
+  it("bounds startup and ignores a late handshake without leaving a phantom session", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-start-deadline-"));
+    roots.push(root);
+    const audioPath = join(root, "dictation.wav");
+    writeStereoWav(audioPath, 0.1);
+    let late!: () => void;
+    const engine = {
+      provider: "test", warm: vi.fn(async () => {}),
+      start: vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { late = resolve; })).mockResolvedValue(undefined),
+      feed: vi.fn(async () => ({ updates: {} })), finish: vi.fn(async () => ({ updates: {} })),
+      abort: vi.fn(async () => {}), close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      streaming: engine, pubsub: new PubSub<AppChannels>(), transcribe: vi.fn(), pollMs: 60_000,
+    });
+    await expect(coordinator.start({ audioPath, title: "dictation", language: "zh", timeoutMs: 20 }))
+      .rejects.toThrow("deadline");
+    expect(engine.abort).toHaveBeenCalledOnce();
+    late();
+    await coordinator.start({ audioPath, title: "new", language: "zh", replaceActive: false });
+    await coordinator.cancel(audioPath);
+    await coordinator.close();
+  });
+
+  it("aborts a slow finish and prevents its late result from replacing the next session", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-stop-deadline-"));
+    roots.push(root);
+    const audioPath = join(root, "dictation.wav");
+    writeStereoWav(audioPath, 0.2);
+    let late!: (value: StreamingCaptionUpdate) => void;
+    const engine = {
+      provider: "test", warm: vi.fn(async () => {}), start: vi.fn(async () => {}),
+      feed: vi.fn(async () => ({ updates: {} })),
+      finish: vi.fn().mockImplementationOnce(() => new Promise<StreamingCaptionUpdate>((resolve) => { late = resolve; }))
+        .mockResolvedValue({ updates: {} }),
+      abort: vi.fn(async () => {}), close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      streaming: engine, pubsub: new PubSub<AppChannels>(), transcribe: vi.fn(), pollMs: 60_000,
+    });
+    await coordinator.start({ audioPath, title: "old", language: "zh" });
+    const result = await coordinator.stop(audioPath, 20);
+    expect(result).toMatchObject({ trusted: false, status: "failed", reason: expect.stringContaining("deadline") });
+    expect(engine.abort).toHaveBeenCalledOnce();
+    await coordinator.start({ audioPath, title: "new", language: "zh", replaceActive: false });
+    late({ updates: { mic: { partial: "", stable: [{ text: "stale text", endMs: 200 }], audioMs: 200 } } });
+    await Promise.resolve();
+    const fresh = await coordinator.stop(audioPath);
+    expect(fresh?.stableText).not.toContain("stale text");
+    await coordinator.close();
+  });
+
+  it("cancels a pending start by its audio identity and admits the next session", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-cancel-start-"));
+    roots.push(root);
+    const audioPath = join(root, "dictation.wav");
+    writeStereoWav(audioPath, 0.1);
+    const engine = {
+      provider: "test", warm: vi.fn(async () => {}),
+      start: vi.fn().mockImplementationOnce(() => new Promise(() => {})).mockResolvedValue(undefined),
+      feed: vi.fn(async () => ({ updates: {} })), finish: vi.fn(async () => ({ updates: {} })),
+      abort: vi.fn(async () => {}), close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      streaming: engine, pubsub: new PubSub<AppChannels>(), transcribe: vi.fn(), pollMs: 60_000,
+    });
+    const starting = coordinator.start({ audioPath, title: "old", language: "zh" });
+    const rejected = expect(starting).rejects.toThrow("cancelled");
+    await coordinator.cancel(audioPath);
+    await rejected;
+    await coordinator.start({ audioPath, title: "new", language: "zh", replaceActive: false });
+    await coordinator.cancel(audioPath);
+    await coordinator.close();
+  });
+  it("does not cancel a newer session while an older abort is settling", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-cancel-generation-"));
+    roots.push(root);
+    const audioPath = join(root, "dictation.wav");
+    writeStereoWav(audioPath, 0.1);
+    let release!: () => void;
+    const engine = {
+      provider: "test", warm: vi.fn(async () => {}),
+      start: vi.fn().mockImplementationOnce(() => new Promise(() => {})).mockResolvedValue(undefined),
+      feed: vi.fn(async () => ({ updates: {} })), finish: vi.fn(async () => ({ updates: {} })),
+      abort: vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; })).mockResolvedValue(undefined),
+      close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      streaming: engine, pubsub: new PubSub<AppChannels>(), transcribe: vi.fn(), pollMs: 60_000,
+    });
+    const starting = coordinator.start({ audioPath, title: "old", language: "zh" });
+    const rejected = expect(starting).rejects.toThrow("cancelled");
+    const cancellation = coordinator.cancel(audioPath);
+    await rejected;
+    await coordinator.start({ audioPath, title: "new", language: "zh", replaceActive: false });
+    release();
+    await cancellation;
+    expect(await coordinator.stop(audioPath)).not.toBeNull();
+    await coordinator.close();
+  });
+
   it("does not replace an active meeting when dictation asks to start", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-realtime-conflict-"));
     roots.push(root);

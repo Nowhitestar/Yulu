@@ -12,7 +12,9 @@ import { RecordingPipeline } from "../src/recordingPipeline.js";
 import { AgentUnavailableError } from "../src/agentGateway.js";
 import { RealtimeTranscriptionCoordinator } from "../src/realtimeTranscription.js";
 import { XaiAudioClient } from "../src/xaiAudio.js";
-import { createAgentSession } from "../src/agentSessionStore.js";
+import { DictationTextService } from "../src/dictationText.js";
+import { XaiTextClient } from "../src/xaiText.js";
+import { createAgentSession, getAgentSession } from "../src/agentSessionStore.js";
 import { XAI_CONVERSATION_DISCLOSURE_VERSION } from "../src/conversationDataDisclosure.js";
 
 function rawHttp(port: number, path: string, hostHeader: string): Promise<{ status: number; body: string }> {
@@ -431,13 +433,40 @@ describe("server", () => {
     }
   });
 
-  it("protects and forwards realtime recording start/stop requests", async () => {
+  it("authenticates and validates dictation cleanup before any text request", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
+    const clean = vi.spyOn(DictationTextService.prototype, "clean").mockResolvedValue({
+      text: "Cleaned text", status: "cleaned", reason: "", warning: "", model: "selected-model",
+    });
+    const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
+    try {
+      const unauthorized = await fetch(`${env.baseUrl}/api/dictation/cleanup`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "private text" }),
+      });
+      expect(unauthorized.status).toBe(401);
+      for (const body of ["{", JSON.stringify({ text: "" }), JSON.stringify({ text: "x".repeat(20_001) }),
+        JSON.stringify({ text: "private text", timeoutMs: 8_001 })]) {
+        const invalid = await fetch(`${env.baseUrl}/api/dictation/cleanup`, { method: "POST", headers, body });
+        expect(invalid.status).toBe(400);
+      }
+      expect(clean).not.toHaveBeenCalled();
+      const cleaned = await fetch(`${env.baseUrl}/api/dictation/cleanup`, {
+        method: "POST", headers, body: JSON.stringify({ text: "private text", context: "template", timeoutMs: 500 }),
+      });
+      expect(await cleaned.json()).toMatchObject({ ok: true, text: "Cleaned text", status: "cleaned" });
+      expect(clean).toHaveBeenCalledExactlyOnceWith({ text: "private text", context: "template", timeoutMs: 500 });
+    } finally { clean.mockRestore(); }
+  });
+
+  it("protects and forwards realtime recording start/stop/cancel requests and deadlines", async () => {
     const configDir = join(env.root, ".config", "yulu");
     const audioPath = join(env.root, "Movies", "Yulu", "Realtime_20260714_160000.wav");
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     writeFileSync(audioPath, Buffer.alloc(44));
     const startSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "start").mockResolvedValueOnce();
     const stopSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "stop").mockResolvedValueOnce(null);
+    const cancelSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "cancel").mockResolvedValueOnce();
     const optionsSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "updateOptions").mockResolvedValueOnce({
       status: "transcribing",
       stem: "Realtime_20260714_160000",
@@ -448,28 +477,36 @@ describe("server", () => {
     });
     const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
     try {
-      const unauthorized = await fetch(`${env.baseUrl}/api/recordings/realtime/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audioPath, title: "Realtime", language: "zh" }),
-      });
-      expect(unauthorized.status).toBe(401);
+      for (const action of ["start", "stop", "cancel"]) {
+        const unauthorized = await fetch(`${env.baseUrl}/api/recordings/realtime/${action}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audioPath, title: "Realtime", language: "zh" }),
+        });
+        expect(unauthorized.status).toBe(401);
+      }
 
       const started = await fetch(`${env.baseUrl}/api/recordings/realtime/start`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ audioPath, title: "Realtime", language: "zh" }),
+        body: JSON.stringify({ audioPath, title: "Realtime", language: "zh", timeoutMs: 4_000 }),
       });
       expect(started.status).toBe(200);
-      expect(startSpy).toHaveBeenCalledWith({ audioPath, title: "Realtime", language: "zh" });
+      expect(startSpy).toHaveBeenCalledWith({ audioPath, title: "Realtime", language: "zh", timeoutMs: 4_000 });
 
       const stopped = await fetch(`${env.baseUrl}/api/recordings/realtime/stop`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ audioPath }),
+        body: JSON.stringify({ audioPath, timeoutMs: 4_000 }),
       });
       expect(stopped.status).toBe(200);
-      expect(stopSpy).toHaveBeenCalledWith(audioPath);
+      expect(stopSpy).toHaveBeenCalledWith(audioPath, 4_000);
+
+      const cancelled = await fetch(`${env.baseUrl}/api/recordings/realtime/cancel`, {
+        method: "POST", headers, body: JSON.stringify({ audioPath }),
+      });
+      expect(cancelled.status).toBe(200);
+      expect(cancelSpy).toHaveBeenCalledExactlyOnceWith(audioPath);
 
       const options = await fetch(`${env.baseUrl}/api/recordings/realtime/options`, {
         method: "POST",
@@ -481,6 +518,7 @@ describe("server", () => {
     } finally {
       startSpy.mockRestore();
       stopSpy.mockRestore();
+      cancelSpy.mockRestore();
       optionsSpy.mockRestore();
     }
   });
@@ -899,7 +937,7 @@ describe("server", () => {
     expect(await r.text()).toMatch(/UI not built/);
   });
 
-  it("/api/voice-chat/ask rejects implicit creation and continues an existing pinned session", async () => {
+  it("/api/voice-chat/ask requires explicit readiness and blocks follow-up to a paused session", async () => {
     const configDir = join(env.root, ".config", "yulu");
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
     const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
@@ -944,15 +982,12 @@ describe("server", () => {
       headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
       body: JSON.stringify({ question: "second turn", sessionId: body.sessionId }),
     });
-    expect(next.status).toBe(200);
-    const nextBody = await next.json() as { ok: boolean; sessionId: string; url: string };
-    expect(nextBody.ok).toBe(true);
-    expect(nextBody.sessionId).toBe(body.sessionId);
-    expect(nextBody.url).toBe(body.url);
+    expect(next.status).toBe(409);
+    expect(await next.json()).toMatchObject({ ok: false, error: "conversation_unavailable" });
 
     const store = JSON.parse(readFileSync(join(configDir, "agent-sessions.json"), "utf8"));
     const session = store.sessions.find((item: { id: string }) => item.id === body.sessionId);
-    expect(session.messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(session.messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant"]);
   });
 
   it("/api/voice-chat/ask can return immediately for an existing pinned session", async () => {
@@ -994,6 +1029,69 @@ describe("server", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     expect(roles).toEqual(["user", "assistant"]);
+  });
+
+  it("validates voice scope and never changes an existing conversation's context", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
+    const pinned = createAgentSession(configDir, {
+      provider: "xai", model: "grok-pinned", credentialSource: "oauth", purpose: "ask", scope: "meetings",
+    });
+    for (const [input, status, error] of [
+      [{ question: "question", scope: "screen" }, 400, "invalid_voice_question"],
+      [{ question: "question", scope: "general", sessionId: pinned.id }, 409, "conversation_scope_changed"],
+      [{ question: "question", sessionId: "missing-session" }, 404, "session_unavailable"],
+      [{ question: "x".repeat(2001) }, 400, "invalid_voice_question"],
+    ] as const) {
+      const result = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
+        method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
+        body: JSON.stringify(input),
+      });
+      expect(result.status).toBe(status);
+      expect(await result.json()).toMatchObject({ ok: false, error });
+    }
+    expect(getAgentSession(configDir, pinned.id)).toMatchObject({ scope: "meetings", messages: [] });
+  });
+
+  it("admits one deferred general voice question and rejects concurrent duplicates", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    const store = new HostStore(join(configDir, "host.sqlite"));
+    store.recordAgentConnectionDisclosure({ connectionId: "direct-xai", capability: "conversation",
+      disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION, decision: "accepted" });
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
+    const pinned = createAgentSession(configDir, {
+      provider: "xai", model: "grok-pinned", credentialSource: "oauth", purpose: "ask", scope: "general",
+    });
+    let resolve!: (result: { text: string; model: string; credentialSource: "oauth" }) => void;
+    const answer = new Promise<{ text: string; model: string; credentialSource: "oauth" }>((done) => { resolve = done; });
+    const request = vi.spyOn(XaiTextClient.prototype, "request").mockImplementation(async (input) => {
+      input.onText?.("部分回答");
+      return answer;
+    });
+    try {
+      const post = () => fetch(`${env.baseUrl}/api/voice-chat/ask`, {
+        method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
+        body: JSON.stringify({ question: "通用问题", scope: "general", sessionId: pinned.id, defer: true }),
+      });
+      const replies = await Promise.all([post(), post()]);
+      expect(replies.map((reply) => reply.status).sort()).toEqual([200, 409]);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      expect(getAgentSession(configDir, pinned.id)?.messages).toHaveLength(1);
+      resolve({ text: "完整回答", model: "grok-pinned", credentialSource: "oauth" });
+      await vi.waitFor(() => expect(getAgentSession(configDir, pinned.id)?.messages).toHaveLength(2));
+      expect(getAgentSession(configDir, pinned.id)).toMatchObject({
+        scope: "general", messages: [{ role: "user", text: "通用问题" }, { role: "assistant", text: "完整回答" }],
+      });
+      expect(request.mock.calls[0]![0]).toMatchObject({ model: "grok-pinned", onText: expect.any(Function) });
+      expect((await post()).status).toBe(200);
+      await vi.waitFor(() => expect(getAgentSession(configDir, pinned.id)?.messages).toHaveLength(4));
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      resolve({ text: "完整回答", model: "grok-pinned", credentialSource: "oauth" });
+      request.mockRestore();
+      store.clearAgentConnectionDisclosures("direct-xai");
+      store.close();
+    }
   });
 
   it("falls back to index.html for deep multi-segment SPA paths", async () => {

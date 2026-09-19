@@ -13,6 +13,7 @@ const SCHEMA = [
   { path: "llm.enabled",              category: "llm",           label: "启用 LLM",  type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.enabled",     category: "general",       label: "菜单栏 Agent", type: "toggle", reload: { kind: "none" } },
   { path: "status_agent.feedback_sounds", category: "voice",     label: "听写提示音", type: "toggle", reload: { kind: "none" } },
+  { path: "status_agent.voice_input_mode", category: "voice", label: "快捷键操作", type: "select", reload: { kind: "sighup", daemons: ["statusagent"] } },
   { path: "status_agent.hotkeys",     category: "voice",         label: "语音输入快捷键", type: "text", reload: { kind: "sighup", daemons: ["statusagent"] } },
   { path: "transcription.dictation",  category: "voice",         label: "语音输入模板", type: "text", reload: { kind: "none" } },
   { path: "meeting_detection.enabled", category: "automation", label: "会议检测", type: "toggle", reload: { kind: "restart", daemons: ["detector"] } },
@@ -537,6 +538,19 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(detail.getByText(translate("zh", "settings.transcription.language.label"))).toBeInTheDocument();
     expect(detail.queryByText(translate("zh", "settings.providers.connection.title"))).toBeNull();
     expect(detail.queryByText(/MLX|说话人分离/)).toBeNull();
+  });
+
+  it.each([
+    ["快捷键操作", "按一下开始，再按一下结束", "hold", "status_agent.voice_input_mode"],
+    ["语音提问范围", "通用问答", "meetings", "transcription.dictation.voice_chat_scope"],
+  ])("voice: saves %s through the existing config controls", async (label, initial, value, key) => {
+    configUpdateSpy.mockClear();
+    const { container } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    expect(voice.getByRole("button", { name: label })).toHaveTextContent(initial);
+    fireEvent.click(voice.getByRole("button", { name: label }));
+    fireEvent.change(voice.getByRole("combobox", { name: label }), { target: { value } });
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith({ key, value }));
   });
 
   it("voice: hotkey capture commits key and modifiers from the pressed shortcut", async () => {

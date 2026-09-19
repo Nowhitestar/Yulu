@@ -39,7 +39,13 @@ const MAX_SOURCE_COUNT = 8;
 const AGENT_TIMEOUT_MS = 5 * 60_000;
 const EMPTY_EVIDENCE = "未找到匹配的本地会议片段，本次未向 xAI 发送内容。";
 
-export function buildAgentQuestionPrompt(question: string, sourceLimit: number): string {
+export function buildAgentQuestionPrompt(question: string, sourceLimit: number, scope: "meetings" | "general" = "meetings"): string {
+  if (scope === "general") return [
+    "Answer this general question using only the supplied conversation. Lead with a concise answer in the user's language.",
+    "Do not retrieve meeting records, use connectors, inspect files or screen content, browse, or perform external actions.",
+    "If current or private information is needed, explain what context is missing.",
+    "User question:", question,
+  ].join("\n");
   return [
     "You are the selected local Agent powering Yulu's conversation experience.",
     "Yulu is only the deterministic recording/artifact coordinator; you own retrieval, reasoning, conversation, and connector use.",
@@ -79,7 +85,7 @@ function agentOwnedSearchProjection(question: string) {
 }
 
 function nativeAgentPrompt(session: AgentSession, question: string, limit: number): string {
-  const prompt = buildAgentQuestionPrompt(question, limit);
+  const prompt = buildAgentQuestionPrompt(question, limit, session.scope);
   const history = projectAgentSessionHistory(session, question);
   if (history.length === 0) return prompt;
   return [
@@ -105,6 +111,17 @@ function recoveryActions(session: AgentSession, retryAvailable = true) {
 }
 
 function xaiInput(session: AgentSession, question: string, sources: ConversationSource[]) {
+  if (session.scope === "general") {
+    return [
+      { role: "system" as const, content: [
+        "Answer the user's general question in their language. Lead with the answer and be concise.",
+        "You have only this conversation. No meeting records, screen content, files, live web access or tools are available.",
+        "Do not claim to have accessed those sources or performed actions. If current or private context is needed, say what is missing.",
+      ].join(" ") },
+      ...projectAgentSessionHistory(session, question),
+      { role: "user" as const, content: question },
+    ];
+  }
   const excerpts = formatConversationSources(sources);
   return [
     {
@@ -161,6 +178,7 @@ export const askRouter = router({
       limit: z.number().int().positive().max(MAX_SOURCE_COUNT).optional(),
       sessionId: z.string().min(1),
       retry: z.literal(true).optional(),
+      stream: z.boolean().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       const startedAt = Date.now();
@@ -422,7 +440,7 @@ export const askRouter = router({
             elapsedMs: Date.now() - startedAt,
           };
         }
-        const shouldSearch = !retrySnapshot || retrySnapshot.retrievalPending;
+        const shouldSearch = session.scope !== "general" && (!retrySnapshot || retrySnapshot.retrievalPending);
         let search = null;
         if (shouldSearch) {
           try {
@@ -446,8 +464,10 @@ export const askRouter = router({
             };
           }
         }
-        const sources = search ? normalizeConversationSources(search.hits) : retrySnapshot!.sources;
-        const searchProjection = !search
+        const sources = search ? normalizeConversationSources(search.hits) : retrySnapshot?.sources ?? [];
+        const searchProjection = session.scope === "general"
+          ? { owner: "none" as const, query: question, sourceCount: 0, telemetry: { coordinatorRetrieval: false } }
+          : !search
           ? { owner: "yulu" as const, query: question, sourceCount: sources.length, snapshot: "persisted" as const }
           : {
               owner: "yulu" as const,
@@ -457,7 +477,7 @@ export const askRouter = router({
               elapsedMs: search.elapsedMs,
             };
         const snapshot = { question, sources };
-        if (sources.length === 0) {
+        if (sources.length === 0 && session.scope !== "general") {
           if (input.retry) resumeAgentSession(ctx.paths.durableDataDir, session.id);
           return {
             ok: false,
@@ -497,12 +517,29 @@ export const askRouter = router({
           : xaiInput(session, question, sources);
         const providerInput: AgentSessionProviderInput = { kind: "messages", messages: outboundMessages };
         const invocation = beginAgentSessionInvocation(ctx.paths.durableDataDir, session.id, snapshot, providerInput);
+        let streamedText = "";
+        let lastEmittedAt = 0;
+        const publish = (status: "streaming" | "completed" | "failed", error?: string) => {
+          if (!input.stream) return;
+          ctx.pubsub.publish("conversation", {
+            sessionId: session.id, executionId: invocation.executionId,
+            afterMessageCount: session.messages.length, status, text: streamedText,
+            ...(error ? { error } : {}),
+          });
+          lastEmittedAt = Date.now();
+        };
+        publish("streaming");
         try {
           const result = await ctx.xaiText.request({
             capability: "conversation",
             model: session.model,
             credentialSource: session.credentialSource,
             input: outboundMessages,
+            ...(input.stream ? { onText: (text: string) => {
+              const firstText = !streamedText && !!text;
+              streamedText = text;
+              if (firstText || Date.now() - lastEmittedAt >= 80) publish("streaming");
+            } } : {}),
           });
           if (result.model !== session.model) {
             throw new Error(`Pinned conversation model ${session.model} returned as ${result.model}`);
@@ -512,6 +549,8 @@ export const askRouter = router({
           }
           completeAgentSessionInvocation(ctx.paths.durableDataDir, session.id, invocation.executionId);
           if (input.retry) resumeAgentSession(ctx.paths.durableDataDir, session.id);
+          streamedText = result.text;
+          publish("completed");
           return {
             ok: true,
             answer: result.text,
@@ -529,6 +568,7 @@ export const askRouter = router({
           };
         } catch (error) {
           const unknownOutcome = error instanceof XaiTextUnknownOutcomeError;
+          publish("failed", "回答未完成，请检查连接后重试。");
           if (unknownOutcome) {
             markAgentSessionInvocationUnknown(
               ctx.paths.durableDataDir,
@@ -584,7 +624,7 @@ export const askRouter = router({
         const result = await runAgentCliCommand({
           runtime,
           scriptDir: ctx.paths.scriptDir,
-          prompt: buildAgentQuestionPrompt(question, input.limit ?? MAX_SOURCE_COUNT),
+          prompt: buildAgentQuestionPrompt(question, input.limit ?? MAX_SOURCE_COUNT, session.scope),
           timeoutMs: AGENT_TIMEOUT_MS,
           nativeSessionId: session.nativeSessionId,
           yuluSessionId: session.id,

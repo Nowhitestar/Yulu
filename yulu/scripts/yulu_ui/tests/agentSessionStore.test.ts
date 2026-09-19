@@ -66,8 +66,8 @@ describe("agentSessionStore", () => {
 
     const migrated = JSON.parse(readFileSync(storePath(root), "utf8"));
     expect(migrated).toMatchObject({
-      version: 8,
-      sessions: [{ provider: "codex", model: "runtime-managed", status: "active" }],
+      version: 9,
+      sessions: [{ provider: "codex", model: "runtime-managed", status: "active", scope: "meetings" }],
     });
     expect(readFileSync(storePath(root), "utf8")).toBe(JSON.stringify(migrated, null, 2) + "\n");
   });
@@ -214,6 +214,7 @@ describe("agentSessionStore", () => {
     roots.push(root);
     const created = createAgentSession(root, {
       purpose: "ask",
+      scope: "general",
       provider: "codex",
       connectionId: "codex-primary",
       model: "gpt-5.6-sol",
@@ -250,6 +251,7 @@ describe("agentSessionStore", () => {
 
     const replacement = createAgentSessionAttemptFromUnknown(root, created.id);
     expect(replacement).toMatchObject({
+      scope: "general",
       status: "paused",
       provider: "codex",
       connectionId: "codex-primary",

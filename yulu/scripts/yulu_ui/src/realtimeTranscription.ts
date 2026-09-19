@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
+import { SourceSeparatedResampler } from "./pcmResampler.js";
 import type {
   CaptionSource,
   StreamingCaptionEngine,
@@ -49,7 +50,7 @@ interface Session {
   activePartialSource: CaptionSource | null;
   stableSegments: Array<{ source: CaptionSource; text: string; endMs: number; order: number }>;
   stableOrder: number;
-  resamplePhase: number;
+  resampler: SourceSeparatedResampler;
   chunks: number;
   coveredMs: number;
   pendingPcm: Buffer;
@@ -348,28 +349,7 @@ export function sourceSeparated16kPcm(
   format: WavFormat,
   initialPhase = 0,
 ): SourceSeparatedPcm {
-  const sourceFrames = Math.floor(source.length / format.blockAlign);
-  const capacity = Math.ceil((sourceFrames * 16_000 + initialPhase) / format.sampleRate);
-  const mic = Buffer.alloc(Math.max(0, capacity) * 2);
-  const system = format.channels >= 2 ? Buffer.alloc(Math.max(0, capacity) * 2) : null;
-  let phase = initialPhase;
-  let outputFrames = 0;
-  for (let frame = 0; frame < sourceFrames; frame += 1) {
-    phase += 16_000;
-    if (phase < format.sampleRate) continue;
-    phase -= format.sampleRate;
-    const sourceOffset = frame * format.blockAlign;
-    mic.writeInt16LE(source.readInt16LE(sourceOffset), outputFrames * 2);
-    if (system) system.writeInt16LE(source.readInt16LE(sourceOffset + 2), outputFrames * 2);
-    outputFrames += 1;
-  }
-  return {
-    chunks: {
-      mic: mic.subarray(0, outputFrames * 2),
-      ...(system ? { system: system.subarray(0, outputFrames * 2) } : {}),
-    },
-    phase,
-  };
+  return new SourceSeparatedResampler(format, initialPhase).feed(source);
 }
 
 export function hasVoice(pcm: Buffer): boolean {
@@ -408,6 +388,8 @@ function writeMonoWav(path: string, pcm: Buffer): void {
 
 export class RealtimeTranscriptionCoordinator {
   private active: Session | null = null;
+  private starting: { audioPath: string; cancel: () => void } | null = null;
+  private stopping: { session: Session; promise: Promise<AppChannels["realtime-transcript"] | null> } | null = null;
   private readonly pollMs: number;
   private readonly allowedRoots: string[];
   private readonly minSegmentMs: number;
@@ -446,9 +428,10 @@ export class RealtimeTranscriptionCoordinator {
     title: string;
     language: TranscriptionLanguage;
     replaceActive?: boolean;
+    timeoutMs?: number;
   }): Promise<void> {
+    if (this.starting) throw new Error("realtime transcription session is already starting");
     if (this.active && input.replaceActive === false) throw new Error("realtime transcription session is already active");
-    if (this.active) await this.stop(this.active.audioPath);
     if (extname(input.audioPath).toLowerCase() !== ".wav") throw new Error("realtime input must be a WAV file");
     const audioPath = realpathSync(input.audioPath);
     if (this.allowedRoots.length > 0) {
@@ -462,8 +445,28 @@ export class RealtimeTranscriptionCoordinator {
     }
     const format = parseWavFormat(audioPath);
     const mode: Session["mode"] = this.options.streaming ? "streaming" : "segmented";
-    if (mode === "streaming") {
-      await this.options.streaming!.start(normalizeTranscriptionLanguage(input.language));
+    let cancelStart!: () => void;
+    const cancelled = new Promise<never>((_, reject) => {
+      cancelStart = () => reject(new Error("realtime transcription start cancelled"));
+    });
+    const starting = { audioPath, cancel: cancelStart };
+    this.starting = starting;
+    const deadline = Date.now() + (input.timeoutMs ?? 35_000);
+    const remaining = () => Math.max(1, deadline - Date.now());
+    try {
+      if (this.active) await Promise.race([this.stop(this.active.audioPath, remaining()), cancelled]);
+      if (this.starting !== starting) throw new Error("realtime transcription start cancelled");
+      if (mode === "streaming") {
+        await this.withDeadline(Promise.race([
+          this.options.streaming!.start(normalizeTranscriptionLanguage(input.language)), cancelled,
+        ]), remaining());
+      }
+      if (this.starting !== starting) throw new Error("realtime transcription start cancelled");
+    } catch (error) {
+      if (this.starting === starting) await this.options.streaming?.abort();
+      throw error;
+    } finally {
+      if (this.starting === starting) this.starting = null;
     }
     const session: Session = {
       audioPath,
@@ -479,7 +482,7 @@ export class RealtimeTranscriptionCoordinator {
       activePartialSource: null,
       stableSegments: [],
       stableOrder: 0,
-      resamplePhase: 0,
+      resampler: new SourceSeparatedResampler(format),
       chunks: 0,
       coveredMs: 0,
       pendingPcm: Buffer.alloc(0),
@@ -504,7 +507,13 @@ export class RealtimeTranscriptionCoordinator {
     this.active = session;
     void this.options.warm?.().catch(() => {});
     this.publish(session, "starting", false);
-    await this.queuePump(false);
+    try {
+      await this.withDeadline(this.queuePump(false), remaining());
+    } catch (error) {
+      if (this.active === session) await this.cancel(audioPath);
+      throw error;
+    }
+    if (this.active !== session) throw new Error("realtime transcription start cancelled");
     if (session.error === null) {
       session.timer = setInterval(() => { void this.queuePump(false); }, this.pollMs);
       session.timer.unref();
@@ -538,20 +547,35 @@ export class RealtimeTranscriptionCoordinator {
     return this.publish(session, "transcribing", false);
   }
 
-  async stop(audioPath?: string): Promise<AppChannels["realtime-transcript"] | null> {
+  async stop(audioPath?: string, timeoutMs = 35_000): Promise<AppChannels["realtime-transcript"] | null> {
     const session = this.active;
     if (!session || (audioPath && realpathSync(audioPath) !== session.audioPath)) return null;
+    if (this.stopping?.session === session) return await this.stopping.promise;
+    const stopping = { session, promise: this.finishSession(session, timeoutMs) };
+    this.stopping = stopping;
+    try { return await stopping.promise; }
+    finally { if (this.stopping === stopping) this.stopping = null; }
+  }
+
+  private async finishSession(session: Session, timeoutMs: number): Promise<AppChannels["realtime-transcript"] | null> {
     if (session.timer) clearInterval(session.timer);
     session.timer = null;
-    if (session.pump) await session.pump;
-    if (session.error === null) await this.queuePump(true);
-    if (session.mode === "streaming" && session.error === null) {
-      try {
-        this.applyStreamingUpdate(session, await this.options.streaming!.finish());
-      } catch (error) {
-        session.error = (error as Error).message;
-      }
+    try {
+      await this.withDeadline((async () => {
+        if (session.pump) await session.pump;
+        if (this.active !== session) return;
+        if (session.error === null) await this.queuePump(true);
+        if (this.active !== session) return;
+        if (session.mode === "streaming" && session.error === null) {
+          const result = await this.options.streaming!.finish();
+          if (this.active === session && session.error === null) this.applyStreamingUpdate(session, result);
+        }
+      })(), timeoutMs);
+    } catch (error) {
+      session.error = (error as Error).message;
+      if (this.active === session) await this.options.streaming?.abort();
     }
+    if (this.active !== session) return null;
     const totalMs = this.durationMs(session);
     const assessment = assessRealtimeTranscript({
       text: session.text,
@@ -574,7 +598,40 @@ export class RealtimeTranscriptionCoordinator {
     return result;
   }
 
+  async cancel(audioPath: string): Promise<void> {
+    let path: string;
+    try { path = realpathSync(audioPath); } catch { path = resolve(audioPath); }
+    const starting = this.starting?.audioPath === path ? this.starting : null;
+    const session = this.active?.audioPath === path ? this.active : null;
+    if (!starting && !session) return;
+    if (starting) {
+      this.starting = null;
+      starting.cancel();
+    }
+    if (session) {
+      this.active = null;
+      session.error = "realtime transcription cancelled";
+      if (session.timer) clearInterval(session.timer);
+      session.timer = null;
+      session.translationGeneration += 1;
+      session.queuedTranslation = null;
+      this.writeCoverage(session, this.durationMs(session), false, session.error, true);
+    }
+    await this.options.streaming?.abort();
+  }
+
+  private async withDeadline<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([operation, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("realtime transcription deadline exceeded")), timeoutMs);
+        timer.unref();
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
+  }
+
   async close(): Promise<void> {
+    if (this.starting) await this.cancel(this.starting.audioPath);
     if (this.active) await this.stop(this.active.audioPath);
     await this.options.streaming?.close();
   }
@@ -586,8 +643,10 @@ export class RealtimeTranscriptionCoordinator {
       await session.pump;
       if (!force) return;
     }
+    if (this.active !== session || session.error !== null) return;
     session.pump = this.pump(session, force)
       .catch((error) => {
+        if (this.active !== session) return;
         if (session.error === null) session.error = (error as Error).message;
         if (session.timer) clearInterval(session.timer);
         session.timer = null;
@@ -612,12 +671,12 @@ export class RealtimeTranscriptionCoordinator {
       session.offset += available;
       session.coveredMs = Math.round((session.offset - session.format.dataOffset) / bytesPerSecond * 1000);
       if (session.mode === "streaming") {
-        const separated = sourceSeparated16kPcm(source, session.format, session.resamplePhase);
-        session.resamplePhase = separated.phase;
+        const separated = session.resampler.feed(source);
         try {
-          this.applyStreamingUpdate(session, await this.options.streaming!.feed(separated.chunks));
+          const response = await this.options.streaming!.feed(separated.chunks);
+          if (this.active === session && session.error === null) this.applyStreamingUpdate(session, response);
         } catch (error) {
-          await this.options.streaming?.abort();
+          if (this.active === session) await this.options.streaming?.abort();
           throw error;
         }
       } else {

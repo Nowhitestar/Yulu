@@ -154,10 +154,10 @@ return to Yulu to test each selected capability; login alone does not prove read
 ### Install
 
 Download the [latest stable Yulu](https://github.com/Nowhitestar/Yulu/releases/latest).
-The v0.24.0 update restores bundled meeting reminders, simplifies Settings,
-Meeting assistant and Runtime status, and improves the native titlebar,
-responsive layout and startup loading flow. See the
-[release notes and verification scope](docs/release-notes/v0.24.0.md).
+The v0.25.0 update improves voice input and general voice questions, preserves
+recognized text when automatic insertion fails, and adds a compact blue waveform
+panel plus native notifications and meeting prompts. See the
+[release notes and verification scope](docs/release-notes/v0.25.0.md).
 
 For an older candidate's database or silent-capture failure, see
 [database preparation](docs/operations.md#fresh-install-database-preparation) and

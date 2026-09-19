@@ -16,9 +16,11 @@ separate from the selected summary and conversation Agents.
 - The exact Summary Provider pinned when work is created owns summary generation.
   Current Summary Providers are direct xAI, Codex, or Claude Code. Hermes and
   OpenClaw are optional Conversation-only providers.
-- The pinned Conversation Provider owns interactive conversation. xAI receives
-  only bounded local meeting excerpts/history through Yulu's strict stateless
-  client; Agent-backed conversations retain their runtime-owned connectors.
+- The pinned Conversation Provider owns interactive conversation. Each session
+  pins its scope: general questions use bounded conversation history; meeting
+  questions can also use local meeting excerpts. xAI uses Yulu's strict
+  stateless client; Agent-backed meeting conversations retain their runtime-owned
+  connectors. Changing scope starts a new conversation.
 - Python is capture/scheduling/desktop glue. It is not an AI runtime.
 
 Do not add automatic fallback between audio engines or Summary Providers, a
@@ -202,7 +204,7 @@ Python completion adapter -> authenticated loopback Host
 
 Recording detail -> fresh confirmed Share Action -> selected Agent connector
 
-Agent Console -> pinned Conversation Provider -> xAI bounded local excerpts
+Agent Console -> pinned Conversation Provider -> xAI bounded history/excerpts
                                            or -> selected Agent + its connectors
 ```
 
@@ -287,7 +289,7 @@ sending -> delivery_reported -> completed
 - Letting any current setting or runtime silently replace a task's pinned
   Summary Provider or model.
 - Letting a conversation retry switch provider, model, credential source, or
-  persisted local evidence snapshot.
+  question scope or persisted local evidence snapshot.
 - Writing final transcript/summary files outside the Host commit contract.
 - Calling Notion without task opt-in, Host begin authorization, and Host result
   commit.

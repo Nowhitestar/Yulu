@@ -22,6 +22,7 @@ import { CodexConversationError } from "../../src/codexAgentAdapter.js";
 import { ClaudeCodeConversationError } from "../../src/claudeCodeAdapter.js";
 import { ConversationOnlyAgentConversationError } from "../../src/conversationOnlyAgentAdapter.js";
 import { XaiTextUnknownOutcomeError } from "../../src/xaiText.js";
+import { PubSub, type AppChannels } from "../../src/pubsub.js";
 
 const runAgentCliCommand = vi.hoisted(() => vi.fn());
 vi.mock("../../src/agentCliRunner.js", () => ({ runAgentCliCommand }));
@@ -51,6 +52,7 @@ function context(
   mkdirSync(moviesDir, { recursive: true });
   return {
     uiMutationAuthorized: injected.uiMutationAuthorized ?? true,
+    pubsub: new PubSub<AppChannels>(),
     config: { read: () => config },
     host: {
       getAgentConnectionDisclosure: (connectionId: string) =>
@@ -90,9 +92,10 @@ function context(
   } as unknown as AppContext;
 }
 
-function session(ctx: AppContext, provider: string, model = "runtime-managed") {
+function session(ctx: AppContext, provider: string, model = "runtime-managed", scope: "general" | "meetings" = "meetings") {
   return createAgentSession(ctx.paths.configDir, {
     purpose: "ask",
+    scope,
     provider,
     model,
     ...(provider === "xai" ? { credentialSource: "oauth" as const } : {}),
@@ -692,6 +695,70 @@ describe("pinned Ask flow", () => {
     expect(result.llmError).toMatch(/pinned.*hermes.*codex/i);
     expect(getAgentSession(ctx.paths.configDir, pinned.id)?.status).toBe("paused");
     expect(runAgentCliCommand).not.toHaveBeenCalled();
+  });
+
+  it("answers general questions without searching or sending meeting sources", async () => {
+    const localSearch = vi.fn(async () => localHits());
+    const xaiRequest = vi.fn(async (input) => {
+      input.onText?.("先讲结论");
+      return { text: "完整回答", model: "grok-pinned", credentialSource: "oauth" };
+    });
+    const ctx = context({}, { localSearch, xaiRequest });
+    const pinned = session(ctx, "xai", "grok-pinned", "general");
+    appendAgentSessionMessage(ctx.paths.configDir, pinned.id, { role: "user", text: "上一轮问题" });
+    appendAgentSessionMessage(ctx.paths.configDir, pinned.id, { role: "assistant", text: "上一轮答案",
+      sources: [{ snippet: "private meeting evidence" }] });
+    appendAgentSessionMessage(ctx.paths.configDir, pinned.id, { role: "user", text: "解释一下" });
+    const events: AppChannels["conversation"][] = [];
+    ctx.pubsub.subscribe("conversation", (event) => events.push(event));
+    const result = await createCaller(askRouter, ctx).ask({
+      question: "解释一下", sessionId: pinned.id, stream: true,
+    });
+    expect(result).toMatchObject({ ok: true, answer: "完整回答", sources: [],
+      search: { owner: "none", telemetry: { coordinatorRetrieval: false } } });
+    expect(localSearch).not.toHaveBeenCalled();
+    expect(xaiRequest).toHaveBeenCalledOnce();
+    const sent = xaiRequest.mock.calls[0]![0];
+    expect(sent).toMatchObject({ model: "grok-pinned", credentialSource: "oauth", capability: "conversation" });
+    expect(sent.input).toEqual([
+      { role: "system", content: expect.stringContaining("only this conversation") },
+      { role: "user", content: "上一轮问题" },
+      { role: "assistant", content: "上一轮答案" },
+      { role: "user", content: "解释一下" },
+    ]);
+    expect(JSON.stringify(sent.input)).not.toContain("private meeting evidence");
+    expect(events).toEqual([
+      expect.objectContaining({ sessionId: pinned.id, status: "streaming", text: "", afterMessageCount: 3 }),
+      expect.objectContaining({ status: "streaming", text: "先讲结论", afterMessageCount: 3 }),
+      expect.objectContaining({ status: "completed", text: "完整回答", afterMessageCount: 3 }),
+    ]);
+    expect(new Set(events.map((event) => event.executionId)).size).toBe(1);
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)?.pendingInvocation).toBeUndefined();
+  });
+
+  it("marks interrupted streaming as failed and preserves unknown-outcome recovery", async () => {
+    const xaiRequest = vi.fn(async (input) => {
+      input.onText("半句话");
+      throw new XaiTextUnknownOutcomeError({ capability: "conversation", model: "grok-pinned", credentialSource: "oauth" });
+    });
+    const ctx = context({}, { xaiRequest });
+    const pinned = session(ctx, "xai", "grok-pinned", "general");
+    const events: AppChannels["conversation"][] = [];
+    ctx.pubsub.subscribe("conversation", (event) => events.push(event));
+    const result = await createCaller(askRouter, ctx).ask({ question: "解释一下", sessionId: pinned.id, stream: true });
+    expect(result).toMatchObject({ ok: false, sessionStatus: "paused",
+      recovery: { retry: "unavailable_unknown_outcome" } });
+    expect(events.at(-1)).toMatchObject({ status: "failed", text: "半句话", error: expect.any(String) });
+    expect(events.some((event) => event.status === "completed")).toBe(false);
+    expect(xaiRequest).toHaveBeenCalledOnce();
+    expect(getAgentSession(ctx.paths.configDir, pinned.id)?.unknownOutcome).toBeTruthy();
+  });
+
+  it("keeps general Agent prompts scoped to conversation context", () => {
+    const prompt = buildAgentQuestionPrompt("帮我改写", 8, "general");
+    expect(prompt).toContain("Do not retrieve meeting records");
+    expect(prompt).not.toContain("recording_search");
+    expect(prompt).toContain("帮我改写");
   });
 
   it("searches and bounds locally before one exact pinned xAI request", async () => {

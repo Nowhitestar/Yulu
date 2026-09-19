@@ -35,6 +35,29 @@ def native_controls_binary(tmp_path_factory):
     source.write_text('''
 import Cocoa
 import YuluNativeRecording
+if CommandLine.arguments.contains("--voice-hold-self-test") {
+    var gesture = VoiceHoldGesture()
+    precondition(!gesture.release())
+    precondition(gesture.begin())
+    precondition(!gesture.begin()) // key repeat must not create another capture
+    precondition(!gesture.release()) // release before startup is queued
+    precondition(!gesture.release())
+    precondition(gesture.started()) // exactly one stop after startup
+    precondition(!gesture.started())
+    precondition(!gesture.release())
+    precondition(gesture.begin())
+    precondition(!gesture.started())
+    precondition(gesture.release()) // normal release stops immediately
+    precondition(!gesture.release())
+    precondition(gesture.begin())
+    precondition(!gesture.release())
+    gesture.cancel()
+    precondition(!gesture.started()) // canceled pending stop cannot restart
+    precondition(!gesture.release())
+    precondition(gesture.begin())
+    print("voice-hold-ok")
+    exit(0)
+}
 let app = NSApplication.shared
 let environment = try JSONDecoder().decode(
     [String: String].self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
@@ -93,6 +116,13 @@ app.run()
     )
     assert result.returncode == 0, result.stderr
     return binary
+
+
+def test_voice_hold_gesture_handles_early_release_repeat_and_cancel(native_controls_binary):
+    result = subprocess.run([str(native_controls_binary), "--voice-hold-self-test"],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "voice-hold-ok"
 
 
 def ipc(path: Path, action: str, **arguments) -> dict:
@@ -232,6 +262,15 @@ def test_second_native_owner_cannot_replace_a_live_control_socket(native_control
         if duplicate.poll() is None:
             duplicate.terminate()
             duplicate.communicate(timeout=5)
+
+
+def test_native_status_reports_its_own_input_permissions(running_controls):
+    _, socket_path, _, _ = running_controls
+    state = ipc(socket_path, "status")
+    # A CLI test process can inherit its terminal's access; report the owner's
+    # live checks rather than assuming the installed App has the same access.
+    assert isinstance(state["accessibility_trusted"], bool)
+    assert isinstance(state["event_posting_allowed"], bool)
 
 
 def test_notification_ipc_validates_events_without_impersonating_the_app(running_controls):

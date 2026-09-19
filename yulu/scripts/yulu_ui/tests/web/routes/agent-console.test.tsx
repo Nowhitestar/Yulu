@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
+import type { AppChannels } from "../../../src/pubsub.js";
 import { MemoryRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -26,6 +27,7 @@ let mockCalendars: Array<Record<string, unknown>> = [];
 let mockTasks: Array<Record<string, unknown>> = [];
 let mockDurableTasks: Array<Record<string, unknown>> = [];
 let mockConversationSelection: Record<string, unknown> = { provider: "agent", model: "runtime-managed" };
+let onConversation: ((reply: AppChannels["conversation"]) => void) | undefined;
 
 function taskFixture(overrides: Record<string, unknown> = {}) {
   const stages = overrides.stages as Record<string, unknown> | undefined;
@@ -60,7 +62,9 @@ vi.mock("react-router", async (orig) => {
 });
 
 vi.mock("../../../web/src/ws.js", () => ({
-  useWsChannel: () => {},
+  useWsChannel: (channel: string, callback: typeof onConversation) => {
+    if (channel === "conversation") onConversation = callback;
+  },
 }));
 
 vi.mock("../../../web/src/trpc.js", () => {
@@ -241,6 +245,7 @@ function wrap(initialEntries = ["/agent-console"], lang?: "zh" | "en") {
 }
 
 beforeEach(() => {
+  onConversation = undefined;
   localStorage.removeItem("yulu_ui.lang");
   localStorage.removeItem("yulu_ui.agent.history_height");
   navigateMock.mockClear();
@@ -362,6 +367,89 @@ describe("AgentConsole", () => {
     expect(createSessionMutateAsync).not.toHaveBeenCalled();
   });
 
+  it("creates a general question session without meeting references and pins its scope", async () => {
+    const { getByRole, queryByRole, getByLabelText, findByText } = wrap(["/voice-chat"]);
+    expect(getByRole("combobox", { name: "问答范围" })).toHaveValue("general");
+    expect(queryByRole("button", { name: "引用会议" })).toBeNull();
+    fireEvent.change(getByRole("textbox"), { target: { value: "解释一下光合作用" } });
+    fireEvent.click(getByLabelText("发送"));
+    await findByText("OK");
+    expect(createSessionMutateAsync).toHaveBeenCalledWith({ title: "解释一下光合作用", scope: "general" });
+    expect(getByRole("combobox", { name: "问答范围" })).toBeDisabled();
+  });
+
+  it("lets a new conversation explicitly choose meeting questions", () => {
+    const { getByRole } = wrap(["/voice-chat"]);
+    fireEvent.change(getByRole("combobox", { name: "问答范围" }), { target: { value: "meetings" } });
+    expect(getByRole("button", { name: "引用会议" })).toBeInTheDocument();
+    expect(getByRole("textbox")).toHaveAttribute("placeholder", "问会议记录、决策、行动项...");
+  });
+
+  it("shows remote streaming in the floating panel and ignores other conversations", async () => {
+    mockSelectedSession = {
+      id: "streaming-session", title: "问题", provider: "xai", model: "grok-pinned",
+      status: "active", scope: "general", pendingInvocation: { executionId: "e1" },
+      messages: [{ role: "user", text: "解释光合作用" }],
+    };
+    const { getByRole, queryByText, findByText } = wrap(["/voice-chat?session=streaming-session"]);
+    await findByText("解释光合作用");
+    act(() => onConversation?.({
+      sessionId: "another-session", executionId: "other", status: "streaming",
+      afterMessageCount: 1, text: "别的对话内容",
+    }));
+    expect(queryByText("别的对话内容")).toBeNull();
+    act(() => onConversation?.({
+      sessionId: "streaming-session", executionId: "e1", status: "streaming",
+      afterMessageCount: 1, text: "植物利用光能",
+    }));
+    expect(await findByText("植物利用光能")).toBeInTheDocument();
+    expect(getByRole("button", { name: "发送" })).toBeDisabled();
+    act(() => onConversation?.({
+      sessionId: "streaming-session", executionId: "e1", status: "failed",
+      afterMessageCount: 1, text: "植物利用光能", error: "回答未完成",
+    }));
+    expect(await findByText("回答未完成")).toBeInTheDocument();
+    expect(queryByText("植物利用光能")).toBeInTheDocument();
+    expect(askMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("unblocks the composer when stored history catches up after a missed terminal event", async () => {
+    mockSelectedSession = {
+      id: "reconnected", title: "问题", provider: "xai", model: "grok-pinned", scope: "general",
+      status: "active", pendingInvocation: { executionId: "e1" },
+      messages: [{ role: "user", text: "第一个问题" }],
+    };
+    const { getByRole, findByText, queryByText } = wrap(["/voice-chat?session=reconnected"]);
+    await findByText("第一个问题");
+    act(() => onConversation?.({ sessionId: "reconnected", executionId: "e1", status: "streaming",
+      afterMessageCount: 1, text: "尚未完成的片段" }));
+    expect(await findByText("尚未完成的片段")).toBeInTheDocument();
+    mockSelectedSession = { ...mockSelectedSession, pendingInvocation: undefined,
+      messages: [{ role: "user", text: "第一个问题" }, { role: "assistant", text: "已保存的完整回答" }] };
+    fireEvent.change(getByRole("textbox"), { target: { value: "继续问" } });
+    expect(await findByText("已保存的完整回答")).toBeInTheDocument();
+    expect(queryByText("尚未完成的片段")).toBeNull();
+    expect(getByRole("button", { name: "发送" })).toBeEnabled();
+  });
+
+  it("keeps an old answer in its original session after starting a new conversation", async () => {
+    let resolve!: (answer: Record<string, unknown>) => void;
+    askMutateAsync.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const { getByRole, getByLabelText, queryByText } = wrap();
+    fireEvent.change(getByRole("textbox"), { target: { value: "旧问题" } });
+    fireEvent.click(getByLabelText("发送"));
+    await waitFor(() => expect(askMutateAsync).toHaveBeenCalledOnce());
+    fireEvent.click(getByLabelText("新对话"));
+    fireEvent.change(getByRole("combobox", { name: "问答范围" }), { target: { value: "general" } });
+    await act(async () => resolve({ answer: "旧会话的答案", sources: [], llmStatus: "ok", sessionStatus: "active" }));
+    expect(queryByText("旧会话的答案")).toBeNull();
+    expect(getByRole("combobox", { name: "问答范围" })).toHaveValue("general");
+    expect(getByRole("textbox")).toHaveAttribute("placeholder", "说说你想问什么…");
+    expect(appendSessionMutateAsync).toHaveBeenLastCalledWith({
+      sessionId: "session-new", message: expect.objectContaining({ role: "assistant", text: "旧会话的答案" }),
+    });
+  });
+
   it("renders Ask Meeting answers as Markdown", async () => {
     askMutateAsync.mockResolvedValueOnce({
       answer: "**重点**\n\n- 行动项",
@@ -376,7 +464,7 @@ describe("AgentConsole", () => {
     await findByText("重点");
     expect(container.querySelector(".agent-message-text strong")).toHaveTextContent("重点");
     expect(container.querySelector(".agent-message-text li")).toHaveTextContent("行动项");
-    expect(createSessionMutateAsync).toHaveBeenCalledWith({ title: "总结一下" });
+    expect(createSessionMutateAsync).toHaveBeenCalledWith({ title: "总结一下", scope: "meetings" });
     expect(appendSessionMutateAsync).toHaveBeenCalledTimes(2);
   });
 
@@ -538,6 +626,7 @@ describe("AgentConsole", () => {
       question: "Retry this question",
       limit: 8,
       retry: true,
+      stream: true,
       sessionId: "session-paused",
     });
     expect(await findByText("Retry result")).toBeInTheDocument();
@@ -792,7 +881,7 @@ describe("AgentConsole", () => {
     fireEvent.change(getByPlaceholderText("问会议记录、决策、行动项..."), { target: { value: "新的问题" } });
     fireEvent.click(getByLabelText("发送"));
 
-    await waitFor(() => expect(createSessionMutateAsync).toHaveBeenCalledWith({ title: "新的问题" }));
-    expect(askMutateAsync).toHaveBeenCalledWith({ question: "新的问题", limit: 8, sessionId: "session-new" });
+    await waitFor(() => expect(createSessionMutateAsync).toHaveBeenCalledWith({ title: "新的问题", scope: "meetings" }));
+    expect(askMutateAsync).toHaveBeenCalledWith({ question: "新的问题", limit: 8, sessionId: "session-new", stream: true });
   });
 });

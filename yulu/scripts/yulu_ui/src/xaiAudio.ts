@@ -76,7 +76,13 @@ function xaiLanguage(language: TranscriptionLanguage): string | null {
   return language === "en" || language === "ja" ? language : null;
 }
 
-function realtimeUrl(language: TranscriptionLanguage): URL {
+function keyterms(glossary?: GlossaryContract): string[] {
+  return [...new Set((glossary?.prompt.split("，") ?? [])
+    .map((term) => term.trim())
+    .filter((term) => term.length > 0 && term.length <= 50))].slice(0, 100);
+}
+
+function realtimeUrl(language: TranscriptionLanguage, glossary?: GlossaryContract): URL {
   const url = new URL("wss://api.x.ai/v1/stt");
   url.searchParams.set("sample_rate", "16000");
   url.searchParams.set("encoding", "pcm");
@@ -86,6 +92,7 @@ function realtimeUrl(language: TranscriptionLanguage): URL {
   url.searchParams.set("channels", "2");
   const formattedLanguage = xaiLanguage(language);
   if (formattedLanguage) url.searchParams.set("language", formattedLanguage);
+  for (const term of keyterms(glossary)) url.searchParams.append("keyterm", term);
   return url;
 }
 
@@ -128,6 +135,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   private reconnectNotBeforeMs = 0;
   private reconnectDelayMs = REALTIME_RECONNECT_MIN_MS;
   private lastStreamingError: Error | null = null;
+  private lifecycleGeneration = 0;
 
   constructor(private readonly credentials: XaiCredentialManager) {}
 
@@ -139,8 +147,11 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     await this.credentials.resolve();
   }
 
-  async start(language: TranscriptionLanguage): Promise<void> {
-    await this.abort();
+  async start(language: TranscriptionLanguage, glossary?: GlossaryContract): Promise<void> {
+    const aborting = this.abort();
+    const generation = this.lifecycleGeneration;
+    await aborting;
+    if (generation !== this.lifecycleGeneration) throw new Error("xAI streaming STT was cancelled");
     this.partial.mic = "";
     this.partial.system = "";
     this.pendingStable.mic = [];
@@ -159,23 +170,27 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     this.replayChunks = [];
     this.replayBytes = 0;
 
-    const url = realtimeUrl(language);
+    const url = realtimeUrl(language, glossary);
     this.realtimeUrl = url;
 
     await this.connectRealtimeWithRetry(url);
   }
 
   private async connectRealtimeWithRetry(url: URL): Promise<boolean> {
+    const generation = this.lifecycleGeneration;
     if (Date.now() < this.reconnectNotBeforeMs) return false;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const credential = await this.credentials.resolve();
+        if (generation !== this.lifecycleGeneration) throw new Error("xAI streaming STT was cancelled");
         await this.connectRealtime(credential, url);
+        if (generation !== this.lifecycleGeneration) throw new Error("xAI streaming STT was cancelled");
         this.reconnectNotBeforeMs = 0;
         this.reconnectDelayMs = REALTIME_RECONNECT_MIN_MS;
         this.lastStreamingError = null;
         return true;
       } catch (error) {
+        if (generation !== this.lifecycleGeneration) throw error;
         this.disconnectSocket();
         if (!isRetryableRealtimeStartError(error)) throw error;
         if (attempt > 0) {
@@ -185,6 +200,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
           return false;
         }
         await new Promise<void>((resolve) => setTimeout(resolve, 200));
+        if (generation !== this.lifecycleGeneration) throw new Error("xAI streaming STT was cancelled");
       }
     }
     return false;
@@ -221,6 +237,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   }
 
   async feed(chunks: Partial<Record<CaptionSource, Buffer>>): Promise<StreamingCaptionUpdate> {
+    const generation = this.lifecycleGeneration;
     const pcm = interleaveStereo(chunks.mic, chunks.system);
     this.elapsedMs.mic += audioMs(chunks.mic);
     this.elapsedMs.system += audioMs(chunks.system);
@@ -236,10 +253,12 @@ export class XaiAudioClient implements StreamingCaptionEngine {
       this.socket!.send(pcm);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
+    if (generation !== this.lifecycleGeneration) throw new Error("xAI streaming STT was cancelled");
     return this.drain();
   }
 
   async finish(): Promise<StreamingCaptionUpdate> {
+    const generation = this.lifecycleGeneration;
     const socket = this.socket;
     if (!socket) {
       if (this.lastStreamingError) throw this.lastStreamingError;
@@ -248,17 +267,26 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "audio.done" }));
     try {
       await withTimeout(this.done!, 30_000, "xAI streaming STT finish timed out");
+      if (generation !== this.lifecycleGeneration) throw new Error("xAI streaming STT was cancelled");
       return this.drain();
     } finally {
       socket.close();
-      this.socket = null;
-      this.realtimeUrl = null;
-      this.replayChunks = [];
-      this.replayBytes = 0;
+      if (this.socket === socket) {
+        this.socket = null;
+        this.realtimeUrl = null;
+        this.replayChunks = [];
+        this.replayBytes = 0;
+      }
     }
   }
 
   async abort(): Promise<void> {
+    this.lifecycleGeneration += 1;
+    const error = new Error("xAI streaming STT was cancelled");
+    this.readyReject?.(error);
+    this.doneReject?.(error);
+    this.readyReject = null;
+    this.doneReject = null;
     this.disconnectSocket();
     this.realtimeUrl = null;
     this.replayChunks = [];
@@ -308,10 +336,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
             form.append("format", "true");
             form.append("language", formattedLanguage);
           }
-          for (const term of (glossary?.prompt.split("，") ?? [])
-            .map((item) => item.trim())
-            .filter((item) => item.length > 0 && item.length <= 50)
-            .slice(0, 100)) {
+          for (const term of keyterms(glossary)) {
             form.append("keyterm", term);
           }
           form.append("file", await openAsBlob(uploadPath, { type: "audio/flac" }), "audio.flac");
@@ -507,6 +532,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   }
 
   private async reconnectRealtime(): Promise<void> {
+    const generation = this.lifecycleGeneration;
     if (!this.realtimeUrl) throw new Error("xAI streaming STT session is not configured");
     if (Date.now() < this.reconnectNotBeforeMs) return;
     const replay = Buffer.concat(this.replayChunks);
@@ -517,6 +543,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     this.partial.mic = "";
     this.partial.system = "";
     if (!await this.connectRealtimeWithRetry(this.realtimeUrl)) return;
+    if (generation !== this.lifecycleGeneration) throw new Error("xAI streaming STT was cancelled");
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       throw new Error("xAI streaming STT reconnect did not open a session");
     }

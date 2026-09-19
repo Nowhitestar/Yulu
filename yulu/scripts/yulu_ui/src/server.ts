@@ -9,6 +9,8 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Readable } from "node:stream";
 import { appRouter } from "./routers/_app.js";
 import { ConfigManager } from "./config.js";
+import { DictationCleanupSchema, DictationTextService } from "./dictationText.js";
+import { hasCurrentXaiConversationDisclosure } from "./conversationDataDisclosure.js";
 import { LaunchctlClient } from "./launchctl.js";
 import { openDb } from "./db.js";
 import { appPubSub } from "./pubsub.js";
@@ -293,6 +295,7 @@ async function startLockedServer(
     localCaption,
     xaiAudio,
     () => hasCurrentXaiTranscriptionConsent(hostStore),
+    () => loadGlossaryContract(dbProxy.vocab),
   );
   const agentConnections = new AgentConnectionCenter({
     config: configManager,
@@ -549,8 +552,27 @@ async function startLockedServer(
     title: z.string().max(200).default(""),
     language: z.enum(["zh", "en", "ja", "auto"]),
     replaceActive: z.boolean().optional(),
+    timeoutMs: z.number().int().min(100).max(35_000).optional(),
   });
-  const RealtimeStopSchema = z.object({ audioPath: z.string().min(1) });
+  const dictationText = new DictationTextService({
+    config: configManager,
+    text: xaiText,
+    credentialSource: () => agentConnections.selectedXaiCredentialSource(),
+    hasDisclosure: () => hasCurrentXaiConversationDisclosure(hostStore),
+    glossary: () => loadGlossaryContract(dbProxy.vocab),
+  });
+  app.post("/api/dictation/cleanup", async (c) => {
+    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
+    const parsed = DictationCleanupSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ ok: false, error: "invalid_dictation_text" }, 400);
+    return c.json({ ok: true, ...await dictationText.clean(parsed.data) });
+  });
+  const RealtimeStopSchema = z.object({
+    audioPath: z.string().min(1),
+    timeoutMs: z.number().int().min(100).max(35_000).optional(),
+  });
   const RealtimeOptionsSchema = z.object({
     audioPath: z.string().min(1),
     targetLanguage: z.enum(["English", "日本語", "한국어", "Français", "Español", "Deutsch", "繁體中文"]),
@@ -574,9 +596,21 @@ async function startLockedServer(
     }
     try {
       const parsed = RealtimeStopSchema.parse(await c.req.json());
-      return c.json({ ok: true, result: await realtimeTranscription.stop(parsed.audioPath) });
+      return c.json({ ok: true, result: await realtimeTranscription.stop(parsed.audioPath, parsed.timeoutMs) });
     } catch (error) {
       return c.json({ ok: false, error: "realtime_stop_failed", detail: (error as Error).message }, 400);
+    }
+  });
+  app.post("/api/recordings/realtime/cancel", async (c) => {
+    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
+    try {
+      const parsed = RealtimeStopSchema.parse(await c.req.json());
+      await realtimeTranscription.cancel(parsed.audioPath);
+      return c.json({ ok: true });
+    } catch (error) {
+      return c.json({ ok: false, error: "realtime_cancel_failed", detail: (error as Error).message }, 400);
     }
   });
   app.post("/api/recordings/realtime/options", async (c) => {
@@ -634,6 +668,7 @@ async function startLockedServer(
     }
   });
 
+  const activeVoiceQuestions = new Set<string>();
   app.post("/api/voice-chat/ask", async (c) => {
     if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
       return c.json({ ok: false, error: "unauthorized" }, 401);
@@ -644,9 +679,15 @@ async function startLockedServer(
     } catch {
       return c.json({ ok: false, error: "invalid_json" }, 400);
     }
-    const input = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
-    const question = String(input.question ?? "").trim();
-    if (!question) return c.json({ ok: false, error: "question_required" }, 400);
+    const parsed = z.object({
+      question: z.string().trim().min(1).max(2_000),
+      sessionId: z.string().trim().min(1).max(200).optional(),
+      scope: z.enum(["general", "meetings"]).optional(),
+      defer: z.boolean().optional(),
+    }).strict().safeParse(body);
+    if (!parsed.success) return c.json({ ok: false, error: "invalid_voice_question" }, 400);
+    const input = parsed.data;
+    const question = input.question;
 
     const caller = createCaller(appRouter, { ...ctx, uiMutationAuthorized: true });
     const existingSessionId = typeof input.sessionId === "string" && input.sessionId.trim()
@@ -656,9 +697,16 @@ async function startLockedServer(
     let session;
     if (existingSessionId) {
       session = await caller.agentSessions.get({ id: existingSessionId });
+      if (!session || session.purpose !== "ask") return c.json({ ok: false, error: "session_unavailable" }, 404);
+      if (input.scope && input.scope !== session.scope) {
+        return c.json({ ok: false, error: "conversation_scope_changed", detail: "Start a new conversation to change its scope" }, 409);
+      }
     } else {
       try {
-        session = await caller.agentSessions.create({ title: question.slice(0, 48) });
+        session = await caller.agentSessions.create({
+          title: question.slice(0, 48),
+          scope: input.scope ?? configManager.read().transcription.dictation.voice_chat_scope,
+        });
       } catch (error) {
         const readinessError = error instanceof ConversationConnectionRequiredError
           ? error
@@ -677,17 +725,26 @@ async function startLockedServer(
     }
     const sessionId = String(session?.id ?? existingSessionId);
     if (!sessionId) return c.json({ ok: false, error: "session_unavailable" }, 500);
+    if (activeVoiceQuestions.has(sessionId) || session.status === "paused" || session.pendingInvocation || session.unknownOutcome) {
+      return c.json({ ok: false, error: "conversation_unavailable", detail: "Finish or resolve the current answer before asking again" }, 409);
+    }
 
-    await caller.agentSessions.append({ sessionId, message: { role: "user", text: question } });
+    activeVoiceQuestions.add(sessionId);
+    try {
+      await caller.agentSessions.append({ sessionId, message: { role: "user", text: question } });
+    } catch (error) {
+      activeVoiceQuestions.delete(sessionId);
+      throw error;
+    }
     const answerAndAppend = async () => {
       try {
-        const answer = await caller.ask.ask({ question, limit: 8, sessionId });
+        const answer = await caller.ask.ask({ question, limit: 8, sessionId, stream: true });
         const assistantMessage = {
           role: "assistant" as const,
           text: String(answer.answer ?? ""),
           sources: answer.sources,
           remoteSources: answer.remoteSources,
-          ...(answer.llmStatus === "error" && answer.llmError ? { error: String(answer.llmError) } : {}),
+          ...(answer.llmError ? { error: String(answer.llmError) } : {}),
         };
         await caller.agentSessions.append({ sessionId, message: assistantMessage });
         return {
@@ -701,6 +758,8 @@ async function startLockedServer(
           message: { role: "assistant", text: "", error: (exc as Error).message },
         });
         throw exc;
+      } finally {
+        activeVoiceQuestions.delete(sessionId);
       }
     };
     if (defer) {

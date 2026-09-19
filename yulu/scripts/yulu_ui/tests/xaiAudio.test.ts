@@ -17,6 +17,64 @@ afterEach(() => {
 });
 
 describe("XaiAudioClient", () => {
+  it("sends bounded glossary keyterms on the realtime connection", async () => {
+    const credentials = { resolve: vi.fn(async () => ({ accessToken: "test", source: "oauth" as const })) };
+    const client = new XaiAudioClient(credentials as never);
+    const connect = vi.spyOn(client as unknown as { connectRealtime(credential: unknown, url: URL): Promise<void> }, "connectRealtime")
+      .mockResolvedValue(undefined);
+    await client.start("zh", { prompt: `AgentKey，雨录，AgentKey，${"x".repeat(51)}`, replacements: [], summaryInstruction: "" });
+    expect(connect.mock.calls[0]![1].searchParams.getAll("keyterm")).toEqual(["AgentKey", "雨录"]);
+    await client.abort();
+  });
+
+  it("honors cancellation immediately after starting, before resolving credentials", async () => {
+    const credentials = { resolve: vi.fn(async () => ({ accessToken: "test", source: "oauth" as const })) };
+    const client = new XaiAudioClient(credentials as never);
+    const connect = vi.spyOn(client as unknown as { connectRealtime(credential: unknown, url: URL): Promise<void> }, "connectRealtime")
+      .mockResolvedValue(undefined);
+    const starting = client.start("zh");
+    const rejected = expect(starting).rejects.toThrow("cancelled");
+    await client.abort();
+    await rejected;
+    expect(credentials.resolve).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("does not open a late socket when credential resolution completes after cancellation", async () => {
+    let resolve!: (value: { accessToken: string; source: "oauth" }) => void;
+    const credentials = { resolve: vi.fn(() => new Promise((done) => { resolve = done; })) };
+    const client = new XaiAudioClient(credentials as never);
+    const connect = vi.spyOn(client as unknown as { connectRealtime(credential: unknown, url: URL): Promise<void> }, "connectRealtime")
+      .mockResolvedValue(undefined);
+    const starting = client.start("zh");
+    const rejected = expect(starting).rejects.toThrow("cancelled");
+    await Promise.resolve();
+    await client.abort();
+    resolve({ accessToken: "test", source: "oauth" });
+    await rejected;
+    expect(connect).not.toHaveBeenCalled();
+  });
+  it("does not let an old feed drain new-session transcript updates", async () => {
+    const credentials = { resolve: vi.fn(async () => ({ accessToken: "test", source: "oauth" as const })) };
+    const client = new XaiAudioClient(credentials as never);
+    const internal = client as unknown as {
+      connectRealtime(credential: unknown, url: URL): Promise<void>;
+      handleMessage(raw: string): void;
+    };
+    vi.spyOn(internal, "connectRealtime").mockResolvedValue(undefined);
+    await client.start("zh");
+    const oldFeed = client.feed({});
+    const rejected = expect(oldFeed).rejects.toThrow("cancelled");
+    await client.abort();
+    await client.start("zh");
+    internal.handleMessage(JSON.stringify({ type: "transcript.partial", channel_index: 0,
+      text: "新会话的完整文字", is_final: true, start: 0, duration: 1 }));
+    await rejected;
+    const fresh = await client.feed({});
+    expect(fresh.updates.mic?.stable[0]?.text).toBe("新会话的完整文字");
+    await client.abort();
+  });
+
   it("probes the production realtime handshake without sending user audio or disturbing an active stream", async () => {
     const credentials = {
       resolve: vi.fn(async () => ({ accessToken: "test-oauth-token", source: "oauth" as const })),

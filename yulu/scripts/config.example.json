@@ -54,6 +54,8 @@
     "language": "zh",
     "dictation": {
       "language": "zh",
+      "cleanup_enabled": true,
+      "voice_chat_scope": "general",
       "prompt_slug": "dictation-cleanup",
       "translate_prompt_slug": "dictation-translate",
       "target_language": "English",
@@ -62,7 +64,7 @@
       "timeout_sec": 30,
       "translate_deadline_sec": 30,
       "translate_timeout_sec": 30,
-      "note": "Yulu uses the selected transcription engine for dictation. Agent post-processing remains separate."
+      "note": "Cleanup uses the selected, authorized xAI conversation connection only for xAI dictation; local dictation stays on-device. Short text and failed cleanup retain the transcript."
     }
   },
   "intelligence": {
@@ -130,6 +132,7 @@
   "status_agent": {
     "enabled": true,
     "feedback_sounds": true,
+    "voice_input_mode": "toggle",
     "hotkeys": {
       "dictate": {"key": "Space", "modifiers": ["ctrl", "alt"]},
       "translate": {"key": "T", "modifiers": ["ctrl", "alt"], "target_language": "English"},

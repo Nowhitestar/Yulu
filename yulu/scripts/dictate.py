@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import wave
 from datetime import date, datetime
 from pathlib import Path
@@ -61,8 +62,10 @@ DEFAULT_HERMES_DEADLINE_SEC = 30.0
 DEFAULT_HERMES_TRANSLATE_TIMEOUT_SEC = 30.0
 DEFAULT_HERMES_TRANSLATE_DEADLINE_SEC = 30.0
 LEGACY_REALTIME_STOP_WAIT_SEC = 4.0
-REALTIME_START_TIMEOUT_SEC = 5.0
-REALTIME_STOP_TIMEOUT_SEC = 3.0
+REALTIME_OPERATION_TIMEOUT_MS = 4000
+# HTTP has room to receive the Host's bounded result after it has closed STT.
+REALTIME_START_TIMEOUT_SEC = 6.0
+REALTIME_STOP_TIMEOUT_SEC = 6.0
 FFMPEG_FALLBACKS = (
     Path("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"),
     Path("/opt/homebrew/bin/ffmpeg"),
@@ -87,7 +90,9 @@ class DictationNoSpeechError(DictationError):
 
 
 class DictationPasteError(DictationError):
-    pass
+    def __init__(self, message: str, *, copied: bool = False):
+        super().__init__(message)
+        self.copied = copied
 
 
 def dictation_error_payload(exc: Exception, *, audio_path: str = "") -> dict[str, Any]:
@@ -106,7 +111,7 @@ def dictation_error_payload(exc: Exception, *, audio_path: str = "") -> dict[str
         payload["audio_path"] = audio_path
         payload["audio_preserved"] = Path(audio_path).exists()
     if code == "paste_failed":
-        payload["copied"] = True
+        payload["copied"] = bool(getattr(exc, "copied", False))
     return payload
 
 
@@ -542,6 +547,14 @@ def append_history(result: dict[str, Any], *, history_path: Path | None = None) 
         "target_language": target_language,
         "copied": bool(result.get("copied")),
         "pasted": bool(result.get("pasted")),
+        "raw_text": str(result.get("raw_text") or text),
+        "cleanup_status": str(result.get("cleanup_status") or "unchanged"),
+        "cleanup_warning": str(result.get("cleanup_warning") or ""),
+        "transcription_mode": str(result.get("transcription_mode") or ""),
+        "paste_verified": bool(result.get("paste_verified")),
+        "post_stop_ms": int(result.get("post_stop_ms") or 0),
+        "stt_ms": int(result.get("stt_ms") or 0),
+        "postprocess_ms": int(result.get("postprocess_ms") or 0),
     }
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with history_path.open("a", encoding="utf-8") as fh:
@@ -629,8 +642,6 @@ def _host_agent_request(path: str, payload: dict[str, Any], *, timeout_sec: floa
 
 
 def start_realtime_dictation(state: dict[str, Any]) -> None:
-    if state.get("intent") != "dictation" or state.get("target_language"):
-        return
     try:
         _host_agent_request(
             "/api/recordings/realtime/start",
@@ -639,6 +650,7 @@ def start_realtime_dictation(state: dict[str, Any]) -> None:
                 "title": "Dictation",
                 "language": state["language"],
                 "replaceActive": False,
+                "timeoutMs": REALTIME_OPERATION_TIMEOUT_MS,
             },
             timeout_sec=REALTIME_START_TIMEOUT_SEC,
         )
@@ -646,6 +658,20 @@ def start_realtime_dictation(state: dict[str, Any]) -> None:
     except DictationError as exc:
         state["realtime_started"] = False
         state["realtime_error"] = str(exc)
+        cancel_realtime_dictation(state)
+
+
+def cancel_realtime_dictation(state: dict[str, Any]) -> None:
+    if not state.get("audio_path"):
+        return
+    try:
+        _host_agent_request(
+            "/api/recordings/realtime/cancel",
+            {"audioPath": state["audio_path"]},
+            timeout_sec=2.0,
+        )
+    except DictationError:
+        pass
 
 
 def stop_realtime_dictation(state: dict[str, Any], *, timeout_sec: float = REALTIME_STOP_TIMEOUT_SEC) -> None:
@@ -655,7 +681,10 @@ def stop_realtime_dictation(state: dict[str, Any], *, timeout_sec: float = REALT
     try:
         payload = _host_agent_request(
             "/api/recordings/realtime/stop",
-            {"audioPath": state["audio_path"]},
+            {
+                "audioPath": state["audio_path"],
+                "timeoutMs": min(REALTIME_OPERATION_TIMEOUT_MS, max(100, int(timeout_sec * 1000) - 1000)),
+            },
             timeout_sec=timeout_sec,
         )
         result = payload.get("result")
@@ -671,6 +700,7 @@ def stop_realtime_dictation(state: dict[str, Any], *, timeout_sec: float = REALT
             state["realtime_error"] = str(reason or "untrusted realtime transcript")
     except DictationError as exc:
         state["realtime_error"] = str(exc)
+        cancel_realtime_dictation(state)
     finally:
         state["realtime_stop_ms"] = int((time.monotonic() - started) * 1000)
 
@@ -962,6 +992,8 @@ def start_recording(
     intent: str = "dictation",
     target_bundle_id: str = "",
     target_app_name: str = "",
+    voice_session_id: str = "",
+    voice_scope: str = "general",
 ) -> dict[str, Any]:
     migrate_legacy_dictation_media(
         manifest_path=LEGACY_MEDIA_MIGRATION_MANIFEST_PATH,
@@ -985,6 +1017,7 @@ def start_recording(
         raise DictationError(f"dictation start failed: {resp}")
     state = {
         "audio_path": resp["file"],
+        "session_id": uuid.uuid4().hex,
         "engine": engine,
         "language": language,
         "prompt_slug": prompt_slug,
@@ -994,6 +1027,9 @@ def start_recording(
         "started_at": _now(),
         "realtime_starting": True,
     }
+    if intent == "voice_chat":
+        state["voice_chat_session_id"] = voice_session_id
+        state["voice_chat_scope"] = voice_scope
     if capture_target:
         if target_bundle_id or target_app_name:
             state.update({
@@ -1013,7 +1049,8 @@ def start_recording(
         start_realtime_dictation(state)
     finally:
         state["realtime_starting"] = False
-        _write_json(STATE_PATH, state)
+        if _state().get("session_id") == state["session_id"]:
+            _write_json(STATE_PATH, state)
     return state
 
 
@@ -1064,8 +1101,7 @@ def cancel_recording() -> dict[str, Any]:
         audio_path = str(resp.get("file") or active_file or audio_path)
 
     cleanup_legacy_realtime_sidecar(wait=False)
-    state = wait_for_realtime_start(state)
-    stop_realtime_dictation(state, timeout_sec=1.0)
+    cancel_realtime_dictation(state)
     result = {
         "text": "",
         "action": "cancel",
@@ -1242,11 +1278,14 @@ def prepare_dictation_audio(audio_path: str) -> tuple[str, Path | None]:
 
 
 def normalize_text(text: str) -> str:
-    text = " ".join(text.split()).strip()
-    text = re.sub(fr"(?<=[{CJK_CHAR_RE}])\s+(?=[{CJK_CHAR_RE}])", "", text)
-    text = re.sub(fr"\s+([{re.escape(CJK_PUNCT_RE)}])", r"\1", text)
-    text = re.sub(fr"([{re.escape(CJK_PUNCT_RE)}])\s+(?=[{CJK_CHAR_RE}])", r"\1", text)
-    return text.strip()
+    lines = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = " ".join(line.split())
+        line = re.sub(fr"(?<=[{CJK_CHAR_RE}])[^\S\n]+(?=[{CJK_CHAR_RE}])", "", line)
+        line = re.sub(fr"[^\S\n]+([{re.escape(CJK_PUNCT_RE)}])", r"\1", line)
+        line = re.sub(fr"([{re.escape(CJK_PUNCT_RE)}])[^\S\n]+(?=[{CJK_CHAR_RE}])", r"\1", line)
+        lines.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 def translation_not_needed(text: str, target_language: str) -> bool:
@@ -1254,6 +1293,20 @@ def translation_not_needed(text: str, target_language: str) -> bool:
     if target not in {"", "en", "eng", "english", "en-us", "en-gb"}:
         return False
     return bool(re.search(r"[A-Za-z]", text)) and not re.search(fr"[{CJK_CHAR_RE}]", text)
+
+
+def cleanup_dictation_text(*, text: str, context: str, timeout_sec: float) -> dict[str, Any]:
+    if timeout_sec < 0.5:
+        return {"text": text, "status": "unchanged", "warning": "听写整理超时；已保留原文。"}
+    timeout_ms = min(8000, max(100, int((timeout_sec - 0.3) * 1000)))
+    try:
+        return _host_agent_request(
+            "/api/dictation/cleanup",
+            {"text": text, "context": context[:4000], "timeoutMs": timeout_ms},
+            timeout_sec=min(timeout_sec, timeout_ms / 1000 + 0.3),
+        )
+    except DictationError:
+        return {"text": text, "status": "unchanged", "warning": "听写整理未完成；已保留原文。"}
 
 
 def _agent_command(config: dict[str, Any]) -> list[str]:
@@ -1429,6 +1482,10 @@ def paste_current_clipboard(*, text: str = "", target_bundle_id: str = "", targe
     if resp:
         if resp.get("ok"):
             return resp
+        if resp.get("error") == "accessibility_not_trusted":
+            # The native owner has already preserved the text. Another sender
+            # cannot repair its permission; do not retry through System Events.
+            return resp
         if resp.get("error") == "target_not_front":
             front = resp.get("front_app_name") or resp.get("front_bundle_id") or "unknown"
             if front != "loginwindow" or not current_frontmost_matches(
@@ -1461,11 +1518,14 @@ def write_current_text(*, text: str, target_bundle_id: str = "", target_app_name
         target_app_name=target_app_name,
     )
     result = {
-        "pasted": True,
+        "pasted": resp.get("verified") is True,
+        "paste_dispatched": bool(resp.get("dispatched", resp.get("ok") is True)),
+        "copied": bool(resp.get("copied", True)),
         "paste_method": str(resp.get("method") or ""),
     }
-    if "verified" in resp:
-        result["paste_verified"] = bool(resp["verified"])
+    result["paste_verified"] = resp.get("verified") is True
+    if resp.get("error") == "accessibility_not_trusted":
+        result["error_code"] = "accessibility_not_trusted"
     if resp.get("accessibility_error"):
         result["accessibility_error"] = str(resp["accessibility_error"])
     return result
@@ -1478,7 +1538,7 @@ def open_voice_chat_url(url: str) -> None:
     except DictationError:
         pass
     subprocess.run(
-        ["open", url],
+        ["open", "-g", url],
         check=False,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -1524,6 +1584,7 @@ def send_voice_chat(
     session_id: str = "",
     base_url: str = DEFAULT_UI_BASE_URL,
     open_console: bool = True,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     host_origin = _validated_voice_chat_origin(base_url)
     token_doc = _host_token_document()
@@ -1531,6 +1592,10 @@ def send_voice_chat(
     if not token:
         raise DictationError("Yulu Host token is unavailable")
     payload = {"question": question, "defer": True}
+    if scope is not None:
+        if scope not in {"general", "meetings"}:
+            raise DictationError("invalid voice chat scope")
+        payload["scope"] = scope
     if session_id:
         payload["sessionId"] = session_id
     data = json.dumps(payload).encode("utf-8")
@@ -1545,7 +1610,7 @@ def send_voice_chat(
         method="POST",
     )
     try:
-        with _open_host_request_without_redirects(req, timeout=125) as resp:
+        with _open_host_request_without_redirects(req, timeout=10) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
@@ -1600,7 +1665,7 @@ def process_audio(
     )
     t1 = time.monotonic()
     realtime_result = state.get("realtime_result")
-    if not target_language and isinstance(realtime_result, dict):
+    if isinstance(realtime_result, dict):
         audio_path = Path(str(state["audio_path"]))
         audio_ms = _wav_duration_ms(audio_path)
         response = {
@@ -1633,6 +1698,20 @@ def process_audio(
     if not text:
         raise DictationNoSpeechError("empty dictation result")
     postprocess_ms = 0
+    cleanup_status = "unchanged"
+    cleanup_warning = ""
+    if (not target_language and engine == "xai" and prompt_slug != "none"
+            and state.get("intent") != "voice_chat"):
+        postprocess_t0 = time.monotonic()
+        cleanup = cleanup_dictation_text(
+            text=text, context=context, timeout_sec=timeout_sec - (time.monotonic() - t0),
+        )
+        cleaned = str(cleanup.get("text") or "").strip()
+        if cleaned:
+            text = cleaned
+        cleanup_status = str(cleanup.get("status") or "unchanged")
+        cleanup_warning = str(cleanup.get("warning") or "")
+        postprocess_ms = int((time.monotonic() - postprocess_t0) * 1000)
     if target_language and not translation_not_needed(text, target_language):
         postprocess_t0 = time.monotonic()
         text = postprocess_translation(
@@ -1643,9 +1722,14 @@ def process_audio(
         )
         postprocess_ms = int((time.monotonic() - postprocess_t0) * 1000)
     copy_ms = 0
-    if copy or paste:
+    write_result: dict[str, Any] = {"pasted": False, "copied": False}
+    if copy and not paste:
         copy_t0 = time.monotonic()
-        copy_to_clipboard(text)
+        try:
+            copy_to_clipboard(text)
+            write_result["copied"] = True
+        except Exception as exc:
+            write_result.update({"error_code": "copy_failed", "paste_error": str(exc)})
         copy_ms = int((time.monotonic() - copy_t0) * 1000)
     paste_ms = 0
     if paste:
@@ -1657,13 +1741,25 @@ def process_audio(
                 target_app_name=str(state.get("target_app_name") or ""),
             )
         except Exception as exc:
-            raise DictationPasteError(str(exc)) from exc
+            copied = False
+            try:
+                copy_to_clipboard(text)
+                copied = True
+            except Exception:
+                pass
+            # Transcription succeeded. Preserve its text/history even when the
+            # destination or clipboard fails, so the native panel can recover it.
+            write_result = {
+                "pasted": False, "copied": copied, "paste_verified": False,
+                "paste_dispatched": False, "error_code": "paste_failed", "paste_error": str(exc),
+            }
         paste_ms = int((time.monotonic() - paste_t0) * 1000)
-    else:
-        write_result = {"pasted": False}
     t2 = time.monotonic()
     result = {
         "text": text,
+        "raw_text": raw_text,
+        "cleanup_status": cleanup_status,
+        "cleanup_warning": cleanup_warning,
         "audio_path": state["audio_path"],
         "engine": response.get("engine_used") or engine,
         "transcription_provider": response.get("provider") or response.get("engine_used") or engine,
@@ -1672,8 +1768,8 @@ def process_audio(
         "prompt_slug": prompt_slug,
         "prompt_id": prompt_id,
         "target_language": target_language,
-        "copied": bool(copy or paste),
-        "pasted": bool(paste),
+        "copied": False,
+        "pasted": False,
         "context_ms": int((t1 - t0) * 1000),
         "prepare_ms": int(response.get("prepare_ms") or 0),
         "stt_ms": int(response.get("stt_ms") or 0),
@@ -1831,6 +1927,9 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         previous_voice_session_id = str(stored_state.get("voice_chat_session_id") or "") if args.cmd in ("ask", "ask-toggle") else ""
+        voice_scope = str(dict_cfg.get("voice_chat_scope") or "general")
+        if stored_state.get("voice_chat_scope", "meetings") != voice_scope:
+            previous_voice_session_id = ""
         active_state = active_dictation_state() if args.cmd in ("toggle", "ask-toggle") else None
         toggle_stops = active_state is not None
         if args.cmd == "ask-toggle" and toggle_stops and str(active_state.get("intent") or "dictation") != "voice_chat":
@@ -1846,6 +1945,8 @@ def main(argv: list[str] | None = None) -> int:
                 silence_seconds=args.silence_seconds,
                 capture_target=not args.no_paste,
                 intent="voice_chat" if args.cmd == "ask-toggle" else "dictation",
+                voice_session_id=getattr(args, "session_id", "") or previous_voice_session_id,
+                voice_scope=voice_scope,
                 target_bundle_id=args.target_bundle_id,
                 target_app_name=args.target_app_name,
             )
@@ -1864,6 +1965,8 @@ def main(argv: list[str] | None = None) -> int:
                 silence_seconds=args.silence_seconds,
                 capture_target=not args.no_paste,
                 intent="voice_chat" if args.cmd == "ask" else "dictation",
+                voice_session_id=getattr(args, "session_id", "") or previous_voice_session_id,
+                voice_scope=voice_scope,
                 target_bundle_id=args.target_bundle_id,
                 target_app_name=args.target_app_name,
             )
@@ -1919,10 +2022,12 @@ def main(argv: list[str] | None = None) -> int:
                 session_id=args.session_id or previous_voice_session_id,
                 base_url=args.ui_url,
                 open_console=not args.no_open,
+                scope=voice_scope,
             )
         next_state: dict[str, Any] = {"last_result": result, "updated_at": _now()}
         if args.cmd in ("ask", "ask-toggle"):
             next_state["voice_chat_session_id"] = str(result["chat"].get("sessionId") or previous_voice_session_id)
+            next_state["voice_chat_scope"] = voice_scope
         _write_json(STATE_PATH, next_state)
         _print(result, as_json=args.json)
         return 0

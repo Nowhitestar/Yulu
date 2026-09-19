@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AudioTranscriptionService } from "../src/audioTranscription.js";
+import { buildGlossaryContract } from "../src/glossaryContract.js";
 
 function setup(engine: "local" | "xai", xaiConsent = true) {
   const configValue = { transcription: { engine } };
@@ -34,11 +35,19 @@ function setup(engine: "local" | "xai", xaiConsent = true) {
     local as never,
     xai as never,
     () => xaiConsent,
+    () => buildGlossaryContract([{ term: "Agent Key", canonical: "AgentKey", scope: "both" }]),
   );
   return { configValue, local, xai, service };
 }
 
 describe("AudioTranscriptionService", () => {
+  it("includes the live glossary in selected xAI realtime sessions", async () => {
+    const { xai, service } = setup("xai");
+    await service.start("zh");
+    expect(xai.start).toHaveBeenCalledWith("zh", expect.objectContaining({ prompt: "AgentKey" }));
+    await service.abort();
+  });
+
   it("rejects realtime and final xAI audio processing without current disclosure consent", async () => {
     const { local, xai, service } = setup("xai", false);
 
