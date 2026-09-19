@@ -760,6 +760,35 @@ struct HotkeySpec {
     let modifierMask: UInt32
     let label: String
     let targetLanguage: String
+    var inputMode: String = "toggle"
+}
+
+/// Release may arrive before Capture confirms startup. It must request one
+/// stop after confirmation, never toggle a new recording into existence.
+public struct VoiceHoldGesture {
+    private enum Phase { case idle, starting, recording, releasePending }
+    private var phase: Phase = .idle
+    public init() {}
+    public mutating func begin() -> Bool {
+        guard phase == .idle else { return false }
+        phase = .starting
+        return true
+    }
+    public mutating func release() -> Bool {
+        switch phase {
+        case .starting: phase = .releasePending; return false
+        case .recording: phase = .idle; return true
+        case .idle, .releasePending: return false
+        }
+    }
+    public mutating func started() -> Bool {
+        switch phase {
+        case .releasePending: phase = .idle; return true
+        case .starting: phase = .recording; return false
+        case .idle, .recording: return false
+        }
+    }
+    public mutating func cancel() { phase = .idle }
 }
 
 func menuKeyEquivalent(for label: String) -> String {
@@ -832,7 +861,8 @@ func readHotkeysFromConfig() -> [HotkeySpec] {
             keyCode: keyCode,
             modifierMask: modifierMask,
             label: label,
-            targetLanguage: (item["targetLanguage"] as? String) ?? ""
+            targetLanguage: (item["targetLanguage"] as? String) ?? "",
+            inputMode: (item["inputMode"] as? String) == "hold" ? "hold" : "toggle"
         )
     }
     return parsed.isEmpty ? defaultHotkeySpecs() : parsed
@@ -841,7 +871,8 @@ func readHotkeysFromConfig() -> [HotkeySpec] {
 class HotkeyRegistrar {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
-    private var onTrigger: (() -> Void)?
+    private var onTrigger: ((Bool) -> Void)?
+    private var pressed = false
     private let id: UInt32
 
     static let signature: OSType = 0x59556C75
@@ -850,11 +881,14 @@ class HotkeyRegistrar {
         self.id = id
     }
 
-    func register(keyCode: UInt32, modifierMask: UInt32, _ trigger: @escaping () -> Void) -> Bool {
+    func register(keyCode: UInt32, modifierMask: UInt32, _ trigger: @escaping (Bool) -> Void) -> Bool {
         unregister()
         onTrigger = trigger
         let hotKeyID = EventHotKeyID(signature: HotkeyRegistrar.signature, id: id)
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        var specs = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+        ]
         let handler: EventHandlerUPP = { (_, event, userData) -> OSStatus in
             guard let userData = userData else { return OSStatus(eventNotHandledErr) }
             let me = Unmanaged<HotkeyRegistrar>.fromOpaque(userData).takeUnretainedValue()
@@ -873,11 +907,16 @@ class HotkeyRegistrar {
                   hotKeyID.id == me.id else {
                 return OSStatus(eventNotHandledErr)
             }
-            DispatchQueue.main.async { me.onTrigger?() }
+            let down = GetEventKind(event) == UInt32(kEventHotKeyPressed)
+            DispatchQueue.main.async {
+                guard me.pressed != down else { return }
+                me.pressed = down
+                me.onTrigger?(down)
+            }
             return noErr
         }
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        let installStatus = InstallEventHandler(GetApplicationEventTarget(), handler, 1, &spec, selfPtr, &handlerRef)
+        let installStatus = InstallEventHandler(GetApplicationEventTarget(), handler, specs.count, &specs, selfPtr, &handlerRef)
         if installStatus != noErr {
             log("⚠️ InstallEventHandler failed: \(installStatus)")
             return false
@@ -892,6 +931,7 @@ class HotkeyRegistrar {
     }
 
     func unregister() {
+        pressed = false
         if let ref = hotKeyRef {
             UnregisterEventHotKey(ref)
             hotKeyRef = nil
@@ -904,10 +944,16 @@ class HotkeyRegistrar {
 }
 
 enum VoiceOverlayAnimationMode {
-    case none, recording, processing, success
+    case none, recording, processing, success, recovery
 }
 
 class VoiceWaveView: NSView {
+    // Match the blue gradient in assets/logo.svg rather than the system accent.
+    private let brandHighlight = NSColor(srgbRed: 96.0 / 255, green: 170.0 / 255, blue: 243.0 / 255, alpha: 1)
+    private let brandBase = NSColor(srgbRed: 44.0 / 255, green: 93.0 / 255, blue: 189.0 / 255, alpha: 1)
+    private var isDarkAppearance: Bool {
+        effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    }
     private var tick = 0
     private var timer: Timer?
     var mode: VoiceOverlayAnimationMode = .recording {
@@ -942,7 +988,13 @@ class VoiceWaveView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         if mode == .none { return }
-        let electricBlue = NSColor(calibratedRed: 0.15, green: 0.67, blue: 1.0, alpha: 1)
+        let accent = isDarkAppearance ? brandHighlight : brandBase
+        if mode == .recovery {
+            let image = NSImage(systemSymbolName: "text.bubble", accessibilityDescription: nil)
+            image?.withSymbolConfiguration(.init(paletteColors: [.secondaryLabelColor]))?
+                .draw(in: bounds.insetBy(dx: 3, dy: 3))
+            return
+        }
         if mode == .success {
             NSColor(calibratedRed: 0.25, green: 0.86, blue: 0.63, alpha: 1).setStroke()
             let check = NSBezierPath()
@@ -956,7 +1008,7 @@ class VoiceWaveView: NSView {
             return
         }
         if mode == .processing {
-            electricBlue.setStroke()
+            accent.setStroke()
             let ring = NSBezierPath()
             ring.lineWidth = 2.2
             ring.lineCapStyle = .round
@@ -970,34 +1022,36 @@ class VoiceWaveView: NSView {
             ring.stroke()
             return
         }
-        let bars = 5
+        drawCyberWave()
+    }
+
+    private func drawCyberWave() {
+        let base = isDarkAppearance
+            ? brandBase.blended(withFraction: 0.28, of: brandHighlight) ?? brandBase
+            : brandBase
+        let bars = 11
         let gap: CGFloat = 2
         let width: CGFloat = 3
         let total = CGFloat(bars) * width + CGFloat(bars - 1) * gap
         let startX = (bounds.width - total) / 2
-        let shapes: [CGFloat] = [0.42, 0.78, 1, 0.68, 0.32]
-        let amplitude = max(0.40, min(1, level))
+        let shapes: [CGFloat] = [0.28, 0.48, 0.72, 0.44, 0.85, 1, 0.62, 0.88, 0.56, 0.38, 0.22]
+        let amplitude = max(0, min(1, level))
         NSGraphicsContext.saveGraphicsState()
-        let glow = NSShadow()
-        glow.shadowColor = electricBlue.withAlphaComponent(0.58)
-        glow.shadowBlurRadius = 5
-        glow.set()
-        electricBlue.setFill()
         for i in 0..<bars {
-            let height = 4 + 16 * amplitude * shapes[i]
+            let color = brandHighlight.blended(withFraction: CGFloat(i) / CGFloat(bars - 1), of: base) ?? base
+            let height = 2 + (bounds.height - 8) * amplitude * shapes[i]
             let x = startX + CGFloat(i) * (width + gap)
             let y = (bounds.height - height) / 2
-            let slash = min(1.5, height / 3)
-            let bar = NSBezierPath()
-            bar.move(to: NSPoint(x: x, y: y + slash))
-            bar.line(to: NSPoint(x: x + width, y: y))
-            bar.line(to: NSPoint(x: x + width, y: y + height - slash))
-            bar.line(to: NSPoint(x: x, y: y + height))
-            bar.close()
-            bar.fill()
+            let glow = NSShadow()
+            glow.shadowColor = color.withAlphaComponent(amplitude * 0.48)
+            glow.shadowBlurRadius = 4
+            glow.shadowOffset = .zero
+            glow.set()
+            color.withAlphaComponent(0.45 + amplitude * 0.55).setFill()
+            for offset in stride(from: CGFloat(0), to: height, by: 3) {
+                NSBezierPath(rect: NSRect(x: x, y: y + offset, width: width, height: min(2, height - offset))).fill()
+            }
         }
-        electricBlue.withAlphaComponent(0.78).setFill()
-        NSBezierPath(rect: NSRect(x: startX - 1, y: bounds.midY - 0.5, width: total + 2, height: 1)).fill()
         NSGraphicsContext.restoreGraphicsState()
     }
 }
@@ -1026,13 +1080,13 @@ class VoiceOverlayContainerView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let capsule = NSBezierPath(
             roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
-            xRadius: 17.5,
-            yRadius: 17.5
+            xRadius: 19.5,
+            yRadius: 19.5
         )
-        NSColor(calibratedRed: 0.055, green: 0.10, blue: 0.15, alpha: 0.97).setFill()
+        NSColor.windowBackgroundColor.withAlphaComponent(0.98).setFill()
         capsule.fill()
         capsule.lineWidth = 1
-        NSColor(calibratedRed: 0.20, green: 0.39, blue: 0.53, alpha: 0.72).setStroke()
+        NSColor.labelColor.withAlphaComponent(0.10).setStroke()
         capsule.stroke()
     }
 
@@ -1040,17 +1094,118 @@ class VoiceOverlayContainerView: NSView {
         wantsLayer = true
         guard let layer = layer else { return }
         layer.backgroundColor = NSColor.clear.cgColor
-        layer.cornerRadius = 18
+        layer.cornerRadius = 20
         layer.borderWidth = 0
-        let isRecording = mode == .recording
-        layer.shadowColor = isRecording
-            ? NSColor(calibratedRed: 0.15, green: 0.67, blue: 1.0, alpha: 1).cgColor
-            : NSColor.black.cgColor
-        layer.shadowOpacity = isRecording ? 0.18 : 0.28
-        layer.shadowRadius = isRecording ? 12 : 14
-        layer.shadowOffset = NSSize(width: 0, height: isRecording ? 2 : 5)
+        layer.shadowOpacity = 0 // The nonactivating panel supplies its native shadow.
     }
 
+}
+
+/// One quiet status row while capturing; a recoverable text card when insertion
+/// cannot be confirmed. It never takes keyboard focus from the destination app.
+class VoiceOverlayContentView: VoiceOverlayContainerView {
+    let statusLabel = NSTextField(labelWithString: "")
+    let hintLabel = NSTextField(labelWithString: "")
+    let transcriptLabel = NSTextField(wrappingLabelWithString: "")
+    let waveView = VoiceWaveView()
+    let stopButton = NSButton()
+    let cancelButton = NSButton()
+    let copyButton = NSButton()
+    let permissionButton = NSButton()
+    private var transcriptHeight: CGFloat = 0
+    override var isFlipped: Bool { true }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        statusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        statusLabel.textColor = .labelColor
+        hintLabel.font = .systemFont(ofSize: 11)
+        hintLabel.textColor = .secondaryLabelColor
+        for label in [statusLabel, hintLabel] {
+            label.lineBreakMode = .byTruncatingTail
+            label.maximumNumberOfLines = 1
+        }
+        transcriptLabel.font = .systemFont(ofSize: 13)
+        transcriptLabel.textColor = .labelColor
+        transcriptLabel.maximumNumberOfLines = 4
+        transcriptLabel.lineBreakMode = .byWordWrapping
+        transcriptLabel.cell?.wraps = true
+        transcriptLabel.cell?.truncatesLastVisibleLine = true
+        for (button, symbol) in [(stopButton, "stop.fill"), (cancelButton, "xmark")] {
+            button.isBordered = false
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            button.imagePosition = .imageOnly
+            button.contentTintColor = .secondaryLabelColor
+            button.wantsLayer = true
+            button.layer?.cornerRadius = 10
+        }
+        stopButton.contentTintColor = .labelColor
+        stopButton.setAccessibilityLabel(L("结束录音", "Finish recording"))
+        stopButton.toolTip = L("结束录音", "Finish recording")
+        copyButton.title = L("复制文字", "Copy text")
+        copyButton.bezelStyle = .rounded
+        copyButton.font = .systemFont(ofSize: 12, weight: .medium)
+        copyButton.setAccessibilityLabel(copyButton.title)
+        permissionButton.title = L("开启输入权限", "Enable input access")
+        permissionButton.bezelStyle = .rounded
+        permissionButton.font = .systemFont(ofSize: 12, weight: .medium)
+        for view in [waveView, statusLabel, hintLabel, transcriptLabel, stopButton, cancelButton, copyButton, permissionButton] {
+            addSubview(view)
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(title: String, hint: String, mode: VoiceOverlayAnimationMode, transcript: String = "", needsInputAccess: Bool = false) -> NSSize {
+        self.mode = mode
+        statusLabel.stringValue = title
+        hintLabel.stringValue = hint
+        transcriptLabel.stringValue = transcript
+        waveView.mode = mode
+        waveView.isHidden = mode == .none
+        let recovery = mode == .recovery
+        stopButton.isHidden = mode != .recording
+        cancelButton.isHidden = mode == .success || mode == .none
+        cancelButton.toolTip = recovery ? L("关闭", "Dismiss") : L("取消录音", "Cancel recording")
+        cancelButton.setAccessibilityLabel(cancelButton.toolTip)
+        copyButton.isHidden = !recovery
+        copyButton.title = L("复制文字", "Copy text")
+        permissionButton.isHidden = !recovery || !needsInputAccess
+        transcriptLabel.isHidden = !recovery
+        let quiet = mode == .success || mode == .none
+        let width: CGFloat = recovery ? 360 : quiet
+            ? min(380, max(140, ceil(statusLabel.intrinsicContentSize.width + (mode == .none ? 36 : 66))))
+            : min(380, max(mode == .recording ? 300 : 256,
+                           ceil(statusLabel.intrinsicContentSize.width + (mode == .recording ? 182 : 142))))
+        if recovery {
+            let measured = (transcript as NSString).boundingRect(
+                with: NSSize(width: width - 32, height: 500),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: transcriptLabel.font!])
+            transcriptHeight = min(76, max(20, ceil(measured.height) + 4))
+        } else { transcriptHeight = 0 }
+        needsLayout = true
+        return NSSize(width: width, height: recovery ? 108 + transcriptHeight : quiet ? 44 : 60)
+    }
+
+    override func layout() {
+        super.layout()
+        let right = bounds.width - 14
+        let rowHeight: CGFloat = mode == .success || mode == .none ? 44 : 60
+        waveView.frame = mode == .recording
+            ? NSRect(x: 14, y: (rowHeight - 32) / 2, width: 64, height: 32)
+            : NSRect(x: 15, y: (rowHeight - 26) / 2, width: 26, height: 26)
+        cancelButton.frame = NSRect(x: right - 28, y: 16, width: 28, height: 28)
+        stopButton.frame = NSRect(x: right - 64, y: 14, width: 32, height: 32)
+        stopButton.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+        let textEnd = stopButton.isHidden ? (cancelButton.isHidden ? right : right - 36) : right - 72
+        let textStart: CGFloat = waveView.isHidden ? 18 : mode == .recording ? 90 : 50
+        statusLabel.frame = NSRect(x: textStart, y: hintLabel.stringValue.isEmpty ? (rowHeight - 19) / 2 : 13, width: textEnd - textStart, height: 19)
+        hintLabel.frame = NSRect(x: textStart, y: 33, width: textEnd - textStart, height: 16)
+        transcriptLabel.frame = NSRect(x: 16, y: 61, width: bounds.width - 32, height: transcriptHeight)
+        copyButton.frame = NSRect(x: bounds.width - 112, y: bounds.height - 40, width: 96, height: 28)
+        permissionButton.frame = NSRect(x: 16, y: bounds.height - 40, width: 152, height: 28)
+    }
 }
 
 // Enumerate the recordings directory directly off disk (no Python, no
@@ -1416,25 +1571,13 @@ class RecordingLauncher {
     }
 
     @discardableResult
-    static func launchVoiceChatToggle() -> Int32? {
-        let task = yuluPythonProcess(scriptDir: scriptDir())
-        task.arguments = [
+    static func launchVoiceChatToggle(completion: @escaping DictationCompletion) -> Int32? {
+        return launchDictation(arguments: [
             "dictate.py", "ask-toggle",
             "--no-paste",
             "--no-copy",
             "--json",
-        ]
-        task.standardInput = FileHandle.nullDevice
-        let logFH = launcherLog()
-        task.standardOutput = logFH
-        task.standardError = logFH
-        do {
-            try nativeWork.run(task)
-            return task.processIdentifier
-        } catch {
-            log("⚠️ failed to launch dictate.py ask-toggle: \(error)")
-            return nil
-        }
+        ], completion: completion)
     }
 
     @discardableResult
@@ -1590,12 +1733,18 @@ class IPCServer {
     private func handle(_ c: Int32) {
         var data = Data()
         var buf = [UInt8](repeating: 0, count: 4096)
-        // Read until newline or EOF. Clients are local + cooperative;
-        // we don't bound the read because requests are tiny (<200 bytes).
+        // Paste/search payloads can contain long Unicode transcripts. Bound
+        // size and idle time while allowing their existing bulk IPC contract.
+        var readTimeout = timeval(tv_sec: 3, tv_usec: 0)
+        setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &readTimeout, socklen_t(MemoryLayout<timeval>.size))
         while true {
             let n = read(c, &buf, 4096)
             if n <= 0 { break }
             data.append(buf, count: n)
+            if data.count > 1_048_576 {
+                sendJSON(c, ["ok": false, "error": "request_too_large"])
+                return
+            }
             if data.last == 0x0A { break }
         }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -1756,6 +1905,9 @@ class IPCServer {
             var resp: [String: Any] = ["ok": true]
             resp["state"] = app.state.rawValue
             resp["dictation_active"] = app.activeRecordingIsDictation
+            let inputAccess = app.inputAccessCheck()
+            resp["accessibility_trusted"] = inputAccess.trusted
+            resp["event_posting_allowed"] = inputAccess.posting
             if app.activeRecordingIsDictation {
                 resp["dictation_intent"] = activeDictationIntent()
             }
@@ -1817,6 +1969,9 @@ class IPCServer {
 }
 
 class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    var inputAccessCheck: () -> (trusted: Bool, posting: Bool) = {
+        (AXIsProcessTrusted(), CGPreflightPostEventAccess())
+    }
     var openRoute: ((String) -> Void)?
     private var configurationGeneration = 0
     var statusItem: NSStatusItem!
@@ -1827,11 +1982,16 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var voiceOverlayWave: VoiceWaveView?
     var voiceOverlayStopButton: NSButton?
     var voiceOverlayCancelButton: NSButton?
+    var voiceRecoveryText: String?
     let feedbackPlayer = VoiceFeedbackPlayer()
     var processingDetailWorkItem: DispatchWorkItem?
     var feedbackDismissWorkItem: DispatchWorkItem?
     var feedbackVisibleUntil: Date?
     var pendingStartFeedbackText: String?
+    var holdGesture = VoiceHoldGesture()
+    var heldHotkey: HotkeySpec?
+    var pendingVoiceStop: (() -> Void)?
+    var voiceCommandGeneration = UUID()
     // ponytail: one pending dictation target; add per-session IDs if overlapping dictations need exact cursor restore.
     var capturedPasteTarget: CapturedPasteTarget?
     var pollerTimer: Timer?
@@ -1931,12 +2091,18 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func registerHotkeys(_ specs: [HotkeySpec]) {
+        // A replaced Carbon registration cannot deliver the old key release.
+        // Finish that gesture now, or queue its stop until capture starts.
+        if let spec = heldHotkey, holdGesture.release() {
+            heldHotkey = nil
+            performVoiceAction(spec)
+        }
         hotkeyRegistrars.forEach { $0.unregister() }
         hotkeyRegistrars = []
         for (idx, spec) in specs.enumerated() {
             let registrar = HotkeyRegistrar(id: UInt32(idx + 1))
-            let ok = registrar.register(keyCode: spec.keyCode, modifierMask: spec.modifierMask) { [weak self] in
-                self?.onHotkey(spec)
+            let ok = registrar.register(keyCode: spec.keyCode, modifierMask: spec.modifierMask) { [weak self] down in
+                self?.onHotkey(spec, down: down)
             }
             if ok { hotkeyRegistrars.append(registrar) }
             let identifier: String
@@ -1959,8 +2125,34 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func onHotkey(_ spec: HotkeySpec) {
+    private func onHotkey(_ spec: HotkeySpec, down: Bool) {
         guard nativeWork.isAccepting else { return }
+        if spec.inputMode == "hold" {
+            if down {
+                guard state != .recording, pendingStartFeedbackText == nil,
+                      resultManagedLauncherPids.isEmpty, heldHotkey == nil,
+                      holdGesture.begin() else { return }
+                heldHotkey = spec
+            } else {
+                guard heldHotkey?.action == spec.action, holdGesture.release() else { return }
+                heldHotkey = nil
+            }
+        } else if !down { return }
+        performVoiceAction(spec)
+    }
+
+    private func finishPendingHoldIfNeeded() {
+        if let stop = pendingVoiceStop {
+            pendingVoiceStop = nil
+            stop()
+            return
+        }
+        guard let spec = heldHotkey, holdGesture.started() else { return }
+        heldHotkey = nil
+        performVoiceAction(spec)
+    }
+
+    private func performVoiceAction(_ spec: HotkeySpec) {
         log("hotkey → \(spec.action)")
         switch spec.action {
         case "dictate":
@@ -2016,6 +2208,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 showVoiceOverlay(text, animation: .recording)
                 feedbackPlayer.play(.start)
             }
+            if activeRecordingIsDictation && !activeDictationIntent().isEmpty { finishPendingHoldIfNeeded() }
             return
         }
         activeRecordingIsDictation = false
@@ -2056,138 +2249,98 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showVoiceOverlay(text, animation: wave ? .recording : .processing)
     }
 
-    private func showVoiceOverlay(_ text: String, animation: VoiceOverlayAnimationMode) {
+    private func showVoiceOverlay(
+        _ text: String, animation: VoiceOverlayAnimationMode,
+        hint: String? = nil, transcript: String = "", needsInputAccess: Bool = false
+    ) {
         let panel: NSPanel
-        if let existing = voiceOverlayWindow {
+        let visual: VoiceOverlayContentView
+        if let existing = voiceOverlayWindow,
+           let content = existing.contentView as? VoiceOverlayContentView {
             panel = existing
+            visual = content
         } else {
-            panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 180, height: 36),
-                styleMask: [.borderless, .nonactivatingPanel],
-                backing: .buffered,
-                defer: false
-            )
+            panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 256, height: 60),
+                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.isReleasedWhenClosed = false
             panel.level = .floating
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.backgroundColor = .clear
             panel.isOpaque = false
+            panel.hasShadow = true
+            panel.hidesOnDeactivate = false
             panel.ignoresMouseEvents = false
-            panel.title = L("Yulu 听写状态", "Yulu Dictation Status")
+            panel.title = L("Yulu 语音输入", "Yulu Voice Input")
             panel.setAccessibilityElement(true)
             panel.setAccessibilityRole(.window)
-            panel.setAccessibilityLabel(L("Yulu 听写状态", "Yulu Dictation Status"))
-
-            let visual = VoiceOverlayContainerView(frame: panel.contentView?.bounds ?? NSRect(x: 0, y: 0, width: 180, height: 36))
-            visual.appearance = NSAppearance(named: .darkAqua)
+            panel.setAccessibilityLabel(panel.title)
+            visual = VoiceOverlayContentView(frame: panel.contentView?.bounds ?? .zero)
             visual.autoresizingMask = [.width, .height]
-            visual.setAccessibilityElement(true)
-            visual.setAccessibilityRole(.group)
-
-            let label = NSTextField(labelWithString: text)
-            label.alignment = .center
-            label.font = .systemFont(ofSize: 13, weight: .semibold)
-            label.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)
-            label.translatesAutoresizingMaskIntoConstraints = false
-            label.setAccessibilityElement(true)
-
-            let waveView = VoiceWaveView()
-            waveView.translatesAutoresizingMaskIntoConstraints = false
-            waveView.setAccessibilityElement(false)
-            let stopButton = NSButton(title: "■", target: self, action: #selector(stopVoiceInputFromOverlay))
-            stopButton.isBordered = false
-            stopButton.font = .systemFont(ofSize: 12, weight: .semibold)
-            stopButton.attributedTitle = NSAttributedString(
-                string: "■",
-                attributes: [.foregroundColor: NSColor(calibratedWhite: 0.94, alpha: 1)]
-            )
-            stopButton.wantsLayer = true
-            stopButton.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
-            stopButton.layer?.cornerRadius = 8
-            stopButton.toolTip = L("停止听写", "Stop dictation")
-            stopButton.setAccessibilityLabel(L("停止听写", "Stop dictation"))
-            stopButton.translatesAutoresizingMaskIntoConstraints = false
-            let cancelButton = NSButton(title: "×", target: self, action: #selector(cancelVoiceInputFromOverlay))
-            cancelButton.isBordered = false
-            cancelButton.font = .systemFont(ofSize: 17, weight: .medium)
-            cancelButton.attributedTitle = NSAttributedString(
-                string: "×",
-                attributes: [.foregroundColor: NSColor(calibratedWhite: 0.62, alpha: 1)]
-            )
-            cancelButton.toolTip = L("取消听写", "Cancel dictation")
-            cancelButton.setAccessibilityLabel(L("取消听写", "Cancel dictation"))
-            cancelButton.translatesAutoresizingMaskIntoConstraints = false
-            let content = NSStackView(views: [waveView, label, stopButton, cancelButton])
-            content.orientation = .horizontal
-            content.alignment = .centerY
-            content.spacing = 2
-            content.detachesHiddenViews = true
-            content.translatesAutoresizingMaskIntoConstraints = false
-            content.setCustomSpacing(6, after: waveView)
-            content.setCustomSpacing(8, after: label)
-
-            visual.addSubview(content)
-            NSLayoutConstraint.activate([
-                content.centerXAnchor.constraint(equalTo: visual.centerXAnchor),
-                content.centerYAnchor.constraint(equalTo: visual.centerYAnchor),
-                content.leadingAnchor.constraint(greaterThanOrEqualTo: visual.leadingAnchor, constant: 8),
-                content.trailingAnchor.constraint(lessThanOrEqualTo: visual.trailingAnchor, constant: -8),
-                waveView.widthAnchor.constraint(equalToConstant: 24),
-                waveView.heightAnchor.constraint(equalToConstant: 20),
-                stopButton.widthAnchor.constraint(equalToConstant: 28),
-                stopButton.heightAnchor.constraint(equalToConstant: 28),
-                cancelButton.widthAnchor.constraint(equalToConstant: 24),
-                cancelButton.heightAnchor.constraint(equalToConstant: 28),
-            ])
-
+            visual.stopButton.target = self
+            visual.stopButton.action = #selector(stopVoiceInputFromOverlay)
+            visual.cancelButton.target = self
+            visual.cancelButton.action = #selector(cancelVoiceInputFromOverlay)
+            visual.copyButton.target = self
+            visual.copyButton.action = #selector(copyVoiceRecoveryText)
+            visual.permissionButton.target = self
+            visual.permissionButton.action = #selector(openVoiceInputAccessSettings)
             panel.contentView = visual
             voiceOverlayWindow = panel
-            voiceOverlayLabel = label
-            voiceOverlayWave = waveView
-            voiceOverlayStopButton = stopButton
-            voiceOverlayCancelButton = cancelButton
+            voiceOverlayLabel = visual.statusLabel
+            voiceOverlayWave = visual.waveView
+            voiceOverlayStopButton = visual.stopButton
+            voiceOverlayCancelButton = visual.cancelButton
         }
-
-        voiceOverlayLabel?.stringValue = text
-        voiceOverlayLabel?.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)
-        voiceOverlayLabel?.setAccessibilityLabel(text)
-        voiceOverlayWave?.mode = animation
-        voiceOverlayWave?.isHidden = animation == .none
-        (panel.contentView as? VoiceOverlayContainerView)?.mode = animation
-        let recordingControls = animation == .recording
-        voiceOverlayStopButton?.isHidden = !recordingControls
-        voiceOverlayCancelButton?.isHidden = !recordingControls
+        voiceRecoveryText = animation == .recovery ? transcript : nil
+        let subtitle = hint ?? (animation == .recording
+            ? (heldHotkey != nil ? L("松开快捷键结束", "Release shortcut to finish") : L("再次按快捷键结束", "Press shortcut again to finish"))
+            : animation == .processing ? L("正在处理这段录音", "Processing your recording") : "")
+        let size = visual.update(title: text, hint: subtitle, mode: animation, transcript: transcript, needsInputAccess: needsInputAccess)
         if let screen = NSScreen.main {
             let f = screen.visibleFrame
-            let textWidth = voiceOverlayLabel?.intrinsicContentSize.width ?? 0
-            let compactWidth: CGFloat
-            switch animation {
-            case .recording:
-                compactWidth = 180
-            case .processing:
-                compactWidth = text == L("正在启动…", "Starting…") || text == L("正在输入…", "Inserting…")
-                    ? 140
-                    : min(260, max(140, ceil(textWidth + 52)))
-            case .success:
-                compactWidth = 112
-            case .none:
-                compactWidth = min(260, max(112, ceil(textWidth + 32)))
-            }
-            let target = NSRect(x: f.midX - compactWidth / 2, y: f.minY + 86, width: compactWidth, height: 36)
+            let target = NSRect(x: f.midX - size.width / 2, y: f.minY + 86, width: size.width, height: size.height)
             if panel.isVisible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.18
                     context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                     panel.animator().setFrame(target, display: true)
                 }
-            } else {
-                panel.setFrame(target, display: true)
-            }
+            } else { panel.setFrame(target, display: true) }
         }
         panel.orderFrontRegardless()
     }
 
+    private func showVoiceRecovery(_ text: String, copied: Bool, needsInputAccess: Bool = false) {
+        processingDetailWorkItem?.cancel()
+        feedbackDismissWorkItem?.cancel()
+        // Keep the result available until dismissed or the next capture starts.
+        feedbackVisibleUntil = .distantFuture
+        applyState(.idle)
+        showVoiceOverlay(L("文字已识别", "Your text is ready"), animation: .recovery,
+            hint: needsInputAccess ? L("需开启输入权限，才能自动粘贴", "Enable input access to paste automatically")
+                : copied ? L("请确认输入框，也可按 ⌘V 粘贴", "Check the field, or paste with ⌘V")
+                : L("未能自动输入，可复制后粘贴", "Copy your text to paste it"),
+            transcript: text, needsInputAccess: needsInputAccess)
+    }
+
+    @objc private func openVoiceInputAccessSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func copyVoiceRecoveryText() {
+        guard let text = voiceRecoveryText, let visual = voiceOverlayWindow?.contentView as? VoiceOverlayContentView else { return }
+        if copyRecoveryText(text) {
+            visual.copyButton.title = L("已复制", "Copied")
+            visual.hintLabel.stringValue = L("回到输入框，按 ⌘V 粘贴", "Return to your text field and press ⌘V")
+        } else {
+            visual.hintLabel.stringValue = L("复制未完成，请重试", "Could not copy. Try again")
+        }
+    }
+
     private func hideVoiceOverlay() {
+        voiceRecoveryText = nil
+        voiceOverlayWave?.mode = .none
         voiceOverlayWindow?.orderOut(nil)
     }
 
@@ -2240,6 +2393,13 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func cancelVoiceInputFromOverlay() {
+        if voiceRecoveryText != nil {
+            feedbackVisibleUntil = nil
+            hideVoiceOverlay()
+            return
+        }
+        voiceCommandGeneration = UUID()
+        pendingVoiceStop = nil
         log("voice overlay cancel clicked — canceling active voice input")
         let voicePids = activeVoiceLauncherPids()
         for pid in voicePids {
@@ -2254,6 +2414,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         activeRecordingIsDictation = false
         capturedPasteTarget = nil
         showTimedVoiceFeedback(L("已取消", "Canceled"), sound: nil, duration: 0.8)
+        holdGesture.cancel()
+        heldHotkey = nil
     }
 
     private func applyState(_ new: AgentState) {
@@ -2457,13 +2619,15 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         status: Int32,
         wasStopping: Bool,
         recordingText: String,
-        pid: Int32?
+        pid: Int32?,
+        generation: UUID
     ) {
         if let pid {
             resultManagedLauncherPids.remove(pid)
             launcherPids.removeAll { $0 == pid }
             voiceLauncherPids.removeAll { $0 == pid }
         }
+        guard generation == voiceCommandGeneration else { return }
         let isStartCompletion = !wasStopping && status == 0 && result?["action"] as? String == "start"
         if isStartCompletion && !resultManagedLauncherPids.isEmpty { return }
         processingDetailWorkItem?.cancel()
@@ -2476,24 +2640,53 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 pendingStartFeedbackText = nil
                 feedbackPlayer.play(.start)
             }
+            finishPendingHoldIfNeeded()
             return
         }
 
         pendingStartFeedbackText = nil
+        pendingVoiceStop = nil
         activeRecordingIsDictation = false
         capturedPasteTarget = nil
+        holdGesture.cancel()
+        heldHotkey = nil
+        let needsInputAccess = result?["error_code"] as? String == "accessibility_not_trusted"
         if wasStopping && status == 0 && result?["action"] as? String == "stop" {
+            if result?["chat"] is [String: Any] {
+                hideVoiceOverlay()
+                applyState(.idle)
+                return
+            }
             log("dictation result success pasted=\(result?["pasted"] as? Bool == true) post_stop_ms=\(result?["post_stop_ms"] ?? 0)")
             if result?["pasted"] as? Bool == true {
-                showTimedVoiceFeedback(L("已输入", "Inserted"), sound: .success, duration: 0.8)
+                if let warning = result?["cleanup_warning"] as? String, !warning.isEmpty {
+                    showTimedVoiceFeedback(L("已输入原文 · 整理未完成", "Original inserted · Cleanup unavailable"), sound: .success, duration: 3.5)
+                } else {
+                    showTimedVoiceFeedback(L("已输入", "Inserted"), sound: .success, duration: 0.8)
+                }
             } else if result?["copied"] as? Bool == true {
-                showTimedVoiceFeedback(L("已复制，请按 ⌘V", "Copied — press ⌘V"), sound: .failure, duration: 3.5)
+                if let text = result?["text"] as? String, !text.isEmpty {
+                    showVoiceRecovery(text, copied: true, needsInputAccess: needsInputAccess)
+                    return
+                }
+                let attempted = result?["paste_dispatched"] as? Bool == true
+                showTimedVoiceFeedback(attempted
+                    ? L("已尝试输入 · 请确认，文字已复制", "Insertion attempted · Check the field; text copied")
+                    : L("已复制，请按 ⌘V", "Copied — press ⌘V"), sound: .failure, duration: 3.5)
             } else {
+                if let text = result?["text"] as? String, !text.isEmpty {
+                    showVoiceRecovery(text, copied: false, needsInputAccess: needsInputAccess)
+                    return
+                }
                 showTimedVoiceFeedback(L("听写完成，未自动输入", "Dictation complete — not inserted"), sound: .failure, duration: 3.5)
             }
             return
         }
 
+        if let text = result?["text"] as? String, !text.isEmpty {
+            showVoiceRecovery(text, copied: result?["copied"] as? Bool == true, needsInputAccess: needsInputAccess)
+            return
+        }
         let code = result?["error_code"] as? String ?? "transcription_failed"
         let message: String
         if !wasStopping {
@@ -2512,6 +2705,12 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func onDictateToggle() {
         guard nativeWork.isAccepting else { return }
+        if pendingStartFeedbackText != nil {
+            pendingVoiceStop = { [weak self] in self?.onDictateToggle() }
+            return
+        }
+        guard resultManagedLauncherPids.isEmpty else { return }
+        if state == .recording && !activeRecordingIsDictation { return }
         let stopping = (state == .recording && activeRecordingIsDictation)
         if stopping && activeDictationIntent() == "voice_chat" {
             log("voice chat recording active; ignoring dictation")
@@ -2522,6 +2721,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         feedbackDismissWorkItem?.cancel()
         feedbackVisibleUntil = nil
         if stopping {
+            holdGesture.cancel()
+            heldHotkey = nil
             showVoiceOverlay(L("正在输入…", "Inserting…"), animation: .processing)
             applyState(.processing)
             scheduleLongProcessingLabel()
@@ -2532,6 +2733,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showVoiceOverlay(L("正在启动…", "Starting…"), animation: .processing)
         }
         var launchedPid: Int32?
+        voiceCommandGeneration = UUID()
+        let generation = voiceCommandGeneration
         let pid = RecordingLauncher.launchDictateToggle(
             targetBundleId: target?.bundleIdentifier ?? "",
             targetAppName: target?.localizedName ?? ""
@@ -2542,15 +2745,16 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 status: status,
                 wasStopping: stopping,
                 recordingText: L("听写中", "Dictating"),
-                pid: launchedPid
+                pid: launchedPid,
+                generation: generation
             )
         }
         launchedPid = pid
         if pid != nil && !stopping { scheduleStartConfirmationPolls() }
-        if let pid, stopping {
+        if let pid {
             launcherPids.append(pid)
             voiceLauncherPids.append(pid)
-            resultManagedLauncherPids.insert(pid)
+            if stopping { resultManagedLauncherPids.insert(pid) }
         } else if pid == nil {
             handleDictationCompletion(
                 result: nil,
@@ -2558,7 +2762,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 status: -1,
                 wasStopping: stopping,
                 recordingText: L("听写中", "Dictating"),
-                pid: nil
+                pid: nil,
+                generation: generation
             )
         }
     }
@@ -2569,6 +2774,11 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func onDictateTranslate(targetLanguage: String) {
         guard nativeWork.isAccepting else { return }
+        if pendingStartFeedbackText != nil {
+            pendingVoiceStop = { [weak self] in self?.onDictateTranslate(targetLanguage: targetLanguage) }
+            return
+        }
+        guard resultManagedLauncherPids.isEmpty else { return }
         if state == .recording && !activeRecordingIsDictation {
             log("meeting recording active; ignoring translate dictation")
             return
@@ -2583,6 +2793,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         feedbackDismissWorkItem?.cancel()
         feedbackVisibleUntil = nil
         if stopping {
+            holdGesture.cancel()
+            heldHotkey = nil
             showVoiceOverlay(L("正在输入…", "Inserting…"), animation: .processing)
             applyState(.processing)
             scheduleLongProcessingLabel()
@@ -2593,6 +2805,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             showVoiceOverlay(L("正在启动…", "Starting…"), animation: .processing)
         }
         var launchedPid: Int32?
+        voiceCommandGeneration = UUID()
+        let generation = voiceCommandGeneration
         let pid = RecordingLauncher.launchDictateTranslateToggle(
             targetLanguage: dictationTargetLanguage(fallback: targetLanguage),
             targetBundleId: target?.bundleIdentifier ?? "",
@@ -2604,15 +2818,16 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 status: status,
                 wasStopping: stopping,
                 recordingText: L("正在翻译", "Translating"),
-                pid: launchedPid
+                pid: launchedPid,
+                generation: generation
             )
         }
         launchedPid = pid
         if pid != nil && !stopping { scheduleStartConfirmationPolls() }
-        if let pid, stopping {
+        if let pid {
             launcherPids.append(pid)
             voiceLauncherPids.append(pid)
-            resultManagedLauncherPids.insert(pid)
+            if stopping { resultManagedLauncherPids.insert(pid) }
         } else if pid == nil {
             handleDictationCompletion(
                 result: nil,
@@ -2620,13 +2835,19 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 status: -1,
                 wasStopping: stopping,
                 recordingText: L("正在翻译", "Translating"),
-                pid: nil
+                pid: nil,
+                generation: generation
             )
         }
     }
 
     @objc func onVoiceChat() {
         guard nativeWork.isAccepting else { return }
+        if pendingStartFeedbackText != nil {
+            pendingVoiceStop = { [weak self] in self?.onVoiceChat() }
+            return
+        }
+        guard resultManagedLauncherPids.isEmpty else { return }
         if state == .recording && !activeRecordingIsDictation {
             log("meeting recording active; ignoring voice chat")
             return
@@ -2636,18 +2857,30 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             log("dictation recording active; ignoring voice chat")
             return
         }
-        if let pid = RecordingLauncher.launchVoiceChatToggle() {
-            if stopping {
-                launcherPids.append(pid)
-                voiceLauncherPids.append(pid)
-                showVoiceOverlay(L("正在处理", "Processing"), wave: false)
-                applyState(.processing)
-            } else {
-                activeRecordingIsDictation = true
-                capturedPasteTarget = nil
-                showVoiceOverlay(L("正在提问", "Asking"), wave: true)
-                applyState(.recording)
-            }
+        capturedPasteTarget = nil
+        if stopping {
+            holdGesture.cancel()
+            heldHotkey = nil
+        }
+        if !stopping { pendingStartFeedbackText = L("正在听问题", "Listening to your question") }
+        showVoiceOverlay(stopping ? L("正在识别问题…", "Transcribing question…") : L("正在启动…", "Starting…"), animation: .processing)
+        applyState(.processing)
+        var launchedPid: Int32?
+        voiceCommandGeneration = UUID()
+        let generation = voiceCommandGeneration
+        let pid = RecordingLauncher.launchVoiceChatToggle { [weak self] result, error, status in
+            self?.handleDictationCompletion(result: result, error: error, status: status,
+                wasStopping: stopping, recordingText: L("正在听问题", "Listening to your question"), pid: launchedPid, generation: generation)
+        }
+        launchedPid = pid
+        if pid != nil && !stopping { scheduleStartConfirmationPolls() }
+        if let pid {
+            launcherPids.append(pid)
+            voiceLauncherPids.append(pid)
+            if stopping { resultManagedLauncherPids.insert(pid) }
+        } else if pid == nil {
+            handleDictationCompletion(result: nil, error: "launch_failed", status: -1,
+                wasStopping: stopping, recordingText: "", pid: nil, generation: generation)
         }
     }
 
@@ -2919,7 +3152,12 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 axRange
             )
         }
-        return (true, "")
+        var confirmedValue: CFTypeRef?
+        let verified = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &confirmedValue) == .success
+            && (confirmedValue as? String) == nextValue
+        // A successful AX write must never be replayed through Cmd+V merely
+        // because the target won't let us read it back.
+        return (true, verified ? "" : "unverified")
     }
 
     private func findWritableTextElement(in element: AXUIElement, depth: Int, budget: Int) -> AXUIElement? {
@@ -2986,14 +3224,43 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return "keystroke"
     }
 
+    private func expectedPasteValue(in element: AXUIElement, text: String) -> String? {
+        setAXTimeout(element)
+        var value: CFTypeRef?
+        var range: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+              let previous = value as? String,
+              AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &range) == .success,
+              let range else { return nil }
+        var selected = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(range as! AXValue, .cfRange, &selected), selected.location >= 0, selected.length >= 0 else { return nil }
+        let original = previous as NSString
+        guard selected.location <= original.length, selected.length <= original.length - selected.location else { return nil }
+        return original.replacingCharacters(in: NSRange(location: selected.location, length: selected.length), with: text)
+    }
+
+    @discardableResult
+    private func copyRecoveryText(_ text: String) -> Bool {
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.setString(text, forType: .string)
+    }
+
     func pasteClipboard(text: String? = nil, targetBundleId: String?, targetAppName: String?) -> [String: Any] {
         let bundleId = (targetBundleId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let appName = (targetAppName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let text = (text ?? "").trimmingCharacters(in: .newlines)
+        // Capture and the retired StatusAgent have separate TCC identities.
+        // Their permission does not authorize the current Yulu shell to type.
+        // CGEvent posting silently drops events when this permission is missing.
+        let inputAccess = inputAccessCheck()
+        guard inputAccess.trusted, inputAccess.posting else {
+            let copied = !text.isEmpty && copyRecoveryText(text)
+            log("dictation paste blocked: accessibility_not_trusted target=\(bundleId)")
+            return ["ok": false, "error": "accessibility_not_trusted", "dispatched": false,
+                    "verified": false, "copied": copied, "method": "clipboard_only"]
+        }
         var accessibilityError = ""
         if !text.isEmpty {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
             let captured = capturedPasteTarget
             capturedPasteTarget = nil
             if !shouldAvoidAccessibilityInsert(bundleId: bundleId, appName: appName) {
@@ -3001,13 +3268,17 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                    capturedPasteTargetMatches(captured, bundleId: bundleId, appName: appName) {
                     let inserted = insertText(text, into: captured.element)
                     if inserted.0 {
-                        return ["ok": true, "method": "captured_accessibility"]
+                        let verified = inserted.1.isEmpty
+                        let copied = !verified && copyRecoveryText(text)
+                        return ["ok": true, "method": "captured_accessibility", "verified": verified, "copied": copied]
                     }
                     accessibilityError = "captured_\(inserted.1)"
                 }
                 let inserted = insertTextWithAccessibility(text, bundleId: bundleId, appName: appName)
                 if inserted.0 {
-                    return ["ok": true, "method": "accessibility"]
+                    let verified = inserted.1.isEmpty
+                    let copied = !verified && copyRecoveryText(text)
+                    return ["ok": true, "method": "accessibility", "verified": verified, "copied": copied]
                 }
                 accessibilityError = accessibilityError.isEmpty ? inserted.1 : "\(accessibilityError);\(inserted.1)"
             }
@@ -3023,12 +3294,40 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if !accessibilityError.isEmpty { resp["accessibility_error"] = accessibilityError }
             return resp
         }
-        guard let pasteMethod = sendPasteKeystroke(to: runningTextTarget(bundleId: bundleId, appName: appName)) else {
+        let target = runningTextTarget(bundleId: bundleId, appName: appName)
+        let element = capturePasteTarget(for: target)?.element
+        let expected = element.flatMap { expectedPasteValue(in: $0, text: text) }
+        let pasteboard = NSPasteboard.general
+        let savedItems = pasteboard.pasteboardItems?.map { item -> NSPasteboardItem in
+            let snapshot = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { snapshot.setData(data, forType: type) }
+            }
+            return snapshot
+        } ?? []
+        if !text.isEmpty && !copyRecoveryText(text) {
+            return ["ok": false, "error": "copy_failed", "copied": false]
+        }
+        let clipboardGeneration = pasteboard.changeCount
+        guard let pasteMethod = sendPasteKeystroke(to: target) else {
             var resp: [String: Any] = ["ok": false, "error": "paste_failed"]
             if !accessibilityError.isEmpty { resp["accessibility_error"] = accessibilityError }
             return resp
         }
-        var resp: [String: Any] = ["ok": true, "method": pasteMethod, "verified": false]
+        var verified = false
+        if !text.isEmpty, let element, let expected {
+            for _ in 0..<12 {
+                var value: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+                   (value as? String) == expected { verified = true; break }
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        }
+        if verified && pasteboard.changeCount == clipboardGeneration && !text.isEmpty {
+            pasteboard.clearContents()
+            if !savedItems.isEmpty { pasteboard.writeObjects(savedItems) }
+        }
+        var resp: [String: Any] = ["ok": true, "method": pasteMethod, "verified": verified, "copied": !verified]
         if !accessibilityError.isEmpty { resp["accessibility_error"] = accessibilityError }
         return resp
     }
@@ -3036,14 +3335,16 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func openVoiceChatWindow(urlString: String? = nil) {
         hideVoiceOverlay()
         let raw = urlString ?? "http://127.0.0.1:7777/voice-chat"
-        guard let url = URL(string: raw) else { return }
+        guard let url = URL(string: raw), url.scheme == "http",
+              ["127.0.0.1", "localhost"].contains(url.host ?? ""), url.port == 7777,
+              url.path == "/voice-chat", url.user == nil, url.password == nil else { return }
         let panel: NSPanel
         if let existing = voiceChatWindow as? NSPanel {
             panel = existing
         } else {
             panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 760, height: 620),
-                styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+                contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
+                styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
             )
@@ -3052,16 +3353,17 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             panel.level = .floating
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.titlebarAppearsTransparent = true
+            panel.hidesOnDeactivate = false
+            panel.becomesKeyOnlyIfNeeded = true
             panel.contentView = WKWebView(frame: panel.contentView?.bounds ?? .zero)
             voiceChatWindow = panel
         }
         if let web = panel.contentView as? WKWebView {
             web.autoresizingMask = [.width, .height]
-            web.load(URLRequest(url: url))
+            if web.url != url { web.load(URLRequest(url: url)) }
         }
-        panel.center()
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if !panel.isVisible { panel.center() }
+        panel.orderFrontRegardless()
     }
 
     func voiceChatWindowStatus() -> [String: Any] {

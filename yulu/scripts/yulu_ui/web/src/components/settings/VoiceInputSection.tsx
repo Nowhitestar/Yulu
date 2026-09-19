@@ -162,6 +162,15 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
       />
 
       {statusAgent && agentEnabled !== agentRunning && <Link className="settings-text-link" to="/settings/general#capabilities">{t("settings.voice.checkService")}</Link>}
+      <InlineEditRow label={t("settings.voice.inputMode")} help={t("settings.voice.inputModeHelp")}
+        type="select" value={cfg.status_agent.voice_input_mode ?? "toggle"}
+        options={[{ value: "toggle", label: t("settings.voice.modeToggle") }, { value: "hold", label: t("settings.voice.modeHold") }]}
+        onCommit={commit("status_agent.voice_input_mode") as (value: string) => void}
+        disabled={isBlocked("status_agent.voice_input_mode")} status={tracker.statusFor("status_agent.voice_input_mode")} />
+      <InlineEditRow label={t("settings.voice.askScope")} help={t("settings.voice.askScopeHelp")}
+        type="select" value={dictation.voice_chat_scope ?? "general"}
+        options={[{ value: "general", label: t("assistant.scopeGeneral") }, { value: "meetings", label: t("assistant.scopeMeetings") }]}
+        onCommit={commit("transcription.dictation.voice_chat_scope") as (value: string) => void} />
       <div className="voice-feedback">
       <InlineEditRow
         label={t("settings.voice.feedbackSounds")}
@@ -237,6 +246,13 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
         <div className="row-value"><Link to="/knowledge/glossary">{t("settings.voice.openGlossary")}</Link></div>
         <div className="row-status" />
       </div>
+      <InlineEditRow
+        label={t("settings.voice.cleanup")}
+        help={t("settings.voice.cleanupHelp")}
+        type="toggle"
+        value={dictation.cleanup_enabled ?? true}
+        onCommit={commit("transcription.dictation.cleanup_enabled")}
+      />
       <AdvancedDisclosure title={t("settings.voice.templates")} note="">
       <InlineEditRow
         label={t("settings.voice.prompt.dictate")}

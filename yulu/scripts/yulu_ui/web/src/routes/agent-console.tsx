@@ -7,6 +7,7 @@ import { MarkdownView } from "../components/MarkdownView.js";
 import { Logo } from "../components/Logo.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import { taskActivity } from "../components/health/taskStatus.js";
+import type { AppChannels } from "../../../src/pubsub.js";
 import "./agent-console.css";
 
 export const handle = { breadcrumb: "breadcrumb.agentConsole", filters: null };
@@ -81,6 +82,7 @@ interface AgentSessionSummary {
   pinnedAt?: string;
   archivedAt?: string;
   messageCount: number;
+  scope?: "meetings" | "general";
 }
 
 interface AgentSessionMessage {
@@ -105,6 +107,8 @@ interface AgentSession {
   pinnedAt?: string;
   archivedAt?: string;
   messages: AgentSessionMessage[];
+  scope?: "meetings" | "general";
+  pendingInvocation?: unknown;
 }
 
 function asConfigRecord(config: unknown): Record<string, unknown> {
@@ -175,8 +179,11 @@ function AskMeetings({ initialSessionId, floating, activity }: {
   const historyToggle = useRef<HTMLButtonElement>(null);
   const closeHistory = () => { setHistoryOpen(false); historyToggle.current?.focus(); };
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const conversationViewGeneration = useRef(0);
   const [draftSession, setDraftSession] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draftScope, setDraftScope] = useState<"general" | "meetings" | null>(null);
+  const [liveReply, setLiveReply] = useState<AppChannels["conversation"] | null>(null);
   const [sessionStatusOverride, setSessionStatusOverride] = useState<"active" | "paused" | null>(null);
   const [recoveryOverride, setRecoveryOverride] = useState<ConversationRecovery | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -189,6 +196,29 @@ function AskMeetings({ initialSessionId, floating, activity }: {
   const sessions = (sessionsQuery.data?.sessions as AgentSessionSummary[] | undefined) ?? [];
   const selectedSession = (sessionQuery.data as AgentSession | null | undefined) ?? null;
   const selectedSessionSummary = selectedSessionId ? sessions.find((session) => session.id === selectedSessionId) : null;
+  const scope = selectedSession?.scope ?? selectedSessionSummary?.scope ?? draftScope
+    ?? (floating ? configQuery.data?.transcription?.dictation?.voice_chat_scope ?? "general" : "meetings");
+  useWsChannel("conversation", (reply) => {
+    if (reply.sessionId !== selectedSessionId) return;
+    setLiveReply(reply);
+    if (reply.status !== "streaming") {
+      void utils.agentSessions.get.invalidate({ id: reply.sessionId });
+      void utils.agentSessions.list.invalidate();
+    }
+  });
+  const applicableReply = liveReply?.sessionId === selectedSessionId ? liveReply : null;
+  const replyNotPersisted = applicableReply && messages.filter((message) => !message.pending).length <= applicableReply.afterMessageCount;
+  const awaitingRemote = Boolean(selectedSession?.pendingInvocation || (replyNotPersisted && applicableReply?.status === "streaming"));
+  let displayedMessages = messages;
+  if (applicableReply && replyNotPersisted) {
+    const streamed: ChatMessage = {
+      role: "assistant", text: applicableReply.text,
+      pending: applicableReply.status === "streaming", error: applicableReply.error,
+    };
+    displayedMessages = messages.at(-1)?.pending ? [...messages.slice(0, -1), streamed] : [...messages, streamed];
+  } else if (awaitingRemote && messages.at(-1)?.role === "user") {
+    displayedMessages = [...messages, { role: "assistant", text: "", pending: true }];
+  }
   const configuredConversation = asConfigRecord(
     asConfigRecord(configQuery.data?.intelligence).conversation,
   );
@@ -239,6 +269,7 @@ function AskMeetings({ initialSessionId, floating, activity }: {
 
   useEffect(() => {
     if (initialSessionId) return;
+    conversationViewGeneration.current += 1;
     setSelectedSessionId(null);
     setMessages([]);
     setDraftSession(true);
@@ -246,6 +277,7 @@ function AskMeetings({ initialSessionId, floating, activity }: {
 
   useEffect(() => {
     if (!initialSessionId) return;
+    conversationViewGeneration.current += 1;
     setSelectedSessionId(initialSessionId);
     setDraftSession(false);
   }, [initialSessionId]);
@@ -263,6 +295,7 @@ function AskMeetings({ initialSessionId, floating, activity }: {
   useEffect(() => {
     setSessionStatusOverride(null);
     setRecoveryOverride(null);
+    setLiveReply(null);
   }, [selectedSessionId]);
 
   useEffect(() => {
@@ -276,9 +309,10 @@ function AskMeetings({ initialSessionId, floating, activity }: {
     } else {
       node.scrollTop = node.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, liveReply]);
 
   const runQuestion = async (sessionId: string, question: string, appendQuestion: boolean, retry = false) => {
+    const generation = conversationViewGeneration.current;
     setMessages((prev) => [
       ...prev,
       ...(appendQuestion ? [{ role: "user" as const, text: question }] : []),
@@ -292,10 +326,9 @@ function AskMeetings({ initialSessionId, floating, activity }: {
         question,
         limit: 8,
         sessionId,
+        stream: true,
         ...(retry ? { retry: true as const } : {}),
       }) as AskResponse;
-      if (result.sessionStatus) setSessionStatusOverride(result.sessionStatus);
-      setRecoveryOverride(result.recovery ?? null);
       const assistantMessage: ChatMessage = {
         role: "assistant",
         text: result.llmStatus === "empty" ? t("agentConsole.xai.empty") : result.answer,
@@ -303,25 +336,27 @@ function AskMeetings({ initialSessionId, floating, activity }: {
         remoteSources: result.remoteSources,
         error: result.llmStatus === "error" ? result.llmError ?? undefined : undefined,
       };
-      setMessages((prev) => {
-        const next = [...prev];
-        next[next.length - 1] = assistantMessage;
-        return next;
-      });
+      if (conversationViewGeneration.current === generation) {
+        if (result.sessionStatus) setSessionStatusOverride(result.sessionStatus);
+        setRecoveryOverride(result.recovery ?? null);
+        setMessages((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = assistantMessage;
+          return next;
+        });
+      }
       await appendSession.mutateAsync({ sessionId, message: assistantMessage });
       void utils.agentSessions.list.invalidate();
       void utils.agentSessions.get.invalidate({ id: sessionId });
     } catch (err) {
       const errorMessage = (err as Error).message;
-      setMessages((prev) => {
-        const next = [...prev];
-        next[next.length - 1] = {
-          role: "assistant",
-          text: "",
-          error: errorMessage,
-        };
-        return next;
-      });
+      if (conversationViewGeneration.current === generation) {
+        setMessages((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = { role: "assistant", text: "", error: errorMessage };
+          return next;
+        });
+      }
       if (sessionId) {
         await appendSession.mutateAsync({
           sessionId,
@@ -334,18 +369,21 @@ function AskMeetings({ initialSessionId, floating, activity }: {
   };
 
   const submit = async () => {
+    const generation = conversationViewGeneration.current;
     const question = input.trim();
-    if (!question || sessionStatus === "paused" || ask.isPending || createSession.isPending || appendSession.isPending) return;
+    if (!question || awaitingRemote || sessionStatus === "paused" || ask.isPending || createSession.isPending || appendSession.isPending) return;
     setInput("");
     setCreateError(null);
     let sessionId = selectedSessionId;
     if (!sessionId) {
       try {
-        const created = await createSession.mutateAsync({ title: question }) as AgentSession;
+        const created = await createSession.mutateAsync({ title: question.slice(0, 48), scope }) as AgentSession;
+        if (conversationViewGeneration.current !== generation) return;
         sessionId = created.id;
         setSelectedSessionId(sessionId);
         setDraftSession(false);
       } catch (error) {
+        if (conversationViewGeneration.current !== generation) return;
         setInput(question);
         setCreateError(error instanceof Error ? error.message : String(error));
         return;
@@ -362,6 +400,7 @@ function AskMeetings({ initialSessionId, floating, activity }: {
   };
 
   const startNewSession = () => {
+    conversationViewGeneration.current += 1;
     setDraftSession(true);
     setSelectedSessionId(null);
     setMessages([]);
@@ -369,10 +408,12 @@ function AskMeetings({ initialSessionId, floating, activity }: {
     setSessionStatusOverride(null);
     setRecoveryOverride(null);
     setCreateError(null);
+    setLiveReply(null);
     closeHistory();
   };
 
   const selectSession = (id: string) => {
+    conversationViewGeneration.current += 1;
     setDraftSession(false);
     setSelectedSessionId(id);
     closeHistory();
@@ -421,25 +462,25 @@ function AskMeetings({ initialSessionId, floating, activity }: {
         onArchive={archiveSelectedSession} onPin={pinSelectedSession} onClose={closeHistory} />}
       <div className="agent-chat-main">
         <div ref={scrollRef} className={`agent-chat-thread${messages.length === 0 ? " empty" : ""}`}>
-          {messages.length === 0 ? <div className="agent-chat-start">
+          {displayedMessages.length === 0 ? <div className="agent-chat-start">
             <Logo size={48} />
-            <div className="agent-chat-title">{t("assistant.title")}</div>
-            <div className="agent-chat-sub">{t("assistant.intro")}</div>
-            <div className="agent-chat-starters">{ASK_STARTERS.map((starter) => <button key={starter} type="button" onClick={() => setInput(starter)}>{starter}</button>)}</div>
+            <div className="agent-chat-title">{t(scope === "general" ? "assistant.generalTitle" : "assistant.title")}</div>
+            <div className="agent-chat-sub">{t(scope === "general" ? "assistant.generalIntro" : "assistant.intro")}</div>
+            <div className="agent-chat-starters">{(scope === "general" ? [t("assistant.generalStarter1"), t("assistant.generalStarter2")] : ASK_STARTERS).map((starter) => <button key={starter} type="button" onClick={() => setInput(starter)}>{starter}</button>)}</div>
           </div> : <div className="agent-chat-thread-inner">
-            {messages.map((message, index) => {
+            {displayedMessages.map((message, index) => {
               const localSources = displayedLocalSources(message, provider);
               return (
                 <div key={index} className={`agent-chat-row ${message.role}`}>
                   {message.role === "assistant" && <span className="agent-avatar"><Bot size={15} strokeWidth={2} /></span>}
                   <div className="agent-message">
-                    {message.pending ? (
+                    {message.pending && !message.text ? (
                       <span className="agent-message-pending"><Loader2 className="spin" size={14} strokeWidth={2} />正在询问 {conversationName}...</span>
-                    ) : message.error ? (
-                      <span className="agent-message-error">{message.error}</span>
                     ) : (
                       <>
                         <div className="agent-message-text"><MarkdownView text={message.text} /></div>
+                        {message.pending && <span className="agent-message-pending" role="status">{t("assistant.streaming")}</span>}
+                        {message.error && <span className="agent-message-error">{message.error}</span>}
                         <SourceSummary
                           localSources={localSources}
                           remoteSources={message.remoteSources ?? []}
@@ -458,10 +499,17 @@ function AskMeetings({ initialSessionId, floating, activity }: {
           {draftSession && createError && <NewConversationFailure identity={identity ?? conversationName} reason={createError} repairPath={defaultRepairPath} retrying={createSession.isPending} onRetry={() => void submit()} />}
           {sessionStatus === "paused" && <PausedConversation identity={identity ?? conversationName} repairPath={conversationRecovery?.settingsPath ?? defaultRepairPath} reason={pausedReason} retryAvailable={conversationRecovery?.retry === "same_snapshot"} retrying={ask.isPending} onRetry={() => void retrySameProvider()} onNew={startNewSession} />}
           <div className="assistant-composer-tools">
-            <MeetingReference onChoose={(title, recordedAt) => setInput((value) => `${value}${value ? "\n" : ""}关于会议「${title}」（${recordedAt.slice(0, 16).replace("T", " ")}）：`)} disabled={sessionStatus === "paused" || ask.isPending} />
-            <span title={provider === "xai" ? t("agentConsole.xai.localBoundary") : t("assistant.agentScope.detail")}>{t(provider === "xai" ? "assistant.localScope" : "assistant.agentScope")}</span>
+            <select className="assistant-scope" aria-label={t("assistant.scope")} value={scope}
+              disabled={!draftSession || ask.isPending || createSession.isPending}
+              title={!draftSession ? t("assistant.scopePinned") : undefined}
+              onChange={(event) => setDraftScope(event.target.value as "general" | "meetings")}>
+              <option value="general">{t("assistant.scopeGeneral")}</option>
+              <option value="meetings">{t("assistant.scopeMeetings")}</option>
+            </select>
+            {scope === "meetings" && <MeetingReference onChoose={(title, recordedAt) => setInput((value) => `${value}${value ? "\n" : ""}关于会议「${title}」（${recordedAt.slice(0, 16).replace("T", " ")}）：`)} disabled={sessionStatus === "paused" || ask.isPending} />}
+            <span title={scope === "general" ? t("assistant.generalIntro") : provider === "xai" ? t("agentConsole.xai.localBoundary") : t("assistant.agentScope.detail")}>{t(scope === "general" ? "assistant.generalScope" : provider === "xai" ? "assistant.localScope" : "assistant.agentScope")}</span>
           </div>
-          <Composer value={input} onChange={setInput} onSubmit={submit} pending={ask.isPending || createSession.isPending || appendSession.isPending} disabled={sessionStatus === "paused"} placeholder={messages.length ? "继续提问..." : "问会议记录、决策、行动项..."} />
+          <Composer value={input} onChange={setInput} onSubmit={submit} pending={awaitingRemote || ask.isPending || createSession.isPending || appendSession.isPending} disabled={sessionStatus === "paused"} placeholder={messages.length ? "继续提问..." : scope === "general" ? t("assistant.generalPlaceholder") : "问会议记录、决策、行动项..."} />
         </div>
       </div>
     </div>

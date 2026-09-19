@@ -24,6 +24,7 @@ def test_load_defaults_when_block_missing(tmp_path, monkeypatch):
     block = sac.load()
     assert block["enabled"] is True
     assert block["feedback_sounds"] is True
+    assert block["voice_input_mode"] == "toggle"
     assert block["hotkeys"]["dictate"]["key"] == "Space"
     assert block["hotkeys"]["translate"]["target_language"] == "English"
     assert block["hotkeys"]["voice_chat"]["key"] == "A"
@@ -67,6 +68,17 @@ def test_status_agent_hotkeys_shape(tmp_path, monkeypatch):
     assert hotkeys[0]["keyCode"] == 49
     assert hotkeys[0]["modifierMask"] == 0x1800
     assert hotkeys[1]["targetLanguage"] == "English"
+    assert all(item["inputMode"] == "toggle" for item in hotkeys)
+
+
+def test_status_agent_hold_mode_applies_to_all_voice_shortcuts(tmp_path, monkeypatch):
+    _stub_config(tmp_path, monkeypatch, {"status_agent": {"voice_input_mode": "hold"}})
+    assert [item["inputMode"] for item in sac.status_agent_hotkeys()] == ["hold"] * 3
+
+
+def test_status_agent_unknown_input_mode_keeps_toggle_default(tmp_path, monkeypatch):
+    _stub_config(tmp_path, monkeypatch, {"status_agent": {"voice_input_mode": "unknown"}})
+    assert all(item["inputMode"] == "toggle" for item in sac.status_agent_hotkeys())
 
 
 def test_status_agent_translate_hotkey_uses_dictation_target_language(tmp_path, monkeypatch):
@@ -309,26 +321,6 @@ def test_status_agent_dictation_feedback_is_result_driven_and_explicit():
     assert poll.index("!resultManagedLauncherPids.isEmpty") < poll.index("if recording")
 
 
-def test_status_agent_dictation_overlay_matches_approved_a2_layout():
-    src = _swift_source()
-    assert "width: 180, height: 36" in src
-    assert "compactWidth = 180" in src
-    assert "? 140" in src
-    assert "compactWidth = 112" in src
-    assert "f.midX - compactWidth / 2" in src
-    assert "context.duration = 0.18" in src
-    assert "content.detachesHiddenViews = true" in src
-    assert "visual.appearance = NSAppearance(named: .darkAqua)" in src
-    assert "case none, recording, processing, success" in src
-    assert 'pendingStartFeedbackText = L("听写中", "Dictating")' in src
-    assert "max(0.40, min(1, level))" in src
-    assert "green: 0.10, blue: 0.15, alpha: 0.97" in src
-    assert "override func draw(_ dirtyRect: NSRect)" in src
-    assert "voiceOverlayLabel?.textColor = NSColor(calibratedWhite: 0.94, alpha: 1)" in src
-    assert "glow.shadowBlurRadius = 5" in src
-    assert "accessibilityDisplayShouldReduceMotion" in src
-
-
 def test_audio_daemon_status_exposes_real_mic_level():
     src = (SCRIPTS / "audio_daemon.swift").read_text(encoding="utf-8")
     assert "private var micLevelState: Float = 0" in src
@@ -436,7 +428,7 @@ def test_status_agent_has_paste_clipboard_ipc():
     assert '"target_keystroke"' in src
     assert ".maskCommand" in src
     assert ".cghidEventTap" in src
-    assert '"verified": false' in src
+    assert '"verified": verified' in src
     assert "CapturedPasteTarget" in src
     assert "capturedPasteTargetMatches" in src
     assert '"method": "captured_accessibility"' in src

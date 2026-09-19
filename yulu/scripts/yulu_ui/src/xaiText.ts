@@ -10,7 +10,7 @@ const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_OUTPUT_CHARS = 131_072;
 const OUTPUT_LIMIT_ERROR = "xAI text response exceeded the output limit";
 
-export type XaiTextCapability = "summary" | "conversation";
+export type XaiTextCapability = "summary" | "conversation" | "dictation";
 
 export interface XaiTextMessage {
   role: "system" | "user" | "assistant";
@@ -23,6 +23,9 @@ export interface XaiTextRequest {
   credentialSource?: XaiCredentialSource;
   input: XaiTextMessage[];
   maxOutputTokens?: number;
+  timeoutMs?: number;
+  /** Receives provisional full-text snapshots; only the returned result is final. */
+  onText?: (text: string) => void;
 }
 
 export interface XaiTextResult {
@@ -137,6 +140,67 @@ async function readBoundedResponse(response: Response): Promise<string> {
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), bytes).toString("utf8");
 }
 
+async function readStreamingResponse(response: Response, model: string, onText: (text: string) => void): Promise<unknown> {
+  if (!response.body) throw new XaiTextResponseTransportError("xAI stream ended before completion");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let bytes = 0;
+  let text = "";
+  let verifiedModel = false;
+  let completed: unknown;
+  const event = (frame: string) => {
+    const data = frame.split("\n").filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart()).join("\n");
+    if (!data || data === "[DONE]") return;
+    let item: { type?: string; delta?: unknown; response?: unknown };
+    try { item = JSON.parse(data); } catch { throw new Error("xAI streaming response was invalid"); }
+    if (!item || typeof item !== "object") throw new Error("xAI streaming response was invalid");
+    if (item.response) {
+      const actualModel = outputModel(item.response);
+      if (actualModel !== model) throw new Error(`Pinned xAI model ${model} does not match response model ${actualModel}`);
+      verifiedModel = true;
+    }
+    if (item.type === "response.output_text.delta" && typeof item.delta === "string") {
+      text += item.delta;
+      if (text.length > MAX_OUTPUT_CHARS || Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) throw new Error(OUTPUT_LIMIT_ERROR);
+      if (verifiedModel) onText(text);
+    }
+    if (item.type === "response.completed") {
+      if ((item.response as { status?: unknown } | undefined)?.status !== "completed") throw new Error("xAI streaming response was incomplete");
+      completed = item.response;
+    }
+    if (["error", "response.failed", "response.incomplete"].includes(item.type ?? "")) {
+      throw new Error("xAI streaming response was incomplete");
+    }
+  };
+  try {
+    while (!completed) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try { chunk = await reader.read(); }
+      catch { throw new XaiTextResponseTransportError("xAI streaming response transport was lost"); }
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES * 4) throw new Error(OUTPUT_LIMIT_ERROR);
+      buffer += decoder.decode(chunk.value, { stream: true });
+      // Normalize only complete lines so a CR/LF pair split across reads stays intact.
+      buffer = buffer.replace(/\r\n/g, "\n");
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+        event(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        if (completed) break;
+      }
+      if (buffer.length > MAX_RESPONSE_BYTES) throw new Error(OUTPUT_LIMIT_ERROR);
+    }
+    if (!completed) throw new XaiTextResponseTransportError("xAI stream ended before completion");
+    return completed;
+  } finally {
+    try { await reader.cancel(); } catch { /* final state/error already determined */ }
+    reader.releaseLock();
+  }
+}
+
 export class XaiTextClient {
   constructor(
     private readonly credentials: Pick<XaiCredentialManager, "resolve">,
@@ -145,7 +209,22 @@ export class XaiTextClient {
 
   async request(request: XaiTextRequest): Promise<XaiTextResult> {
     const { model, maxOutputTokens } = validateRequest(request);
-    const credential = await this.credentials.resolve(request.credentialSource);
+    const defaultTimeout = request.capability === "summary" ? SUMMARY_REQUEST_TIMEOUT_MS
+      : request.capability === "dictation" ? 8_000 : CONVERSATION_REQUEST_TIMEOUT_MS;
+    const timeoutMs = request.timeoutMs ?? defaultTimeout;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > defaultTimeout) {
+      throw new Error("xAI text timeout is invalid");
+    }
+    const signal = AbortSignal.timeout(timeoutMs);
+    let onAbort!: () => void;
+    const cancelled = new Promise<never>((_, reject) => {
+      onAbort = () => reject(new Error("xAI text deadline exceeded before request"));
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+    const credential = await Promise.race([this.credentials.resolve(request.credentialSource), cancelled])
+      .finally(() => signal.removeEventListener("abort", onAbort));
+    if (signal.aborted) throw new Error("xAI text deadline exceeded before request");
     if (request.credentialSource && credential.source !== request.credentialSource) {
       throw new Error(`Pinned xAI credential ${request.credentialSource} does not match resolved credential ${credential.source}`);
     }
@@ -155,7 +234,7 @@ export class XaiTextClient {
         method: "POST",
         redirect: "error",
         headers: {
-          Accept: "application/json",
+          Accept: request.onText ? "text/event-stream" : "application/json",
           Authorization: `Bearer ${credential.accessToken}`,
           "Content-Type": "application/json",
         },
@@ -164,10 +243,9 @@ export class XaiTextClient {
           input: request.input,
           max_output_tokens: maxOutputTokens,
           store: false,
+          ...(request.onText ? { stream: true } : {}),
         }),
-        signal: AbortSignal.timeout(request.capability === "summary"
-          ? SUMMARY_REQUEST_TIMEOUT_MS
-          : CONVERSATION_REQUEST_TIMEOUT_MS),
+        signal,
       });
     } catch {
       throw new XaiTextUnknownOutcomeError({
@@ -179,9 +257,14 @@ export class XaiTextClient {
     if (!response.ok) {
       throw new Error(`xAI ${request.capability} request failed (HTTP ${response.status})`);
     }
-    let raw: string;
+    let payload: unknown;
     try {
-      raw = await readBoundedResponse(response);
+      if (request.onText) payload = await readStreamingResponse(response, model, request.onText);
+      else {
+        const raw = await readBoundedResponse(response);
+        try { payload = JSON.parse(raw); }
+        catch { throw new Error("xAI text response was invalid"); }
+      }
     } catch (error) {
       if (error instanceof XaiTextResponseTransportError) {
         throw new XaiTextUnknownOutcomeError({
@@ -192,9 +275,9 @@ export class XaiTextClient {
       }
       throw error;
     }
-    let payload: unknown;
-    try { payload = JSON.parse(raw); }
-    catch { throw new Error("xAI text response was invalid"); }
+    if (request.capability === "dictation" && (payload as { status?: string } | null)?.status !== "completed") {
+      throw new Error("xAI dictation cleanup was incomplete");
+    }
     const responseModel = outputModel(payload);
     if (responseModel !== model) {
       throw new Error(`Pinned xAI model ${model} does not match response model ${responseModel}`);

@@ -13,12 +13,12 @@ import {
   cleanTranscriptText,
   dedupeTranscriptSegment,
   parseWavFormat,
-  sourceSeparated16kPcm,
   type TranscriptionResult,
   type TranscriptionLanguage,
 } from "./realtimeTranscription.js";
 import { XaiAudioClient } from "./xaiAudio.js";
 import { XAI_TRANSCRIPTION_DISCLOSURE_VERSION } from "./transcriptionConsent.js";
+import { SourceSeparatedResampler } from "./pcmResampler.js";
 
 export type AudioTranscriptionEngine = "local" | "xai";
 
@@ -88,12 +88,14 @@ function transcriptFromItems(items: StableItem[]): string {
 
 export class AudioTranscriptionService implements StreamingCaptionEngine {
   private active: StreamingCaptionEngine | null = null;
+  private generation = 0;
 
   constructor(
     private readonly config: ConfigManager,
     private readonly local: LocalCaptionManager,
     private readonly xai: XaiAudioClient,
     private readonly hasXaiTranscriptionConsent: () => boolean,
+    private readonly glossary?: () => GlossaryContract,
   ) {}
 
   get provider(): string {
@@ -126,12 +128,18 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
 
   async start(language: TranscriptionLanguage): Promise<void> {
     this.requireXaiTranscriptionConsent();
+    const generation = ++this.generation;
     if (this.active) await this.active.abort();
+    if (generation !== this.generation) throw new Error("Realtime transcription was cancelled");
     const engine = selectedEngine(this.config) === "local" ? this.local : this.xai;
     this.active = engine;
-    try { await engine.start(language); }
+    try {
+      if (engine === this.xai) await this.xai.start(language, this.glossary?.());
+      else await engine.start(language);
+      if (generation !== this.generation) throw new Error("Realtime transcription was cancelled");
+    }
     catch (error) {
-      this.active = null;
+      if (generation === this.generation) this.active = null;
       throw error;
     }
   }
@@ -144,11 +152,13 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
   async finish(): Promise<StreamingCaptionUpdate> {
     if (!this.active) return { updates: {} };
     const active = this.active;
+    const generation = this.generation;
     try { return await active.finish(); }
-    finally { this.active = null; }
+    finally { if (generation === this.generation) this.active = null; }
   }
 
   async abort(): Promise<void> {
+    this.generation += 1;
     const active = this.active;
     this.active = null;
     await active?.abort();
@@ -202,7 +212,7 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     const buffer = Buffer.alloc(bytesPerChunk - (bytesPerChunk % format.blockAlign));
     const items: StableItem[] = [];
     let order = 0;
-    let phase = 0;
+    const resampler = new SourceSeparatedResampler(format);
     let offset = format.dataOffset;
     let chunks = 0;
     const fd = openSync(audioPath, "r");
@@ -213,8 +223,7 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
         if (read <= 0) break;
         offset += read;
         const aligned = buffer.subarray(0, read - (read % format.blockAlign));
-        const separated = sourceSeparated16kPcm(aligned, format, phase);
-        phase = separated.phase;
+        const separated = resampler.feed(aligned);
         order = acceptUpdates(items, await this.local.feed(separated.chunks), order);
         chunks += 1;
       }

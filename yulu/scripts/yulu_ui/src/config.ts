@@ -76,6 +76,8 @@ const AgentPipelineSchema = z.object({
 }).passthrough().default({});
 
 const DictationSchema = z.object({
+  cleanup_enabled: z.boolean().default(true),
+  voice_chat_scope: z.enum(["general", "meetings"]).default("general"),
   prompt_slug: z.string().default("dictation-cleanup"),
   translate_prompt_slug: z.string().default("dictation-translate"),
   target_language: z.string().default("English"),
@@ -95,6 +97,7 @@ const StatusAgentHotkeySchema = z.object({
 const StatusAgentSchema = z.object({
   enabled: z.boolean().default(true),
   feedback_sounds: z.boolean().default(true),
+  voice_input_mode: z.enum(["toggle", "hold"]).default("toggle"),
   hotkeys: z.object({
     dictate: StatusAgentHotkeySchema.default({ key: "Space", modifiers: ["ctrl", "alt"] }),
     translate: StatusAgentHotkeySchema.default({ key: "T", modifiers: ["ctrl", "alt"], target_language: "English" }),

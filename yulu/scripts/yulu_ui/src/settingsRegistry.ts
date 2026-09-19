@@ -47,6 +47,8 @@ const HotkeysSchema = z.record(z.object({
 }).passthrough());
 
 const DictationSchema = z.object({
+  cleanup_enabled: z.boolean().optional(),
+  voice_chat_scope: z.enum(["general", "meetings"]).optional(),
   prompt_slug: z.string().optional(),
   translate_prompt_slug: z.string().optional(),
   target_language: z.string().optional(),
@@ -112,6 +114,7 @@ export const SETTINGS: SettingDef[] = [
   { path: "meeting_detection.ignore_window_keywords", category: "automation", label: "Ignore window keywords",    type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
   { path: "status_agent.enabled",        category: "general", label: "菜单栏 Agent", type: "toggle", validate: z.boolean(),               reload: R.none },
   { path: "status_agent.feedback_sounds", category: "voice", label: "听写提示音", type: "toggle", validate: z.boolean(),                 reload: R.none },
+  { path: "status_agent.voice_input_mode", category: "voice", label: "语音快捷键操作", type: "select", validate: z.enum(["toggle", "hold"]), reload: R.sighup("statusagent") },
   { path: "status_agent.hotkeys",        category: "voice", label: "语音输入快捷键", type: "text", validate: HotkeysSchema,              reload: R.sighup("statusagent") },
   { path: "transcription.dictation",     category: "voice", label: "语音输入模板", type: "text", validate: DictationSchema,             reload: R.none },
 ];

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 
-const STORE_VERSION = 8;
+const STORE_VERSION = 9;
 const STORE_FILE = "agent-sessions.json";
 const MAX_TITLE_CHARS = 48;
 const MAX_MESSAGE_CHARS = 80_000;
@@ -107,6 +107,7 @@ const persistedSessionSchema = z.object({
   unknownOutcome: agentSessionInvocationSchema.optional(),
   supersedesSessionId: z.string().trim().min(1).max(200).optional(),
   purpose: z.enum(["ask", "background"]).default("ask"),
+  scope: z.enum(["meetings", "general"]).default("meetings"),
   title: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -199,6 +200,7 @@ export function summarizeAgentSession(session: AgentSession) {
     status: session.status,
     pausedReason: session.pausedReason,
     purpose: session.purpose,
+    scope: session.scope,
     title: session.title,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -230,6 +232,7 @@ export function createAgentSession(
   input: {
     title?: string;
     runtimeLabel?: string;
+    scope?: "meetings" | "general";
   } & (
     {
       purpose?: "ask";
@@ -271,6 +274,7 @@ export function createAgentSession(
       : {}),
     status: "active",
     purpose,
+    scope: input.scope ?? "meetings",
     title: titleFromText(input.title ?? ""),
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -572,6 +576,7 @@ export function createAgentSessionAttemptFromUnknown(configDir: string, sessionI
   const replacement = createAgentSession(configDir, {
     purpose: "ask",
     provider: original.provider,
+    scope: original.scope,
     model: original.model,
     runtimeProvider: original.runtimeProvider,
     connectionId: original.connectionId,

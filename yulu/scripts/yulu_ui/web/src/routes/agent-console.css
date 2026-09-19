@@ -2112,3 +2112,12 @@
 @media (max-height: 600px) {
   .agent-chat-workspace .agent-chat-thread.empty { align-items: flex-start; }
 }
+.assistant-scope {
+  max-width: 10rem;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 4px 6px;
+  color: var(--fg-2);
+  background: var(--bg);
+  font: inherit;
+}

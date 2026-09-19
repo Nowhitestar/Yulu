@@ -21,6 +21,7 @@ IPC_SOCKET_PATH = IPC_DIR / "status_agent.sock"
 DEFAULT_BLOCK = {
     "enabled": True,
     "feedback_sounds": True,
+    "voice_input_mode": "toggle",
     "hotkeys": {
         "dictate": {"key": "Space", "modifiers": ["ctrl", "alt"]},
         "translate": {"key": "T", "modifiers": ["ctrl", "alt"], "target_language": "English"},
@@ -126,6 +127,7 @@ def status_agent_hotkeys() -> list[dict]:
             "keyCode": keycode_for(spec["key"]),
             "modifierMask": modifier_mask(spec.get("modifiers") or []),
             "label": format_hotkey(spec),
+            "inputMode": "hold" if block.get("voice_input_mode") == "hold" else "toggle",
         }
         if action == "translate":
             item["targetLanguage"] = target_language

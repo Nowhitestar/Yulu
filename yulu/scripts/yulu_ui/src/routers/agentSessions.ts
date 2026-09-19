@@ -62,6 +62,7 @@ export const agentSessionsRouter = router({
     .input(z.object({
       agent: z.string().min(1).optional(),
       title: z.string().max(48).optional(),
+      scope: z.enum(["meetings", "general"]).default("meetings"),
     }))
     .mutation(async ({ ctx, input }) => {
       const config = ctx.config.read();
@@ -88,6 +89,7 @@ export const agentSessionsRouter = router({
           disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
           title: input.title,
           purpose: "ask",
+          scope: input.scope,
         });
       }
       if (selection.provider === "agent" && "connectionId" in selection && selection.connectionId) {
@@ -155,6 +157,7 @@ export const agentSessionsRouter = router({
             credentialSource: "runtime-oauth",
             title: input.title,
             purpose: "ask",
+            scope: input.scope,
             runtimeLabel,
           });
         } else {
@@ -171,6 +174,7 @@ export const agentSessionsRouter = router({
           disclosureVersion,
           title: input.title,
           purpose: "ask",
+          scope: input.scope,
           runtimeLabel: runtimeLabel,
         });
       }
