@@ -4,6 +4,18 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.25.0](https://github.com/Nowhitestar/Yulu/compare/v0.24.0...v0.25.0) (2026-09-19)
+
+
+### Features
+
+* improve voice input and general questions ([#223](https://github.com/Nowhitestar/Yulu/issues/223)) ([f2eb8d4](https://github.com/Nowhitestar/Yulu/commit/f2eb8d4dafa43d549ab016c798ba6c034e8de55c))
+
+
+### Bug Fixes
+
+* simplify native notifications and meeting prompts ([#221](https://github.com/Nowhitestar/Yulu/issues/221)) ([9572c06](https://github.com/Nowhitestar/Yulu/commit/9572c068b7e28de2cdaa74fd5c427111ecd9c8fb))
+
 ## [0.24.0](https://github.com/Nowhitestar/Yulu/compare/v0.23.0...v0.24.0) (2026-09-18)
 
 
