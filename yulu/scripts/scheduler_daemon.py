@@ -134,9 +134,8 @@ class Scheduler:
             if kind == "remind":
                 self._spawn([
                     sys.executable, str(SCRIPT_DIR / "notify.py"),
-                    "remind", "Yulu",
-                    f"会议「{ev.get('title','')}」 5 分钟后开始",
-                    ev.get("title", ""),
+                    "meeting_soon", ev.get("title", ""),
+                    ev.get("id") or f"{ev.get('meeting_id', '')}:{ev.get('at', '')}",
                 ])
             elif kind == "ask_record":
                 self._spawn([

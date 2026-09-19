@@ -12,6 +12,7 @@ import { ConfigManager } from "./config.js";
 import { LaunchctlClient } from "./launchctl.js";
 import { openDb } from "./db.js";
 import { appPubSub } from "./pubsub.js";
+import { startRecordingNotifications } from "./recordingNotifications.js";
 import { paths } from "./paths.js";
 import { mountWsMultiplexer } from "./ws.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
@@ -96,6 +97,9 @@ export function resolveServerRuntimePaths(pathOverrides: Partial<RuntimePaths> =
     durableDataDir: pathOverrides.durableDataDir ?? (hasConfigDirOverride ? configDir : paths.durableDataDir),
     legacyReadOnlyDataDir,
     configDir,
+    statusAgentSock: pathOverrides.statusAgentSock ??
+      (pathOverrides.ipcDir ? join(pathOverrides.ipcDir, "status_agent.sock") :
+        hasConfigDirOverride ? join(configDir, "status_agent.sock") : paths.statusAgentSock),
     configFile: pathOverrides.configFile ?? (hasConfigDirOverride ? join(configDir, "config.json") : paths.configFile),
     promptsDb: pathOverrides.promptsDb ?? (hasConfigDirOverride ? join(configDir, "prompts.sqlite") : paths.promptsDb),
     vocabDb: pathOverrides.vocabDb ?? (hasConfigDirOverride ? join(configDir, "vocab.sqlite") : paths.vocabDb),
@@ -777,9 +781,14 @@ async function startLockedServer(
     pubsub: appPubSub,
   });
 
+  const stopRecordingNotifications = startRecordingNotifications({
+    store: hostStore, pubsub: appPubSub, socketPath: runtimePaths.statusAgentSock,
+  });
+
   try {
     await listenHttp(http, port, host);
   } catch (error) {
+    stopRecordingNotifications();
     logTailer.stop();
     inboxWatcher.stop();
     try { await realtimeTranscription.close(); } catch { /* preserve the listen error */ }
@@ -797,6 +806,7 @@ async function startLockedServer(
     });
     recordingPipeline.kick();
   } catch (error) {
+    stopRecordingNotifications();
     logTailer.stop();
     inboxWatcher.stop();
     try { await realtimeTranscription.close(); } catch { /* preserve the startup error */ }
@@ -814,6 +824,7 @@ async function startLockedServer(
     close: () => {
       closePromise ??= (async () => {
         try {
+          stopRecordingNotifications();
           logTailer.stop();
           inboxWatcher.stop();
           recordingEventInbox.stop();

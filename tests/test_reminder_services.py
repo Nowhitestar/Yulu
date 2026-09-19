@@ -116,11 +116,11 @@ def test_owned_scheduler_fires_reminder_and_reloads_record_prompt(manager):
 
     schedule("remind")
     manager.reconcile()
-    assert wait_for(1)[0][0] == "remind"
+    assert wait_for(1)[0][0] == "meeting_soon"
     schedule("ask_record")
     assert manager.command({"label": "com.yulu.scheduler", "action": "sighup"})["ok"]
     fired = wait_for(2)
-    assert [arguments[0] for arguments in fired] == ["remind", "ask_record"]
+    assert [arguments[0] for arguments in fired] == ["meeting_soon", "ask_record"]
     assert fired[1][1:] == ["Test meeting", "test"]
 
 

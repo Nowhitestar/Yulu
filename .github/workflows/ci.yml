@@ -140,7 +140,7 @@ jobs:
             -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist \
             -Xlinker yulu/scripts/calendar_probe-Info.plist
           printf 'swiftc status_agent.swift (Cocoa + Carbon)\n'
-          swiftc -target arm64-apple-macosx13.0 -parse-as-library -o ".ci-build/status_agent" yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon
+          swiftc -target arm64-apple-macosx13.0 -parse-as-library -o ".ci-build/status_agent" yulu/scripts/status_agent.swift -framework Cocoa -framework Carbon yulu/scripts/native_notifications.swift -framework UserNotifications
           printf 'swiftc yulu_app.swift (Cocoa + WebKit)\n'
           bash yulu/scripts/build_yulu_shell.sh ".ci-build/yulu_app"
           bash packaging/scripts/check_macos_deployment_target.sh \

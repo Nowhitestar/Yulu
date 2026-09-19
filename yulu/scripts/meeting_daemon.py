@@ -706,10 +706,15 @@ def cmd_auto_stop():
     choice = result.stdout.strip()
     print(f"Stop choice: {choice}")
 
+    # A persistent prompt may outlive its recording. Never apply its answer to
+    # a later capture, including a new recording of the same meeting.
+    current = recording_info(load_state())
+    if not current or any(current.get(key) != rec.get(key) for key in ("audio_path", "file_path", "started_at", "meeting_id")):
+        print("录音状态已变化，忽略旧的结束提醒")
+        return
+
     if choice in ("停止录制", "停止"):
         _stop_and_process(stop_reason="manual")
-    elif choice == "timeout":
-        _stop_and_process(stop_reason="automatic")
     else:
         # 用户选继续：再延 30 分钟问一次。save_schedule 会顺手清理已过期 ask_stop。
         end_at = datetime.now() + timedelta(minutes=30)
@@ -838,11 +843,17 @@ def _stop_and_process(stop_reason="manual"):
     if not _post_realtime("stop", {"audioPath": audio_path}):
         print("⚠️ 实时转写收尾失败；将使用完整录音重新转写", file=sys.stderr)
 
-    notify = SCRIPT_DIR / "notify.py"
-    subprocess.Popen([sys.executable, str(notify), "notify_stop", title, stop_reason],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
     set_recording_stopped(path=STATE_PATH)
+
+    notify = SCRIPT_DIR / "notify.py"
+    # Submit the saved notice before Host dispatch so a fast summary cannot be
+    # overwritten by a late "saved" event. Delivery never gates durable work.
+    try:
+        subprocess.run([sys.executable, str(notify), "notify_stop", title, stop_reason,
+                        resolved_audio_path.stem], timeout=5,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
     # 2. Host 接管后续 Agent 工作流。Host 不可用时持久化事件，绝不回退到
     # 已退役的 Yulu-owned 转录、摘要或 connector 执行器。

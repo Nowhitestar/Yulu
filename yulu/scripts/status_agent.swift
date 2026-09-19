@@ -29,6 +29,8 @@ public final class NativeRecordingControls {
         controller = StatusAgentApp()
         reminders = NativeReminderServices(environment: environment)
         controller.openRoute = openRoute
+        YuluNotificationPresenter.shared.configure(openRoute: openRoute)
+        YuluNotificationPresenter.shared.setLanguage { readAppLanguage() == .en }
     }
 
     /// Reserve and validate IPC for update health without enabling native input.
@@ -1613,6 +1615,10 @@ class IPCServer {
         switch action {
         case "status":
             sendJSON(c, statusResponse())
+        case "notify":
+            sendJSON(c, mainResponse(admission: admission) { _ in
+                YuluNotificationPresenter.shared.receive(obj)
+            })
         case "toggle":
             sendJSON(c, stateChangeResponse(admission: admission) { $0.onMenuToggle() })
         case "stop":
@@ -2662,13 +2668,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showDaemonDownNotification() {
         log("daemon down — surfacing notification")
-        let note = NSUserNotification()
-        note.title = "Yulu"
-        note.informativeText = L(
-            "音频服务未运行，请在 Yulu 健康状态中重新启动。",
-            "The audio service is not running. Restart it from Yulu Health."
-        )
-        NSUserNotificationCenter.default.deliver(note)
+        _ = YuluNotificationPresenter.shared.receive(["kind": "audio_unavailable", "id": "capture"])
     }
 
     @objc func onOpenInbox() {

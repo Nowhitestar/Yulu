@@ -49,7 +49,7 @@ def _prepare_stop(monkeypatch, tmp_path, *, returncode=0, final_path=None):
     monkeypatch.setattr(meeting_daemon, "save_schedule", lambda _data: None)
     monkeypatch.setattr(meeting_daemon.subprocess, "Popen", lambda *_a, **_kw: SimpleNamespace())
 
-    def fake_run(args, capture_output=False, text=False):
+    def fake_run(args, capture_output=False, text=False, **_kwargs):
         calls.append(args)
         stdout = f"FINAL_RECORDING_PATH={final_path}\n" if final_path else ""
         return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="stop failed" if returncode else "")
@@ -85,7 +85,7 @@ def test_stop_posts_completion_to_host_and_never_runs_legacy_pipeline(monkeypatc
 
     meeting_daemon._stop_and_process()
 
-    assert [Path(args[1]).name for args in calls] == ["record_audio.py"]
+    assert [Path(args[1]).name for args in calls] == ["record_audio.py", "notify.py"]
     assert calls[0][2] == "stop"
     assert seen == {
         "url": "http://127.0.0.1:8123/api/recordings/completed",
@@ -116,7 +116,7 @@ def test_stop_spools_completion_atomically_when_host_is_unavailable(monkeypatch,
 
     meeting_daemon._stop_and_process()
 
-    assert [Path(args[1]).name for args in calls] == ["record_audio.py"]
+    assert [Path(args[1]).name for args in calls] == ["record_audio.py", "notify.py"]
     events = list(meeting_daemon.RECORDING_EVENTS_DIR.glob("*.json"))
     assert len(events) == 1
     assert json.loads(events[0].read_text(encoding="utf-8")) == {
@@ -261,20 +261,12 @@ def test_stop_keeps_window_until_state_confirmation(monkeypatch, tmp_path):
 
 
 def test_stop_notification_receives_stop_reason(monkeypatch, tmp_path):
-    meeting_daemon, _wav, _calls = _prepare_stop(monkeypatch, tmp_path)
-    notifications = []
-    monkeypatch.setattr(
-        meeting_daemon.subprocess,
-        "Popen",
-        lambda args, **_kwargs: notifications.append(args) or SimpleNamespace(),
-    )
-
+    meeting_daemon, wav, calls = _prepare_stop(monkeypatch, tmp_path)
     assert meeting_daemon._stop_and_process() is True
-    assert notifications[0][-1] == "manual"
-
-    notifications.clear()
     assert meeting_daemon._stop_and_process(stop_reason="automatic") is True
-    assert notifications[0][-1] == "automatic"
+    notifications = [args for args in calls if "notify_stop" in args]
+    assert notifications[0][-2:] == ["manual", wav.stem]
+    assert notifications[1][-2:] == ["automatic", wav.stem]
 
 
 def test_auto_stop_distinguishes_user_choice_from_timeout(monkeypatch):
@@ -282,6 +274,8 @@ def test_auto_stop_distinguishes_user_choice_from_timeout(monkeypatch):
 
     choices = iter(["停止录制", "timeout"])
     reasons = []
+    reminders = []
+    monkeypatch.setattr(meeting_daemon, "_add_runtime_event", reminders.append)
     monkeypatch.setattr(meeting_daemon, "load_state", lambda: {})
     monkeypatch.setattr(
         meeting_daemon,
@@ -302,7 +296,8 @@ def test_auto_stop_distinguishes_user_choice_from_timeout(monkeypatch):
     meeting_daemon.cmd_auto_stop()
     meeting_daemon.cmd_auto_stop()
 
-    assert reasons == ["manual", "automatic"]
+    assert reasons == ["manual"]
+    assert len(reminders) == 1
 
 
 def test_auto_stop_continue_schedules_the_next_prompt(monkeypatch):
@@ -427,3 +422,32 @@ def test_start_recording_uses_capture_controller(monkeypatch):
         ("status", None),
         ("start", {"title": "Team Sync"}),
     ]
+
+
+def test_old_stop_prompt_cannot_end_a_new_recording(monkeypatch):
+    import meeting_daemon
+    states = iter([
+        {"title": "Same meeting", "meeting_id": "meeting1", "audio_path": "/old.wav", "started_at": "before"},
+        {"title": "Same meeting", "meeting_id": "meeting1", "audio_path": "/new.wav", "started_at": "after"},
+    ])
+    monkeypatch.setattr(meeting_daemon, "load_state", lambda: next(states))
+    monkeypatch.setattr(meeting_daemon, "recording_info", lambda state: state)
+    monkeypatch.setattr(meeting_daemon.subprocess, "run", lambda *_a, **_k: SimpleNamespace(stdout="停止录制"))
+    monkeypatch.setattr(meeting_daemon, "_stop_and_process", lambda **_k: pytest.fail("stale prompt must not stop capture"))
+    monkeypatch.setattr(meeting_daemon, "_add_runtime_event", lambda _event: pytest.fail("stale prompt must not reschedule"))
+    meeting_daemon.cmd_auto_stop()
+
+
+def test_notification_delivery_failure_cannot_block_durable_completion(monkeypatch, tmp_path):
+    import subprocess
+    meeting_daemon, wav, _calls = _prepare_stop(monkeypatch, tmp_path)
+    original = meeting_daemon.subprocess.run
+    def run(args, **kwargs):
+        if "notify_stop" in args:
+            raise subprocess.TimeoutExpired(args, 5)
+        return original(args, **kwargs)
+    monkeypatch.setattr(meeting_daemon.subprocess, "run", run)
+    completions = []
+    monkeypatch.setattr(meeting_daemon, "_dispatch_recording_completed", lambda *args: completions.append(args))
+    assert meeting_daemon._stop_and_process() is True
+    assert completions[0][0] == str(wav.resolve())
