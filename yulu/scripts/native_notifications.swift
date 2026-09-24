@@ -106,6 +106,34 @@ public final class YuluNotificationPresenter: NSObject, UNUserNotificationCenter
 
     func setLanguage(_ english: @escaping () -> Bool) { self.english = english }
 
+    func permissionStatus(_ completion: @escaping (String) -> Void) {
+        guard let center else { completion("unknown"); return }
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional: completion("granted")
+            case .denied: completion("denied")
+            case .notDetermined: completion("not_determined")
+            default: completion("unknown")
+            }
+        }
+    }
+
+    func requestPermissionOrOpenSettings() -> Bool {
+        guard let center else { return false }
+        center.getNotificationSettings { settings in
+            if settings.authorizationStatus == .notDetermined {
+                center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+            } else {
+                DispatchQueue.main.async {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
+        }
+        return true
+    }
+
     func receive(_ payload: [String: Any]) -> [String: Any] {
         guard let notice = YuluNotice(payload) else { return ["ok": false, "error": "invalid_notification"] }
         guard center != nil else { return ["ok": false, "error": "notification_app_unavailable"] }

@@ -55,16 +55,17 @@
     "dictation": {
       "language": "zh",
       "cleanup_enabled": true,
+      "cleanup_level": "medium",
+      "cleanup_model": "conversation",
+      "style": "casual",
       "voice_chat_scope": "general",
       "prompt_slug": "dictation-cleanup",
-      "translate_prompt_slug": "dictation-translate",
       "target_language": "English",
-      "context_limit": 240,
       "deadline_sec": 30,
       "timeout_sec": 30,
       "translate_deadline_sec": 30,
       "translate_timeout_sec": 30,
-      "note": "Cleanup uses the selected, authorized xAI conversation connection only for xAI dictation; local dictation stays on-device. Short text and failed cleanup retain the transcript."
+      "note": "Cleanup uses the selected, authorized xAI conversation connection only for xAI dictation; local dictation stays on-device. Levels: light, medium, heavy (natural paragraphs, lists for clear enumerations); cleanup_enabled is the independent off switch. Defaults to medium and casual. Originals remain in history; failed cleanup keeps the recognized text."
     }
   },
   "intelligence": {
@@ -134,10 +135,10 @@
     "feedback_sounds": true,
     "voice_input_mode": "toggle",
     "hotkeys": {
-      "dictate": {"key": "Space", "modifiers": ["ctrl", "alt"]},
-      "translate": {"key": "T", "modifiers": ["ctrl", "alt"], "target_language": "English"},
-      "voice_chat": {"key": "A", "modifiers": ["ctrl", "alt"]}
+      "dictate": {"key": "Fn", "modifiers": []},
+      "translate": {"key": "Fn", "modifiers": ["shift"], "target_language": "English"},
+      "voice_chat": {"key": "Space", "modifiers": ["fn"]}
     },
-    "note": "Menu-bar agent: recording indicator + menu items + global hotkeys. Hotkey key names use Carbon virtual keys; modifiers are cmd/shift/alt/ctrl."
+    "note": "Menu-bar agent: recording indicator + menu items + global hotkeys. Shortcuts support Fn, single modifiers and left/right modifier keys; modifier names include fn, cmd/shift/alt/ctrl and left_/right_ variants."
   }
 }

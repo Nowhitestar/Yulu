@@ -13,6 +13,8 @@ export interface StableCaptionSegment {
 export interface CaptionSourceUpdate {
   partial: string;
   stable: StableCaptionSegment[];
+  /** Latest utterance for display; stable may instead contain a full-session revision. */
+  stableCaption?: StableCaptionSegment | null;
   audioMs: number;
   replaceStable?: boolean;
 }
@@ -21,10 +23,15 @@ export interface StreamingCaptionUpdate {
   updates: Partial<Record<CaptionSource, CaptionSourceUpdate>>;
 }
 
+export interface StreamingCaptionOptions {
+  /** All voice-input modes capture the microphone, independently of cleanup. */
+  dictation?: boolean;
+}
+
 export interface StreamingCaptionEngine {
   readonly provider: string;
   warm(): Promise<void>;
-  start(language: "zh" | "en" | "ja" | "auto"): Promise<void>;
+  start(language: "zh" | "en" | "ja" | "auto", options?: StreamingCaptionOptions): Promise<void>;
   feed(chunks: Partial<Record<CaptionSource, Buffer>>): Promise<StreamingCaptionUpdate>;
   finish(): Promise<StreamingCaptionUpdate>;
   abort(): Promise<void>;

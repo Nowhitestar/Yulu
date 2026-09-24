@@ -220,6 +220,23 @@ describe("configRouter", () => {
       expect((await caller.get()).transcription.dictation.prompt_slug).toBe("dictation-tight");
     } finally { cleanup(); }
   });
+  it("persists the cleanup model without changing other model selections or accepting unknown models", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const before = await caller.get();
+      expect(before.transcription.dictation.cleanup_model).toBe("conversation");
+      const result = await caller.update({ key: "transcription.dictation.cleanup_model", value: "grok-4.20-0309-non-reasoning" });
+      expect(result.daemonsNeedingRestart).toEqual([]);
+      expect(result.daemonsNeedingSighup).toEqual([]);
+      const after = await caller.get();
+      expect(after.transcription.dictation.cleanup_model).toBe("grok-4.20-0309-non-reasoning");
+      expect(after.intelligence).toEqual(before.intelligence);
+      expect(after.transcription.dictation.style).toBe(before.transcription.dictation.style);
+      await expect(caller.update({ key: "transcription.dictation.cleanup_model", value: "unknown-fast-model" })).rejects.toThrow();
+      expect((await caller.get()).transcription.dictation.cleanup_model).toBe("grok-4.20-0309-non-reasoning");
+    } finally { cleanup(); }
+  });
 });
 
 describe("configRouter.schema", () => {

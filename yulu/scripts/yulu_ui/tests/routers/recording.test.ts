@@ -157,7 +157,7 @@ describe("recordingRouter", () => {
     await writeFile(
       join(tempDir, "dictation", "history.jsonl"),
       [
-        JSON.stringify({ id: "one", created_at: "2026-07-01T10:00:00", action: "dictate", text: "第一条", prompt_slug: "dictation-cleanup" }),
+        JSON.stringify({ id: "one", created_at: "2026-07-01T10:00:00", action: "dictate", text: "第一条", raw_text: "嗯，第一条。", cleanup_status: "cleaned", prompt_slug: "dictation-cleanup" }),
         JSON.stringify({ id: "two", created_at: "2026-07-01T10:01:00", action: "translate", text: "Second", target_language: "English", prompt_slug: "dictation-translate" }),
       ].join("\n"),
       "utf8",
@@ -171,6 +171,8 @@ describe("recordingRouter", () => {
     const caller = createCaller(recordingRouter, ctx);
     const r = await caller.history();
     expect(r.map((item: { id: string }) => item.id)).toEqual(["two", "one"]);
+    expect(r[1]).toMatchObject({ rawText: "嗯，第一条。", cleanupStatus: "cleaned" });
+    expect(r[0]).toMatchObject({ rawText: "Second", cleanupWarning: "" });
     expect(r[0]).toMatchObject({
       action: "translate",
       text: "Second",

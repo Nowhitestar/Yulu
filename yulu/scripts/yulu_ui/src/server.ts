@@ -9,7 +9,8 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Readable } from "node:stream";
 import { appRouter } from "./routers/_app.js";
 import { ConfigManager } from "./config.js";
-import { DictationCleanupSchema, DictationTextService } from "./dictationText.js";
+import { DictationCleanupSchema, DictationTranslationSchema, DictationTextService } from "./dictationText.js";
+import { DictationPreview } from "./dictationPreview.js";
 import { hasCurrentXaiConversationDisclosure } from "./conversationDataDisclosure.js";
 import { LaunchctlClient } from "./launchctl.js";
 import { openDb } from "./db.js";
@@ -387,7 +388,16 @@ async function startLockedServer(
       console.warn(`[yulu_ui] local caption warm-up failed: ${(error as Error).message}`);
     });
   }
+  const dictationText = new DictationTextService({
+    config: configManager,
+    text: xaiText,
+    credentialSource: () => agentConnections.selectedXaiCredentialSource(),
+    hasDisclosure: () => hasCurrentXaiConversationDisclosure(hostStore),
+    glossary: (text) => loadGlossaryContract(dbProxy.vocab, text),
+  });
+  const dictationPreview = new DictationPreview(dictationText);
   const realtimeTranscription = new RealtimeTranscriptionCoordinator({
+    dictationPreview,
     pubsub: appPubSub,
     streaming: audioTranscription,
     stabilize: (text) => applyGlossaryContract(text, loadGlossaryContract(dbProxy.vocab)),
@@ -553,13 +563,8 @@ async function startLockedServer(
     language: z.enum(["zh", "en", "ja", "auto"]),
     replaceActive: z.boolean().optional(),
     timeoutMs: z.number().int().min(100).max(35_000).optional(),
-  });
-  const dictationText = new DictationTextService({
-    config: configManager,
-    text: xaiText,
-    credentialSource: () => agentConnections.selectedXaiCredentialSource(),
-    hasDisclosure: () => hasCurrentXaiConversationDisclosure(hostStore),
-    glossary: () => loadGlossaryContract(dbProxy.vocab),
+    dictationSessionId: z.string().min(1).max(64).optional(),
+    dictation: z.boolean().optional(),
   });
   app.post("/api/dictation/cleanup", async (c) => {
     if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
@@ -567,11 +572,21 @@ async function startLockedServer(
     }
     const parsed = DictationCleanupSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ ok: false, error: "invalid_dictation_text" }, 400);
-    return c.json({ ok: true, ...await dictationText.clean(parsed.data) });
+    return c.json({ ok: true, ...await dictationPreview.clean(parsed.data) });
+  });
+  app.post("/api/dictation/translate", async (c) => {
+    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
+      return c.json({ ok: false, error: "unauthorized" }, 401);
+    }
+    const parsed = DictationTranslationSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ ok: false, error: "invalid_dictation_text" }, 400);
+    try { return c.json({ ok: true, ...await dictationText.translate(parsed.data) }); }
+    catch { return c.json({ ok: false, error: "dictation_translation_failed", detail: "翻译未完成；识别文字已保留。" }, 503); }
   });
   const RealtimeStopSchema = z.object({
     audioPath: z.string().min(1),
     timeoutMs: z.number().int().min(100).max(35_000).optional(),
+    dictationSessionId: z.string().min(1).max(64).optional(),
   });
   const RealtimeOptionsSchema = z.object({
     audioPath: z.string().min(1),
@@ -608,6 +623,8 @@ async function startLockedServer(
     try {
       const parsed = RealtimeStopSchema.parse(await c.req.json());
       await realtimeTranscription.cancel(parsed.audioPath);
+      // Capture may be cancelled while editing, after realtime has finalized.
+      if (parsed.dictationSessionId) dictationPreview.cancel(parsed.dictationSessionId);
       return c.json({ ok: true });
     } catch (error) {
       return c.json({ ok: false, error: "realtime_cancel_failed", detail: (error as Error).message }, 400);
@@ -628,6 +645,7 @@ async function startLockedServer(
   const AudioTranscriptionSchema = z.object({
     audioPath: z.string().min(1),
     language: z.enum(["zh", "en", "ja", "auto"]).optional(),
+    dictation: z.boolean().optional(),
   });
   app.post("/api/agent/transcription/warm", async (c) => {
     if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {

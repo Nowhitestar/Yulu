@@ -41,10 +41,16 @@ function setup(engine: "local" | "xai", xaiConsent = true) {
 }
 
 describe("AudioTranscriptionService", () => {
+  it("keeps every dictation mode mic-only and excludes glossary hints", async () => {
+    const { xai, service } = setup("xai");
+    await service.start("zh", { dictation: true });
+    expect(xai.start).toHaveBeenCalledWith("zh", { dictation: true, glossary: undefined });
+    await service.abort();
+  });
   it("includes the live glossary in selected xAI realtime sessions", async () => {
     const { xai, service } = setup("xai");
     await service.start("zh");
-    expect(xai.start).toHaveBeenCalledWith("zh", expect.objectContaining({ prompt: "AgentKey" }));
+    expect(xai.start).toHaveBeenCalledWith("zh", expect.objectContaining({ glossary: expect.objectContaining({ prompt: "AgentKey" }) }));
     await service.abort();
   });
 

@@ -1,3 +1,4 @@
+vi.mock("../../../web/src/hooks/usePermissions.js", () => ({ usePermissions: () => ({ data: { input: "ready", microphone: "ready" }, refetch: vi.fn() }) }));
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";

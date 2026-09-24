@@ -25,9 +25,9 @@ def test_load_defaults_when_block_missing(tmp_path, monkeypatch):
     assert block["enabled"] is True
     assert block["feedback_sounds"] is True
     assert block["voice_input_mode"] == "toggle"
-    assert block["hotkeys"]["dictate"]["key"] == "Space"
+    assert block["hotkeys"]["dictate"]["key"] == "Fn"
     assert block["hotkeys"]["translate"]["target_language"] == "English"
-    assert block["hotkeys"]["voice_chat"]["key"] == "A"
+    assert block["hotkeys"]["voice_chat"]["key"] == "Space"
 
 
 def test_load_defaults_when_config_file_missing(tmp_path, monkeypatch):
@@ -65,8 +65,8 @@ def test_status_agent_hotkeys_shape(tmp_path, monkeypatch):
     _stub_config(tmp_path, monkeypatch, {})
     hotkeys = sac.status_agent_hotkeys()
     assert [item["action"] for item in hotkeys] == ["dictate", "translate", "voice_chat"]
-    assert hotkeys[0]["keyCode"] == 49
-    assert hotkeys[0]["modifierMask"] == 0x1800
+    assert hotkeys[0]["keyCode"] == 63
+    assert hotkeys[0]["modifierMask"] == 0
     assert hotkeys[1]["targetLanguage"] == "English"
     assert all(item["inputMode"] == "toggle" for item in hotkeys)
 
@@ -210,7 +210,7 @@ def test_recorder_status_renders_streaming_partials_without_restarting_fade():
 def test_recorder_status_preserves_each_display_mode_during_streaming_updates():
     src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
     live_start = src.index("func liveCaptionSourceText")
-    live_end = src.index("func captionSpeechCharacterCount", live_start)
+    live_end = src.index("func isCaptionHesitation", live_start)
     live = src[live_start:live_end]
     render_start = src.index("func renderCaptions")
     render_end = src.index("func setCaption", render_start)
@@ -255,7 +255,7 @@ def test_recorder_status_bounds_live_caption_before_appkit_layout():
     visible_end = src.index("func captionString", visible_start)
     visible = src[visible_start:visible_end]
     live_start = src.index("func liveCaptionSourceText")
-    live_end = src.index("func captionSpeechCharacterCount", live_start)
+    live_end = src.index("func isCaptionHesitation", live_start)
     live = src[live_start:live_end]
 
     assert "let trimmed = boundedCaptionText(text, maxCharacters: captionLayoutCharacterLimit)" in visible
@@ -278,7 +278,7 @@ def test_status_agent_has_dictation_menu_entry():
     assert '"dictate_toggle"' in src
     assert '"dictate_translate"' in src
     assert "--target-bundle-id" in src
-    assert "currentInputTargetApplication()" in src
+    assert "currentInputTargetApplication(preferred: front)" in src
     assert "focusedInputApplication()" in src
     assert "isUsableInputTarget" in src
     assert "com.apple.loginwindow" in src
@@ -304,8 +304,12 @@ def test_status_agent_dictation_feedback_is_result_driven_and_explicit():
     assert '"没有听到清晰语音"' in src
     assert '"已复制，请按 ⌘V"' in src
     assert '"听写失败 · 录音已保留"' in src
-    assert 'showTimedVoiceFeedback(L("已输入", "Inserted"), sound: .success, duration: 0.8)' in src
-    assert 'showVoiceOverlay(L("正在确认完整录音…", "Finalizing recording…"), animation: .processing)' in src
+    # Verified insertion now dismisses the capsule silently. Native behavioral
+    # coverage for result classification and recovery lives in test_voice_overlay.
+    success = src[src.index("if presentation == .dismiss {") : src.index("} else if presentation == .unconfirmed {")]
+    assert "hideVoiceOverlay()" in success
+    assert "showTimedVoiceFeedback" not in success
+    assert "showVoiceRecovery" not in success
     assert "voiceOverlayStopButton" in src
     assert "voiceOverlayCancelButton" in src
     assert "voice overlay clicked" not in src
@@ -384,8 +388,8 @@ def test_status_agent_has_voice_chat_entry():
     assert "voiceChatWindowStatus" in src
     assert '"voice_chat_window_visible"' in src
     assert '"Stop Voice Chat"' in src
-    assert "voice chat recording active; ignoring dictation" in src
-    assert "voice chat recording active; ignoring translate dictation" in src
+    dictate = src[src.index("@objc func onDictateToggle()") : src.index("@objc func onVoiceChat()")]
+    assert dictate.count('if stopping && activeDictationIntent() == "voice_chat" { return }') == 2
 
 
 def test_status_agent_has_paste_clipboard_ipc():

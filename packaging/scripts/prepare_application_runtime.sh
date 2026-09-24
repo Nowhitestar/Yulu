@@ -181,4 +181,6 @@ cat > "$RUNTIME/runtime-versions.json" <<EOF
 }
 EOF
 
+bash "$ROOT/packaging/scripts/precompile_application_python.sh" "$APP"
+
 echo "Prepared self-contained Application Runtime at $APP"

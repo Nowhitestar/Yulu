@@ -300,7 +300,8 @@ def test_audio_daemon_silence_threshold_is_request_configured():
     assert "let silenceThreshold: Float" in text
     assert "silenceThresholdState = silenceThreshold" in text
     assert 'json["silence_threshold"]' in text
-    assert "self.calcRMS(samples) > self.silenceThresholdState" in text
+    assert "let rms = self.calcRMS(samples)" in text
+    assert "if rms > self.silenceThresholdState" in text
 
 
 def test_audio_daemon_mic_device_is_request_configured():
@@ -343,9 +344,9 @@ def test_config_example_has_status_agent_block():
     block = cfg.get("status_agent")
     assert block is not None
     assert block.get("enabled") is True
-    assert block["hotkeys"]["dictate"]["key"] == "Space"
+    assert block["hotkeys"]["dictate"] == {"key": "Fn", "modifiers": []}
     assert block["hotkeys"]["translate"]["target_language"] == "English"
-    assert block["hotkeys"]["voice_chat"]["key"] == "A"
+    assert block["hotkeys"]["voice_chat"] == {"key": "Space", "modifiers": ["fn"]}
 
 
 # ── Phase 6 — Global Search ──────────────────────────────────────────

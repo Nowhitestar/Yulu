@@ -1,0 +1,9 @@
+.hotkey-settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hotkey-settings-heading .path-btn { display: inline-flex; align-items: center; gap: 6px; }
+.hotkey-editor { padding: 16px; margin: 0 0 12px; border: 1px solid var(--edge); border-radius: var(--radius-control); background: var(--glass-2); }
+.hotkey-editor > p { margin: 0 0 14px; color: var(--fg-2); font-size: 13px; line-height: 1.6; }
+.hotkey-editor label { display: grid; gap: 6px; color: var(--fg-2); font-size: 12px; }
+.hotkey-editor select { padding: 7px 10px; min-width: 90px; color: var(--fg); background: var(--glass-paper); border: 1px solid var(--edge); border-radius: var(--radius-control); font: inherit; }
+.hotkey-modifiers { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.hotkey-editor-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 12px; }
+@media (max-width: 760px) { .hotkey-modifiers { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

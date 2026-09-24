@@ -23,20 +23,28 @@ DEFAULT_BLOCK = {
     "feedback_sounds": True,
     "voice_input_mode": "toggle",
     "hotkeys": {
-        "dictate": {"key": "Space", "modifiers": ["ctrl", "alt"]},
-        "translate": {"key": "T", "modifiers": ["ctrl", "alt"], "target_language": "English"},
-        "voice_chat": {"key": "A", "modifiers": ["ctrl", "alt"]},
+        "dictate": {"key": "Fn", "modifiers": []},
+        "translate": {"key": "Fn", "modifiers": ["shift"], "target_language": "English"},
+        "voice_chat": {"key": "Space", "modifiers": ["fn"]},
     },
 }
 
 _MODIFIER_MASKS = {
+    "fn": 0,
     "cmd": 0x100,
     "shift": 0x200,
     "alt": 0x800,
     "ctrl": 0x1000,
 }
+for _side in ("left", "right"):
+    for _modifier in ("cmd", "shift", "alt", "ctrl"):
+        _MODIFIER_MASKS[f"{_side}_{_modifier}"] = _MODIFIER_MASKS[_modifier]
 _PRETTY_MODIFIER = {"cmd": "⌘", "shift": "⇧", "alt": "⌥", "ctrl": "⌃"}
 _KEYCODES = {
+    "Fn": 63, "Command": 55, "LeftCommand": 55, "RightCommand": 54,
+    "Shift": 56, "LeftShift": 56, "RightShift": 60,
+    "Option": 58, "LeftOption": 58, "RightOption": 61,
+    "Control": 59, "LeftControl": 59, "RightControl": 62,
     "A": 0, "S": 1, "D": 2, "F": 3, "H": 4, "G": 5, "Z": 6, "X": 7,
     "C": 8, "V": 9, "B": 11, "Q": 12, "W": 13, "E": 14, "R": 15,
     "Y": 16, "T": 17, "1": 18, "2": 19, "3": 20, "4": 21, "6": 22,
@@ -106,8 +114,20 @@ def modifier_mask(modifiers: list[str]) -> int:
 
 def format_hotkey(block: dict) -> str:
     mods = block.get("modifiers") or []
-    order = ["cmd", "shift", "ctrl", "alt"]
-    return "".join(_PRETTY_MODIFIER[m] for m in order if m in mods) + str(block.get("key", ""))
+    order = ["fn", "cmd", "left_cmd", "right_cmd", "shift", "left_shift", "right_shift",
+             "alt", "left_alt", "right_alt", "ctrl", "left_ctrl", "right_ctrl"]
+    def label(modifier: str) -> str:
+        if modifier == "fn":
+            return "Fn"
+        parts = modifier.split("_")
+        side = parts[0].title() + " " if len(parts) == 2 else ""
+        return side + _PRETTY_MODIFIER.get(parts[-1], modifier)
+    key = str(block.get("key", ""))
+    if key == "Fn":
+        return " + ".join([key] + [label(m) for m in order if m in mods])
+    if all(m in _PRETTY_MODIFIER for m in mods):
+        return "".join(_PRETTY_MODIFIER[m] for m in ["cmd", "shift", "ctrl", "alt"] if m in mods) + key
+    return " + ".join([label(m) for m in order if m in mods] + [key])
 
 
 def status_agent_hotkeys() -> list[dict]:
@@ -125,6 +145,8 @@ def status_agent_hotkeys() -> list[dict]:
         item = {
             "action": action,
             "keyCode": keycode_for(spec["key"]),
+            "key": spec["key"],
+            "modifiers": spec.get("modifiers") or [],
             "modifierMask": modifier_mask(spec.get("modifiers") or []),
             "label": format_hotkey(spec),
             "inputMode": "hold" if block.get("voice_input_mode") == "hold" else "toggle",

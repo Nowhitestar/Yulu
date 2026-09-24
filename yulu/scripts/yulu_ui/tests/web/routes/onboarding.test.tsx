@@ -1,3 +1,4 @@
+vi.mock("../../../web/src/components/PermissionsPanel.js", () => ({ PermissionsPanel: () => null, PermissionReminder: () => null }));
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

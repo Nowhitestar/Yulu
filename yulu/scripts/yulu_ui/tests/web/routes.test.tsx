@@ -94,9 +94,11 @@ describe("placeholder routes smoke", () => {
     const router = createMemoryRouter([{ path: "/", element: <VoiceInput /> }], { initialEntries: ["/"] });
     const { container } = render(
       <ThemeProvider>
-        <QueryClientProvider client={qc}>
-          <RouterProvider router={router} />
-        </QueryClientProvider>
+        <LanguageProvider>
+          <QueryClientProvider client={qc}>
+            <RouterProvider router={router} />
+          </QueryClientProvider>
+        </LanguageProvider>
       </ThemeProvider>,
     );
     expect(container.querySelectorAll(".voice-action")).toHaveLength(3);

@@ -1,4 +1,4 @@
-import { router, publicProcedure, type AppContext } from "../trpc.js";
+import { router, publicProcedure, uiMutationProcedure, type AppContext } from "../trpc.js";
 import { ipcSend } from "../ipc.js";
 import { z } from "zod";
 import { readFile } from "node:fs/promises";
@@ -27,6 +27,9 @@ interface HistoryRow {
   language?: unknown;
   prompt_slug?: unknown;
   target_language?: unknown;
+  raw_text?: unknown;
+  cleanup_status?: unknown;
+  cleanup_warning?: unknown;
 }
 
 interface HistoryItem {
@@ -39,6 +42,9 @@ interface HistoryItem {
   language: string;
   promptSlug: string;
   targetLanguage: string;
+  rawText: string;
+  cleanupStatus: string;
+  cleanupWarning: string;
 }
 
 function publishState(ctx: Pick<AppContext, "pubsub">, stateAfter: string) {
@@ -69,7 +75,7 @@ async function readHistory(configDir: string, legacyReadOnlyDataDir: string, log
     ...await readHistoryLog(legacyReadOnlyDataDir),
   ];
   const byId = new Map<string, HistoryItem>();
-  for (const row of rows) byId.set(row.id, row);
+  for (const row of rows) if (!byId.has(row.id)) byId.set(row.id, row);
   return Array.from(byId.values())
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .slice(-100)
@@ -134,6 +140,9 @@ function toHistoryItem(parsed: HistoryRow, index: number): HistoryItem | null {
     language: String(parsed.language ?? ""),
     promptSlug: String(parsed.prompt_slug ?? ""),
     targetLanguage,
+    rawText: typeof parsed.raw_text === "string" ? parsed.raw_text : text,
+    cleanupStatus: typeof parsed.cleanup_status === "string" ? parsed.cleanup_status : "unchanged",
+    cleanupWarning: typeof parsed.cleanup_warning === "string" ? parsed.cleanup_warning : "",
   };
 }
 
@@ -185,6 +194,11 @@ function parseJsonObjects(raw: string): unknown[] {
 }
 
 export const recordingRouter = router({
+  shortcutEditing: uiMutationProcedure.input(z.object({ active: z.boolean() })).mutation(async ({ ctx, input }) => {
+    const reply = await ipcSend<{ ok?: boolean }>(ctx.paths.statusAgentSock, { action: "shortcut_editing", active: input.active });
+    if (reply.ok !== true) throw new Error("Finish voice input before editing shortcuts");
+    return { ok: true };
+  }),
   // Read readiness only. Never start capture or expose the current recording path.
   captureStatus: publicProcedure.query(async ({ ctx }) => {
     const checkedAt = new Date().toISOString();

@@ -1,3 +1,4 @@
+vi.mock("../../../web/src/components/PermissionsPanel.js", () => ({ PermissionsPanel: () => null, PermissionReminder: () => null }));
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, within, waitFor, fireEvent } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider, Navigate, Outlet } from "react-router";
@@ -5,6 +6,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // config.schema metadata used by the category list + detail. Shape mirrors the
 // server's SettingMeta (registry entry minus the Zod validate field).
+const shortcutEditingMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+
 const SCHEMA = [
   { path: "audio.mic_device",         category: "audio",         label: "麦克风设备", type: "select", reload: { kind: "none" } },
   { path: "audio.output_dir",         category: "audio",         label: "录音输出目录", type: "path", reload: { kind: "none" } },
@@ -118,6 +121,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       },
       scheduler: { overview: { useQuery: () => ({ data: { updatedAt: "", schedulerStatus: null, calendarStatus: null } }) } },
       recording: {
+        shortcutEditing: { useMutation: () => ({ mutateAsync: shortcutEditingMock, isPending: false }) },
         state: { useQuery: () => ({ data: { state: recording.state } }) },
         previewSound: { useMutation: (opts?: { onError?: (error: Error) => void }) => ({
           mutate: () => {
@@ -558,21 +562,22 @@ describe("Settings category detail content (re-homed widgets)", () => {
     const { container } = wrap("/settings/voice");
     const voice = within(container.querySelector("#voice-input") as HTMLElement);
     fireEvent.click(voice.getByLabelText("听写快捷键 更改"));
-    await waitFor(() => expect(voice.getByText("请按下组合键 · Esc 取消")).toBeInTheDocument());
+    await waitFor(() => expect(voice.getByText(translate("zh", "settings.voice.hotkey.capture"))).toBeInTheDocument());
     fireEvent.keyDown(window, { key: "F1", ctrlKey: true, altKey: true });
     await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith({
       key: "status_agent.hotkeys.dictate",
-      value: { key: "F1", modifiers: ["ctrl", "alt"] },
+      value: { key: "F1", modifiers: ["alt", "ctrl"] },
     }));
     expect(configUpdateSpy).toHaveBeenCalledOnce();
   });
 
-  it("voice: Escape cancels shortcut capture without changing the saved key", () => {
+  it("voice: Escape cancels shortcut capture without changing the saved key", async () => {
     configUpdateSpy.mockClear();
     const { container } = wrap("/settings/voice");
     const voice = within(container.querySelector("#voice-input") as HTMLElement);
     const change = voice.getByLabelText("听写快捷键 更改");
     fireEvent.click(change);
+    await waitFor(() => expect(change).toHaveAttribute("aria-pressed", "true"));
     fireEvent.keyDown(window, { key: "Escape" });
     expect(change).toHaveAttribute("aria-pressed", "false");
     expect(change).toHaveFocus();
@@ -614,34 +619,23 @@ describe("Settings category detail content (re-homed widgets)", () => {
     await waitFor(() => expect(getByTestId("settings-error-toast")).toHaveTextContent("status agent offline"));
   });
 
-  it("voice: dictation template selector commits the selected prompt slug", async () => {
-    configUpdateSpy.mockClear();
-    promptsListSpy.mockClear();
+  it("voice: replaces the legacy dictation template selector with cleanup settings", () => {
     const { container } = wrap("/settings/voice");
-    expect(promptsListSpy).toHaveBeenCalledWith({ category: "voice" });
     const voice = within(container.querySelector("#voice-input") as HTMLElement);
-    const row = voice.getByText(translate("zh", "settings.voice.prompt.dictate")).closest(".row") as HTMLElement;
-    fireEvent.click(within(row).getByText("Dictation Cleanup"));
-    fireEvent.change(within(row).getByRole("combobox"), { target: { value: "dictation-tight" } });
-    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
-      key: "transcription.dictation.prompt_slug",
-      value: "dictation-tight",
-    })));
+    expect(voice.queryByText("听写模板")).not.toBeInTheDocument();
+    expect(voice.queryByText("Dictation Cleanup")).not.toBeInTheDocument();
+    expect(voice.getByRole("switch", { name: translate("zh", "settings.voice.cleanupEnabled") })).toBeInTheDocument();
   });
 
-  it("voice: translation template selector commits the selected prompt slug", async () => {
-    configUpdateSpy.mockClear();
+  it("voice: translation only requires a target language and does not load templates", () => {
     promptsListSpy.mockClear();
     const { container } = wrap("/settings/voice");
-    expect(promptsListSpy).toHaveBeenCalledWith({ category: "voice" });
+    expect(promptsListSpy).not.toHaveBeenCalledWith({ category: "voice" });
     const voice = within(container.querySelector("#voice-input") as HTMLElement);
-    const row = voice.getByText(translate("zh", "settings.voice.prompt.translate")).closest(".row") as HTMLElement;
-    fireEvent.click(within(row).getByText("Dictation Translate"));
-    fireEvent.change(within(row).getByRole("combobox"), { target: { value: "dictation-tight" } });
-    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith(expect.objectContaining({
-      key: "transcription.dictation.translate_prompt_slug",
-      value: "dictation-tight",
-    })));
+    expect(voice.queryByText("翻译偏好")).not.toBeInTheDocument();
+    expect(voice.queryByText("翻译模板")).not.toBeInTheDocument();
+    expect(voice.queryByRole("link", { name: "管理模板" })).not.toBeInTheDocument();
+    expect(voice.getByRole("button", { name: "翻译目标语言" })).toBeInTheDocument();
   });
 
   it("voice: translation target language commits the dotted config path", async () => {

@@ -12,6 +12,7 @@ import { RecordingPipeline } from "../src/recordingPipeline.js";
 import { AgentUnavailableError } from "../src/agentGateway.js";
 import { RealtimeTranscriptionCoordinator } from "../src/realtimeTranscription.js";
 import { XaiAudioClient } from "../src/xaiAudio.js";
+import { DictationPreview } from "../src/dictationPreview.js";
 import { DictationTextService } from "../src/dictationText.js";
 import { XaiTextClient } from "../src/xaiText.js";
 import { createAgentSession, getAgentSession } from "../src/agentSessionStore.js";
@@ -433,11 +434,33 @@ describe("server", () => {
     }
   });
 
+  it("authenticates and validates translation and preserves provider failures", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
+    const translate = vi.spyOn(DictationTextService.prototype, "translate").mockResolvedValue({ text: "Tomorrow", model: "selected" });
+    const headers = { "Content-Type": "application/json", Authorization: "Bearer test-token" };
+    const request = (body: object, authorized = true) => fetch(`${env.baseUrl}/api/dictation/translate`, {
+      method: "POST", headers: authorized ? headers : { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    try {
+      expect((await request({ text: "明天", targetLanguage: "English" }, false)).status).toBe(401);
+      expect((await request({ text: "", targetLanguage: "English" })).status).toBe(400);
+      expect((await request({ text: "明天", targetLanguage: "English", timeoutMs: 20_001 })).status).toBe(400);
+      expect(translate).not.toHaveBeenCalled();
+      expect(await (await request({ text: "明天", targetLanguage: "English" })).json()).toMatchObject({ ok: true, text: "Tomorrow" });
+      translate.mockRejectedValueOnce(new Error("private provider details"));
+      const failed = await request({ text: "明天", targetLanguage: "English" });
+      expect(failed.status).toBe(503);
+      expect(await failed.json()).toMatchObject({ ok: false, error: "dictation_translation_failed" });
+    } finally { translate.mockRestore(); }
+  });
+
   it("authenticates and validates dictation cleanup before any text request", async () => {
     const configDir = join(env.root, ".config", "yulu");
     writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
-    const clean = vi.spyOn(DictationTextService.prototype, "clean").mockResolvedValue({
+    const clean = vi.spyOn(DictationPreview.prototype, "clean").mockResolvedValue({
       text: "Cleaned text", status: "cleaned", reason: "", warning: "", model: "selected-model",
+      cleanupLevel: "medium", style: "casual", cleanupSource: "final", previewSavedMs: 0,
     });
     const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
     try {
@@ -446,16 +469,16 @@ describe("server", () => {
       });
       expect(unauthorized.status).toBe(401);
       for (const body of ["{", JSON.stringify({ text: "" }), JSON.stringify({ text: "x".repeat(20_001) }),
-        JSON.stringify({ text: "private text", timeoutMs: 8_001 })]) {
+        JSON.stringify({ text: "private text", timeoutMs: 20_001 }), JSON.stringify({ text: "private text", sessionId: "x".repeat(65) })]) {
         const invalid = await fetch(`${env.baseUrl}/api/dictation/cleanup`, { method: "POST", headers, body });
         expect(invalid.status).toBe(400);
       }
       expect(clean).not.toHaveBeenCalled();
       const cleaned = await fetch(`${env.baseUrl}/api/dictation/cleanup`, {
-        method: "POST", headers, body: JSON.stringify({ text: "private text", context: "template", timeoutMs: 500 }),
+        method: "POST", headers, body: JSON.stringify({ text: "private text", context: "template", timeoutMs: 500, sessionId: "capture" }),
       });
       expect(await cleaned.json()).toMatchObject({ ok: true, text: "Cleaned text", status: "cleaned" });
-      expect(clean).toHaveBeenCalledExactlyOnceWith({ text: "private text", context: "template", timeoutMs: 500 });
+      expect(clean).toHaveBeenCalledExactlyOnceWith({ text: "private text", context: "template", timeoutMs: 500, sessionId: "capture" });
     } finally { clean.mockRestore(); }
   });
 
@@ -467,6 +490,7 @@ describe("server", () => {
     const startSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "start").mockResolvedValueOnce();
     const stopSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "stop").mockResolvedValueOnce(null);
     const cancelSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "cancel").mockResolvedValueOnce();
+    const cancelPreview = vi.spyOn(DictationPreview.prototype, "cancel").mockImplementation(() => {});
     const optionsSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "updateOptions").mockResolvedValueOnce({
       status: "transcribing",
       stem: "Realtime_20260714_160000",
@@ -489,10 +513,10 @@ describe("server", () => {
       const started = await fetch(`${env.baseUrl}/api/recordings/realtime/start`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ audioPath, title: "Realtime", language: "zh", timeoutMs: 4_000 }),
+        body: JSON.stringify({ audioPath, title: "Realtime", language: "zh", timeoutMs: 4_000, dictationSessionId: "capture" }),
       });
       expect(started.status).toBe(200);
-      expect(startSpy).toHaveBeenCalledWith({ audioPath, title: "Realtime", language: "zh", timeoutMs: 4_000 });
+      expect(startSpy).toHaveBeenCalledWith({ audioPath, title: "Realtime", language: "zh", timeoutMs: 4_000, dictationSessionId: "capture" });
 
       const stopped = await fetch(`${env.baseUrl}/api/recordings/realtime/stop`, {
         method: "POST",
@@ -503,10 +527,11 @@ describe("server", () => {
       expect(stopSpy).toHaveBeenCalledWith(audioPath, 4_000);
 
       const cancelled = await fetch(`${env.baseUrl}/api/recordings/realtime/cancel`, {
-        method: "POST", headers, body: JSON.stringify({ audioPath }),
+        method: "POST", headers, body: JSON.stringify({ audioPath, dictationSessionId: "capture" }),
       });
       expect(cancelled.status).toBe(200);
       expect(cancelSpy).toHaveBeenCalledExactlyOnceWith(audioPath);
+      expect(cancelPreview).toHaveBeenCalledExactlyOnceWith("capture");
 
       const options = await fetch(`${env.baseUrl}/api/recordings/realtime/options`, {
         method: "POST",
@@ -519,6 +544,7 @@ describe("server", () => {
       startSpy.mockRestore();
       stopSpy.mockRestore();
       cancelSpy.mockRestore();
+      cancelPreview.mockRestore();
       optionsSpy.mockRestore();
     }
   });

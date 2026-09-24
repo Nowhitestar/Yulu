@@ -24,6 +24,7 @@ export interface FeatureInputs {
   };
   capture?: { reachable: boolean; recording: boolean | null; micReady: boolean | null; sysReady: boolean | null };
   recording?: { state: string };
+  permissions?: { input: "ready" | "needs_attention" | "unknown" | "check_failed" };
   audio?: { available: boolean; provider: string };
   connections?: ConnectionView;
   calendar?: { selectedSource: unknown; readiness: { status: string; testedAt?: string | null } };
@@ -88,8 +89,10 @@ export function buildFeatureHealth(input: FeatureInputs): FeatureHealth[] {
   if (config?.status_agent.enabled === false) Object.assign(voice, { state: "off", detail: "voiceOff", action: "configure" });
   else if (config && capture?.reachable && capture.micReady === false) Object.assign(voice, { state: "attention", detail: "microphone", action: "configure" });
   else if (config && recording && ["daemonDown", "unknown"].includes(recording.state)) Object.assign(voice, { state: "attention", detail: "voiceUnavailable" });
+  else if (config && input.permissions?.input === "needs_attention") Object.assign(voice, { state: "attention", detail: "inputPermission", href: "/onboarding#permissions", action: "configure" });
   else if (config && recording && capture?.micReady) {
     if (transcription.state !== "ready") Object.assign(voice, { state: transcription.state, detail: "voiceEngine", href: transcription.href, action: transcription.action });
+    else if (input.permissions?.input !== "ready") Object.assign(voice, { state: "unchecked", detail: "inputPermissionUnknown", href: "/onboarding#permissions", action: "check" });
     else Object.assign(voice, { state: "ready", detail: "voiceReady" });
   }
   return [captureRow, transcription, summary, reminders, voice];

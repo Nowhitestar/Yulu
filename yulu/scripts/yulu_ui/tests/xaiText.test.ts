@@ -9,9 +9,55 @@ function response(payload: unknown, status = 200): Response {
 }
 
 describe("XaiTextClient.request", () => {
+  it("aborts superseded dictation requests at the transport boundary without retrying", async () => {
+    const controller = new AbortController();
+    const fetchFn = vi.fn<typeof fetch>(async (_url, init) => new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+    }));
+    const client = new XaiTextClient({ resolve: async () => ({ accessToken: "test", source: "oauth" }) } as never, fetchFn);
+    const request = client.request({ capability: "dictation", model: "selected", signal: controller.signal,
+      input: [{ role: "user", content: "An obsolete preview" }] });
+    const rejected = expect(request).rejects.toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledOnce());
+    controller.abort();
+    await rejected;
+    expect(fetchFn.mock.calls[0]![1]!.signal!.aborted).toBe(true);
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it("reports dictation timeouts distinctly while preserving Unknown Outcome for other capabilities", async () => {
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    try {
+      const fetchFn = vi.fn<typeof fetch>(async (_url, init) => new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), { once: true });
+      }));
+      const client = new XaiTextClient({ resolve: async () => ({ accessToken: "test", source: "oauth" }) } as never, fetchFn);
+      const request = client.request({ capability: "dictation", model: "selected",
+        input: [{ role: "user", content: "Dictated text" }] });
+      const rejected = expect(request).rejects.toMatchObject({ name: "TimeoutError" });
+      await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledOnce());
+      controller.abort(new DOMException("Deadline", "TimeoutError"));
+      await rejected;
+    } finally { timeout.mockRestore(); }
+  });
   const completed = (text: string, model = "grok-selected") => ({
     model, status: "completed",
     output: [{ type: "message", content: [{ type: "output_text", text }] }],
+  });
+
+  it.each([
+    ["dictation", "grok-4.6", true], ["dictation", "grok-4.5", true],
+    ["dictation", "other-model", false], ["conversation", "grok-4.6", false],
+    ["summary", "grok-4.6", false],
+  ] as const)("uses low reasoning only for supported dictation models: %s %s", async (capability, model, low) => {
+    const fetchFn = vi.fn<typeof fetch>(async () => response(completed("明天见", model)));
+    const client = new XaiTextClient({ resolve: async () => ({ accessToken: "test", source: "oauth" }) } as never, fetchFn);
+    await client.request({ capability, model, timeoutMs: 20_000, input: [{ role: "user", content: "嗯，明天见。" }] });
+    const body = JSON.parse(String(fetchFn.mock.calls[0]![1]!.body));
+    expect(body.reasoning).toEqual(low ? { effort: "low" } : undefined);
+    expect(body.store).toBe(false);
+    expect(body.tools).toBeUndefined();
   });
   const frame = (item: unknown) => `data: ${JSON.stringify(item)}\r\n\r\n`;
   const streamClient = (body: ReadableStream<Uint8Array>) => {
@@ -131,7 +177,7 @@ describe("XaiTextClient.request", () => {
       const client = new XaiTextClient(credentials as never, fetchFn);
       const request = client.request({ capability: "dictation", model: "selected-model", timeoutMs: 500,
         input: [{ role: "user", content: "Current dictated text" }] });
-      const rejected = expect(request).rejects.toThrow("deadline exceeded before request");
+      const rejected = expect(request).rejects.toMatchObject({ name: "AbortError" });
       controller.abort();
       await rejected;
       release({ accessToken: "test-token", source: "oauth" });

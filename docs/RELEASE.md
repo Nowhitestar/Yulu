@@ -83,19 +83,19 @@ Required assets, exactly:
 - `appcast.xml` (signed Sparkle feed pointing to the same DMG)
 - `checksums.txt`
 
-The current release line uses release-please's prerelease strategy. The
-consolidated Phase 13 closeout targets `Release-As: 0.23.0-rc.20`; inspect the
-generated Release PR before merging so it advances to RC20 rather than a new
-minor line. Do not update the published version, feed or download guidance merely
-because release notes were prepared. Tags with a prerelease suffix are published
-as prereleases.
+The current release-please configuration produces stable releases. Inspect the
+generated Release PR before merging to confirm the version and included changes.
+Versioned product notes belong in `docs/release-notes/<tag>.md`; the publisher
+appends them to the generated changelog entry. Do not update the published
+version, feed or download guidance merely because release notes were prepared.
+Tags with a prerelease suffix are published as prereleases.
 
 ## Manual escape hatch
 
 `.github/workflows/release.yml` still accepts a manually pushed `v*.*.*` tag for
 an emergency. The tag must match `VERSION`, with one fail-closed exception:
-`v0.23.0` may be pushed only while `VERSION` is `0.23.0-rc.20` and the local
-`v0.23.0-rc.20` tag resolves to the same source commit. That stable promotion uses
+`v0.23.0` may be pushed only while `VERSION` is `0.23.0-rc.21` and the local
+`v0.23.0-rc.21` tag resolves to the same source commit. That stable promotion uses
 the odd build number immediately after the RC's even build number; the next
 source commit receives the next even build number, so Sparkle ordering remains
 strict. All other mismatches fail before packaging. Use the

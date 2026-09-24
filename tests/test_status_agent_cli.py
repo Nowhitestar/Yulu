@@ -90,7 +90,8 @@ def test_hotkeys_json_prints_status_agent_specs(tmp_path, monkeypatch, capsys):
     assert rc == 0
     items = json.loads(capsys.readouterr().out)
     assert [item["action"] for item in items] == ["dictate", "translate", "voice_chat"]
-    assert items[0]["keyCode"] == 49
+    assert items[0]["keyCode"] == 63  # Fn
+    assert items[0]["modifierMask"] == 0
     assert items[1]["targetLanguage"] == "English"
 
 

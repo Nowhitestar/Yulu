@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { z } from "zod";
+import { DictationCleanupLevelSchema, DictationCleanupModelSchema, DictationStyleSchema } from "./dictationPreferences.js";
+import { DEFAULT_HOTKEYS, HotkeySchema as StatusAgentHotkeySchema, validateHotkeyConflicts } from "./hotkeys.js";
 import {
   TextProviderSelectionSchema,
   XAI_TEXT_MODEL_DEFAULT,
@@ -77,8 +79,14 @@ const AgentPipelineSchema = z.object({
 
 const DictationSchema = z.object({
   cleanup_enabled: z.boolean().default(true),
+  cleanup_level: DictationCleanupLevelSchema.default("medium"),
+  // Preserve existing model selection until fast cleanup is explicitly selected.
+  cleanup_model: DictationCleanupModelSchema.default("conversation"),
+  style: DictationStyleSchema.default("casual"),
   voice_chat_scope: z.enum(["general", "meetings"]).default("general"),
+  // Legacy compatibility: only the explicit "none" cleanup opt-out is used.
   prompt_slug: z.string().default("dictation-cleanup"),
+  // Retained for older clients; translation now uses built-in rules.
   translate_prompt_slug: z.string().default("dictation-translate"),
   target_language: z.string().default("English"),
   timeout_sec: z.number().default(30),
@@ -88,21 +96,17 @@ const DictationSchema = z.object({
   context_limit: z.number().default(240),
 }).passthrough().default({});
 
-const StatusAgentHotkeySchema = z.object({
-  key: z.string().default(""),
-  modifiers: z.array(z.enum(["cmd", "shift", "alt", "ctrl"])).default([]),
-  target_language: z.string().optional(),
-}).passthrough();
-
 const StatusAgentSchema = z.object({
   enabled: z.boolean().default(true),
   feedback_sounds: z.boolean().default(true),
   voice_input_mode: z.enum(["toggle", "hold"]).default("toggle"),
   hotkeys: z.object({
-    dictate: StatusAgentHotkeySchema.default({ key: "Space", modifiers: ["ctrl", "alt"] }),
-    translate: StatusAgentHotkeySchema.default({ key: "T", modifiers: ["ctrl", "alt"], target_language: "English" }),
-    voice_chat: StatusAgentHotkeySchema.default({ key: "A", modifiers: ["ctrl", "alt"] }),
-  }).passthrough().default({}),
+    dictate: StatusAgentHotkeySchema.default(DEFAULT_HOTKEYS.dictate),
+    translate: StatusAgentHotkeySchema.default({ ...DEFAULT_HOTKEYS.translate, target_language: "English" }),
+    voice_chat: StatusAgentHotkeySchema.default(DEFAULT_HOTKEYS.voice_chat),
+  }).passthrough().superRefine((hotkeys, ctx) => validateHotkeyConflicts({
+    dictate: hotkeys.dictate, translate: hotkeys.translate, voice_chat: hotkeys.voice_chat,
+  }, ctx)).default({}),
 }).passthrough().default({});
 
 export const ConfigSchema = z.object({

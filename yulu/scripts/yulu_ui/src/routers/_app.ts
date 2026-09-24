@@ -24,6 +24,7 @@ import { agentConnectionsRouter } from "./agentConnections.js";
 import { sharingRouter } from "./sharing.js";
 import { onboardingRouter } from "./onboarding.js";
 import { agentCalendarConnectorRouter } from "./agentCalendarConnector.js";
+import { permissionsRouter } from "./permissions.js";
 
 export const appRouter = router({
   recordings:   recordingsRouter,
@@ -51,6 +52,7 @@ export const appRouter = router({
   sharing: sharingRouter,
   onboarding: onboardingRouter,
   agentCalendarConnector: agentCalendarConnectorRouter,
+  permissions: permissionsRouter,
 });
 
 export type AppRouter = typeof appRouter;

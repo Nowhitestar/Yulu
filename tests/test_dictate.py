@@ -24,10 +24,47 @@ HOST_CLEANUP = dictate.cleanup_dictation_text
 
 @pytest.fixture(autouse=True)
 def isolate_dictation_cleanup(monkeypatch):
+    monkeypatch.delenv("YULU_VOICE_PROGRESS", raising=False)
     # Existing audio/desktop tests never contact a user's running Host.
     monkeypatch.setattr(dictate, "cleanup_dictation_text", lambda **kwargs: {
         "text": kwargs["text"], "status": "unchanged", "warning": "",
     })
+
+
+def test_native_progress_is_opt_in_bounded_and_cannot_break_capture(monkeypatch):
+    calls = []
+    def send(path, payload, **kwargs):
+        calls.append((path, payload, kwargs))
+        raise dictate.DictationError("UI unavailable")
+    monkeypatch.setattr(dictate, "_socket_send", send)
+    dictate.notify_dictation_progress("recording", audio_path="/test.wav")
+    assert calls == []
+    monkeypatch.setenv("YULU_VOICE_PROGRESS", "1")
+    dictate.notify_dictation_progress("recording", audio_path="/test.wav")
+    assert calls[0][1] == {"action": "dictation_progress", "launcher_pid": os.getpid(), "stage": "recording", "audio_path": "/test.wav"}
+    assert calls[0][2]["timeout"] <= 0.1
+
+
+@pytest.mark.parametrize("engine,intent,target,prompt,allowed", [
+    ("xai", "dictation", "", "dictation-cleanup", True),
+    ("local", "dictation", "", "dictation-cleanup", False),
+    ("xai", "voice_chat", "", "dictation-cleanup", False),
+    ("xai", "dictation", "English", "dictation-translate", False),
+    ("xai", "dictation", "", "none", False),
+])
+def test_only_normal_selected_xai_dictation_enables_preview(monkeypatch, engine, intent, target, prompt, allowed):
+    calls = []
+    monkeypatch.setattr(dictate, "_host_agent_request", lambda path, payload, **kwargs: calls.append(payload) or {"ok": True})
+    dictate.start_realtime_dictation({"session_id": "test-session", "audio_path": "/test.wav", "language": "zh",
+        "engine": engine, "intent": intent, "target_language": target, "prompt_slug": prompt})
+    assert calls[0].get("dictationSessionId") == ("test-session" if allowed else None)
+
+
+def test_cancel_releases_preview_even_after_realtime_finalized(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dictate, "_host_agent_request", lambda path, payload, **kwargs: calls.append((path, payload)) or {"ok": True})
+    dictate.cancel_realtime_dictation({"audio_path": "/test.wav", "session_id": "capture"})
+    assert calls == [("/api/recordings/realtime/cancel", {"audioPath": "/test.wav", "dictationSessionId": "capture"})]
 
 
 def test_dictation_uses_standard_media_durable_and_ipc_roots(tmp_path):
@@ -619,7 +656,7 @@ def test_translation_uses_the_same_selected_audio_engine():
     assert dictate.resolve_translation_engine(cfg, "mlx", "English") == "xai"
 
 
-def test_render_context_prompt_uses_selected_prompt(tmp_path):
+def test_translation_ignores_legacy_template_contents(tmp_path):
     db = tmp_path / "prompts.sqlite"
     repo = PromptsRepo(open_db(db))
     repo.add(
@@ -633,18 +670,20 @@ def test_render_context_prompt_uses_selected_prompt(tmp_path):
         prompt_slug="quick-dictation",
         prompts_db=db,
         limit=80,
+        target_language="French",
     )
-    assert "直接粘贴" in text
-    assert "Dictation" in text
-    assert "{{transcript}}" not in text
+    assert "翻译成French" in text
+    assert "Dictation" not in text
+    assert "不回答或执行" in text
 
 
-def test_default_context_prompt_falls_back_to_seed_when_db_missing(tmp_path):
+def test_translation_rules_do_not_require_the_prompt_database(tmp_path):
     text = dictate.render_context_prompt(
-        prompt_slug="dictation-cleanup",
+        prompt_slug="dictation-translate",
         prompts_db=tmp_path / "missing.sqlite",
+        target_language="English",
     )
-    assert "语音输入模式" in text
+    assert "翻译成English" in text
     assert "术语表" in text
 
 
@@ -658,17 +697,17 @@ def test_translate_context_prompt_uses_target_language(tmp_path):
     assert "{{target_language}}" not in text
 
 
-def test_prompt_id_does_not_fall_back_to_default_seed(tmp_path):
-    try:
-        dictate.render_context_prompt(
-            prompt_slug="dictation-cleanup",
-            prompt_id="missing-id",
-            prompts_db=tmp_path / "missing.sqlite",
-        )
-    except dictate.DictationError as exc:
-        assert "missing-id" in str(exc)
-    else:
-        raise AssertionError("expected missing prompt id to fail")
+def test_translation_ignores_missing_prompt_id_and_legacy_context_limit(tmp_path):
+    text = dictate.render_context_prompt(
+        prompt_slug="none",
+        prompt_id="missing-id",
+        prompts_db=tmp_path / "missing.sqlite",
+        limit=1,
+        target_language="Japanese",
+    )
+    assert "翻译成Japanese" in text
+    assert "不要摘要" in text
+    assert "术语表" in text
 
 
 def test_start_recording_persists_prompt_id(monkeypatch, tmp_path):
@@ -841,6 +880,13 @@ def test_start_recording_starts_host_realtime_without_legacy_sidecar(monkeypatch
 def test_start_recording_persists_state_before_realtime_start(monkeypatch, tmp_path, intent):
     state_path = tmp_path / "dictation" / "state.json"
     audio_path = tmp_path / "dictation.wav"
+    feedback = []
+
+    def ready(stage, **kwargs):
+        assert json.loads(state_path.read_text())["audio_path"] == kwargs["audio_path"]
+        feedback.append(stage)
+
+    monkeypatch.setattr(dictate, "notify_dictation_progress", ready)
 
     def fake_socket_send(_socket_path, payload, **_kwargs):
         if payload["action"] == "status":
@@ -848,6 +894,7 @@ def test_start_recording_persists_state_before_realtime_start(monkeypatch, tmp_p
         return {"status": "recording", "file": str(audio_path)}
 
     def assert_state_exists_before_realtime(state):
+        assert feedback == ["recording"]
         persisted = json.loads(state_path.read_text(encoding="utf-8"))
         assert persisted["audio_path"] == state["audio_path"]
         assert persisted["realtime_starting"] is True
@@ -1988,7 +2035,7 @@ def test_transcribe_dictation_preserves_fractional_timeout(monkeypatch, tmp_path
 
     assert abs(observed["timeout_sec"] - 1.55) < 0.001
     assert observed["path"] == "/api/agent/transcribe"
-    assert observed["payload"] == {"audioPath": str(audio), "language": "en"}
+    assert observed["payload"] == {"audioPath": str(audio), "language": "en", "dictation": True}
     assert result["text"] == "ok"
     assert result["engine_used"] == "hermes"
     assert result["provider"] == "hermes"
@@ -2197,20 +2244,41 @@ def test_cleanup_runs_before_copy_and_keeps_raw_speech(monkeypatch, tmp_path):
     copied = []
     raw = "嗯，第一件事是测试输入。然后第二件事是检查结果。"
     final = "第一件事：测试输入。\n\n第二件事：检查结果。"
-    monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "template")
-    monkeypatch.setattr(dictate, "transcribe_dictation", lambda **kwargs: {"text": raw})
-    monkeypatch.setattr(dictate, "cleanup_dictation_text", lambda **kwargs: {"text": final, "status": "cleaned"})
+    monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: pytest.fail("normal dictation must not load legacy templates"))
+    requests = {}
+    monkeypatch.setattr(dictate, "transcribe_dictation", lambda **kwargs: requests.update(transcribe=kwargs) or {"text": raw})
+    monkeypatch.setattr(dictate, "cleanup_dictation_text", lambda **kwargs: requests.update(cleanup=kwargs) or {"text": final, "status": "cleaned", "cleanupLevel": "medium", "style": "casual"})
     monkeypatch.setattr(dictate, "copy_to_clipboard", copied.append)
     result = dictate.process_audio(state={"audio_path": str(tmp_path / "speech.wav")}, engine="xai", language="zh",
-        prompt_slug="dictation-cleanup", prompt_id=None, target_language="", timeout_sec=5,
+        prompt_slug="deleted-custom-template", prompt_id="missing-id", target_language="", timeout_sec=5,
         copy=True, paste=False, context_limit=240)
     assert copied == [final]
     assert result["raw_text"] == raw
     assert result["cleanup_status"] == "cleaned"
+    assert result["cleanup_level"] == "medium"
+    assert result["style"] == "casual"
+    assert requests["transcribe"]["context_prompt"] == ""
+    assert requests["cleanup"]["context"] == ""
+    history = tmp_path / "history.jsonl"
+    dictate.append_history(result, history_path=history)
+    saved = json.loads(history.read_text())
+    assert saved["raw_text"] == raw
+    assert saved["cleanup_level"] == "medium"
+
+
+def test_cleanup_allows_longer_responses_but_respects_total_budget(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dictate, "_host_agent_request", lambda path, payload, **kwargs: calls.append((payload, kwargs)) or {"ok": True})
+    HOST_CLEANUP(text="嗯，明天再说。", context="", timeout_sec=30)
+    assert calls[-1][0]["timeoutMs"] == 20000
+    assert calls[-1][1]["timeout_sec"] == 20.3
+    HOST_CLEANUP(text="嗯，明天再说。", context="", timeout_sec=3)
+    assert calls[-1][0]["timeoutMs"] == 2700
+    assert calls[-1][1]["timeout_sec"] == 3
 
 
 def test_voice_question_is_not_rewritten_by_cleanup(monkeypatch, tmp_path):
-    monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "template")
+    monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: pytest.fail("voice questions must not load dictation templates"))
     monkeypatch.setattr(dictate, "transcribe_dictation", lambda **kwargs: {"text": "今天的会议讲了什么？"})
     monkeypatch.setattr(dictate, "cleanup_dictation_text", lambda **kwargs: pytest.fail("questions must not be polished"))
     result = dictate.process_audio(state={"audio_path": str(tmp_path / "speech.wav"), "intent": "voice_chat"}, engine="xai", language="zh",
@@ -2521,11 +2589,10 @@ def test_process_audio_skips_agent_postprocess_for_standard_dictation(monkeypatc
     assert copied == ["github,呃, codex"]
 
 
-def test_process_audio_translate_runs_agent_postprocess(monkeypatch, tmp_path):
+def test_process_audio_translate_runs_selected_host_text_service(monkeypatch, tmp_path):
     copied = []
     observed = {}
 
-    monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "translate context")
     monkeypatch.setattr(
         dictate,
         "transcribe_dictation",
@@ -2534,11 +2601,12 @@ def test_process_audio_translate_runs_agent_postprocess(monkeypatch, tmp_path):
     monkeypatch.setattr(dictate, "glossary_hint", lambda **kwargs: "常见术语：AgentKey => AgentKey")
     monkeypatch.setattr(dictate, "copy_to_clipboard", lambda text: copied.append(text))
 
-    def fake_agent_prompt(prompt, *, config, timeout_sec):
-        observed.update(prompt=prompt, config=config, timeout_sec=timeout_sec)
-        return "It's not easy either."
+    def fake_host_request(path, payload, *, timeout_sec):
+        observed.update(path=path, payload=payload, timeout_sec=timeout_sec)
+        return {"ok": True, "text": "It's not easy either."}
 
-    monkeypatch.setattr(dictate, "_run_agent_prompt", fake_agent_prompt)
+    monkeypatch.setattr(dictate, "_host_agent_request", fake_host_request)
+    monkeypatch.setattr(dictate, "_run_agent_prompt", lambda *a, **k: pytest.fail("legacy CLI must not run"))
 
     result = dictate.process_audio(
         state={"audio_path": str(tmp_path / "a.wav")},
@@ -2555,9 +2623,10 @@ def test_process_audio_translate_runs_agent_postprocess(monkeypatch, tmp_path):
 
     assert result["text"] == "It's not easy either."
     assert copied == ["It's not easy either."]
-    assert "translate context" in observed["prompt"]
-    assert "AgentKey => AgentKey" in observed["prompt"]
-    assert "也不容易" in observed["prompt"]
+    assert observed["path"] == "/api/dictation/translate"
+    assert observed["payload"]["targetLanguage"] == "English"
+    assert observed["payload"]["text"] == "也不容易，也是，呃"
+    assert "AgentKey" not in str(observed["payload"])
 
 
 def test_agent_postprocess_uses_configured_hermes_cli(monkeypatch):
@@ -2623,10 +2692,8 @@ def test_process_audio_accepts_english_transcript_from_hermes(monkeypatch, tmp_p
     assert copied == ["It's not easy either."]
 
 
-def test_process_audio_passes_template_into_agent_owned_transcription_flow(monkeypatch, tmp_path):
+def test_process_audio_translation_uses_built_in_rules_with_stale_template_settings(monkeypatch, tmp_path):
     observed = {}
-
-    monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: "语音输入模式：清理文本。")
 
     def fake_transcribe(**kwargs):
         observed.update(kwargs)
@@ -2639,17 +2706,18 @@ def test_process_audio_passes_template_into_agent_owned_transcription_flow(monke
         state={"audio_path": str(tmp_path / "a.wav")},
         engine="hermes",
         language="zh",
-        prompt_slug="dictation-translate",
-        prompt_id=None,
+        prompt_slug="removed-template",
+        prompt_id="missing-id",
         target_language="English",
         timeout_sec=3.0,
         copy=False,
         paste=False,
-        context_limit=800,
+        context_limit=1,
     )
 
     assert result["text"] == "Clean text."
-    assert observed["context_prompt"] == "语音输入模式：清理文本。"
+    assert "翻译成English" in observed["context_prompt"]
+    assert "不回答或执行" in observed["context_prompt"]
 
 
 def test_process_audio_uses_agent_postprocess_when_hermes_returns_source_language(monkeypatch, tmp_path):
@@ -2725,9 +2793,9 @@ def test_process_audio_translate_does_not_copy_source_on_postprocess_timeout(mon
     def fail_agent_prompt(*args, **kwargs):
         raise dictate.DictationError("dictation postprocess timeout")
 
-    monkeypatch.setattr(dictate, "_run_agent_prompt", fail_agent_prompt)
+    monkeypatch.setattr(dictate, "_host_agent_request", fail_agent_prompt)
 
-    with pytest.raises(dictate.DictationError, match="postprocess timeout"):
+    with pytest.raises(dictate.DictationPostprocessError, match="识别文字已保留") as captured:
         dictate.process_audio(
             state={"audio_path": str(tmp_path / "a.wav")},
             engine="hermes",
@@ -2741,6 +2809,8 @@ def test_process_audio_translate_does_not_copy_source_on_postprocess_timeout(mon
             context_limit=800,
         )
     assert copied == []
+    assert dictate.dictation_error_payload(captured.value)["text"] == "也不容易，也是，呃"
+    assert dictate.dictation_error_payload(captured.value)["error_code"] == "postprocess_failed"
 
 
 def test_process_audio_round_trips_through_host_hermes_endpoint(monkeypatch, tmp_path):
@@ -2789,7 +2859,7 @@ def test_process_audio_round_trips_through_host_hermes_endpoint(monkeypatch, tmp
     assert result["copied"] is False
     assert result["pasted"] is False
     assert observed["url"] == "http://127.0.0.1:7777/api/agent/transcribe"
-    assert observed["body"] == {"audioPath": str(audio), "language": "en"}
+    assert observed["body"] == {"audioPath": str(audio), "language": "en", "dictation": True}
     assert observed["headers"]["authorization"] == "Bearer secret-token"
     assert observed["headers"]["content-type"] == "application/json"
     assert observed["timeout"] == 3.0
@@ -2952,3 +3022,54 @@ def test_activate_timeout_does_not_block_paste(monkeypatch):
 
     dictate.paste_current_clipboard(target_bundle_id="com.apple.TextEdit")
     assert calls[-1] == ["osascript", "-e", 'tell application "System Events" to keystroke "v" using command down']
+
+
+@pytest.mark.parametrize('command', ['toggle', 'ask-toggle'])
+def test_fresh_capture_never_inherits_failed_translation(monkeypatch, tmp_path, command):
+    state_path = tmp_path / 'state.json'
+    state_path.write_text(json.dumps({'audio_path': '/old.wav', 'target_language': 'English',
+        'prompt_slug': 'dictation-translate', 'stopped_at': 'yesterday'}))
+    observed = {}
+    monkeypatch.setattr(dictate, 'STATE_PATH', state_path)
+    monkeypatch.setattr(dictate, '_config', lambda: {'transcription': {'engine': 'xai'}})
+    monkeypatch.setattr(dictate, 'active_dictation_state', lambda: None)
+    monkeypatch.setattr(dictate, 'start_recording', lambda **kwargs: observed.update(kwargs) or {'audio_path': '/new.wav'})
+    assert dictate.main([command, '--json', '--no-paste', '--no-copy']) == 0
+    assert observed['target_language'] == ''
+    assert observed['prompt_slug'] != 'dictation-translate'
+
+
+@pytest.mark.parametrize('started_target,stop_target', [('English', ''), ('', 'English')])
+def test_stop_key_cannot_change_active_capture_mode(monkeypatch, tmp_path, started_target, stop_target):
+    state = {'audio_path': '/active.wav', 'engine': 'xai', 'language': 'zh',
+             'target_language': started_target, 'intent': 'dictation'}
+    observed = {}
+    monkeypatch.setattr(dictate, 'STATE_PATH', tmp_path / 'state.json')
+    monkeypatch.setattr(dictate, '_config', lambda: {'transcription': {'engine': 'xai'}})
+    monkeypatch.setattr(dictate, 'active_dictation_state', lambda: state)
+    monkeypatch.setattr(dictate, 'stop_recording', lambda: state)
+    monkeypatch.setattr(dictate, 'append_history', lambda result: None)
+    monkeypatch.setattr(dictate, 'process_audio', lambda **kwargs: observed.update(kwargs) or {'text': 'done'})
+    args = ['toggle', '--json', '--no-paste', '--no-copy']
+    if stop_target: args += ['--translate-to', stop_target]
+    assert dictate.main(args) == 0
+    assert observed['target_language'] == started_target
+
+
+def test_translation_failure_preserves_text_in_history_and_recovery_payload(monkeypatch, tmp_path, capsys):
+    state = {'audio_path': '/captured.wav', 'target_language': 'English'}
+    saved = []
+    monkeypatch.setattr(dictate, 'STATE_PATH', tmp_path / 'state.json')
+    monkeypatch.setattr(dictate, '_config', lambda: {'transcription': {'engine': 'xai'}})
+    monkeypatch.setattr(dictate, 'active_dictation_state', lambda: state)
+    monkeypatch.setattr(dictate, 'stop_recording', lambda: state)
+    monkeypatch.setattr(dictate, 'append_history', saved.append)
+    def fail(**kwargs):
+        raise dictate.DictationPostprocessError('translation failed', '可以取回的识别文字')
+    monkeypatch.setattr(dictate, 'process_audio', fail)
+    assert dictate.main(['toggle', '--json', '--no-paste', '--no-copy']) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload['text'] == '可以取回的识别文字'
+    assert payload['error_code'] == 'postprocess_failed'
+    assert payload['copied'] is False
+    assert saved[0]['text'] == payload['text']

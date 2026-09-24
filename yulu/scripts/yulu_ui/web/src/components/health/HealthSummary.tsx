@@ -4,6 +4,7 @@ import { trpc } from "../../trpc.js";
 import { useLang, useT } from "../../i18n/LanguageProvider.js";
 import { buildFeatureHealth } from "./featureHealth.js";
 import { taskActivity } from "./taskStatus.js";
+import { usePermissions } from "../../hooks/usePermissions.js";
 import "./HealthSummary.css";
 
 const ICONS = { recording: Mic, transcription: AudioLines, summary: FileText, reminders: CalendarDays, voice: AudioLines };
@@ -21,6 +22,7 @@ export function HealthSummary() {
   const calendar = trpc.integrations.calendarSources.useQuery(undefined, polling);
   const schedule = trpc.scheduler.overview.useQuery(undefined, polling);
   const tasks = trpc.agentTasks.list.useQuery({ limit: 100 }, polling);
+  const permissions = usePermissions();
   // A failed refresh must not keep showing stale green query data.
   const features = buildFeatureHealth({
     config: config.isError ? undefined : config.data,
@@ -30,11 +32,12 @@ export function HealthSummary() {
     connections: connections.isError ? undefined : connections.data,
     calendar: calendar.isError ? undefined : calendar.data,
     schedule: schedule.isError ? undefined : schedule.data,
+    permissions: permissions.data,
   });
   const attention = features.filter((item) => item.state === "attention").length;
   const incomplete = features.filter((item) => ["unchecked", "unconfigured"].includes(item.state)).length;
   const activity = tasks.isError ? null : taskActivity(tasks.data ?? []);
-  const queries = [config, capture, recording, audio, connections, calendar, schedule, tasks];
+  const queries = [config, capture, recording, audio, connections, calendar, schedule, tasks, permissions];
   const refreshing = queries.some((query) => query.isFetching);
   const checkedAt = !capture.isError ? capture.data?.checkedAt : undefined;
   const rank = { attention: 0, unconfigured: 1, unchecked: 2, ready: 3, off: 4 };

@@ -28,9 +28,7 @@ capability silently falls back to another provider or model.
     "language": "zh",
     "dictation": {
       "prompt_slug": "dictation-cleanup",
-      "translate_prompt_slug": "dictation-translate",
       "target_language": "English",
-      "context_limit": 240,
       "deadline_sec": 30,
       "timeout_sec": 30,
       "translate_deadline_sec": 30,
@@ -62,13 +60,13 @@ capability silently falls back to another provider or model.
     "enabled": true,
     "voice_input_mode": "toggle",
     "hotkeys": {
-      "dictate": { "key": "Space", "modifiers": ["ctrl", "alt"] },
+      "dictate": { "key": "Fn", "modifiers": [] },
       "translate": {
-        "key": "T",
-        "modifiers": ["ctrl", "alt"],
+        "key": "Fn",
+        "modifiers": ["shift"],
         "target_language": "English"
       },
-      "voice_chat": { "key": "A", "modifiers": ["ctrl", "alt"] }
+      "voice_chat": { "key": "Space", "modifiers": ["fn"] }
     }
   },
   "calendars": [
@@ -201,28 +199,83 @@ and dictation. The default is local and there is no automatic fallback.
 |---|---:|---|
 | `engine` | `"local"` | `local` or `xai`; the selected value is used exactly for all audio transcription paths. |
 | `language` | `"zh"` | `zh`, `en`, `ja`, or `auto`. Japanese requires the `xai` engine; Settings rejects the unsupported `local` + `ja` combination. |
-| `dictation.cleanup_enabled` | `true` | Clean up normal xAI dictation through the explicitly selected and authorized xAI conversation connection. Local dictation stays on-device; short text and failed cleanup keep the original transcript. |
+| `dictation.cleanup_enabled` | `true` | Independent auto-cleanup switch; turning it off preserves the chosen level. Cleanup uses the explicitly selected and authorized xAI conversation connection; local dictation stays on-device. |
+| `dictation.cleanup_level` | `"medium"` | `light` removes fillers/repeats and fixes grammar; `medium` joins fragments and removes redundant wording; `heavy` adds natural paragraph breaks and uses numbered points only for clear enumerations, preserving the speaker's voice and meaning. Legacy `none` remains an opt-out. |
+| `dictation.cleanup_model` | `"conversation"` | `conversation` preserves the selected xAI conversation model. Explicitly choose `grok-4.20-0309-non-reasoning` for faster dictation editing, independently of cleanup level. Summary, translation and voice-question models are unaffected. |
+| `dictation.style` | `"casual"` | `formal` uses full punctuation and normal capitalization; `casual` reduces punctuation; `very_casual` also lowercases ordinary English sentence starts while preserving proper names and code. Applies when cleanup is enabled. |
 | `dictation.voice_chat_scope` | `"general"` | Default voice-question scope: `general` uses conversation history only; `meetings` enables meeting questions. Changing this setting starts a new voice conversation on the next question. |
-| `dictation.prompt_slug` | `"dictation-cleanup"` | Local prompt selected for normal dictation cleanup. |
-| `dictation.translate_prompt_slug` | `"dictation-translate"` | Local prompt selected for quick translation. |
+| `dictation.prompt_slug` | `"dictation-cleanup"` | Legacy compatibility only: `none` retains an existing cleanup opt-out. Normal dictation no longer loads a prompt template. |
+| `dictation.translate_prompt_slug` | `"dictation-translate"` | Legacy compatibility only; ignored. Quick translation uses built-in rules and the selected target language. |
 | `dictation.target_language` | `"English"` | Default target for dictation translation and the realtime-caption language selector. |
-| `dictation.context_limit` | `240` | Maximum local prompt/glossary context characters. |
+| `dictation.context_limit` | `240` | Legacy compatibility only; ignored. Built-in translation rules are not truncated. |
 | `dictation.deadline_sec` | `30` | End-to-end post-capture budget used by installed shortcuts. |
 | `dictation.timeout_sec` | `30` | Host/Agent request budget used by installed shortcuts. |
 | `dictation.translate_deadline_sec` | `30` | Translation-specific deadline override. |
 | `dictation.translate_timeout_sec` | `30` | Translation-specific request override. |
 
 Dictation cleanup is a bounded text transform in the Host using the existing
-stateless xAI client. It sends only the current utterance and its selected
-prompt/glossary, with no meeting retrieval, history or tools. It requires current
-xAI conversation disclosure and never switches providers. Cleanup has at most
-eight seconds within the remaining dictation deadline; setting `prompt_slug` to
-`"none"` also disables it. Translation and voice questions skip normal cleanup.
-History retains both the recognized text and final text when cleanup runs.
+stateless xAI client. It sends only the current utterance and matching glossary
+entries, with no meeting retrieval, history or tools. It requires current
+xAI conversation disclosure and never switches providers. Cleanup allows 8 seconds
+for up to 500 characters, adding 2 seconds per additional 500 characters up to
+20 seconds within the remaining dictation deadline; setting `prompt_slug` to
+`"none"`, `cleanup_enabled` to `false`, or `cleanup_level` to `"none"` disables it.
+Short phrases are also cleaned. Supported Grok 4.5/4.6 dictation requests use
+low reasoning effort; summary and conversation requests are unaffected.
+Fast cleanup uses the exact pinned non-reasoning model over the existing authorized
+xAI connection. Older configurations continue to follow the conversation model
+until fast cleanup is explicitly selected; failures retain the original text,
+without retrying against a different model.
+During normal xAI dictation, completed sentence groups of at least 240 characters
+can be edited while the next sentence is spoken. The unfinished tail is previewed
+only after at least 650 ms of microphone silence. Completed paragraphs are reused
+when their exact source, preceding context, model, preferences and matched terms
+still agree. Only the new tail needs editing at stop. A changed source paragraph
+invalidates that paragraph and all later ones; explicit cross-paragraph correction
+cues trigger full-text editing so earlier text is not blindly kept. Requests are
+bounded to one per 1.5 seconds, one in flight, and 64 previews per recording.
+Each segment receives at most 2,000 characters of earlier edited text as reference,
+never as instructions. The combined result is inserted once after finalization.
+Previews stay in memory and are discarded on cancellation, a new session, or
+60 seconds after finalization. Translation, voice questions, local transcription,
+and disabled cleanup do not send previews. Local history records whether cleanup
+was reused, its overlap time, stop-to-result time, and insertion time.
+Normal dictation uses cleanup level and style directly, without loading legacy
+dictation templates. Quick translation uses the selected xAI text connection and
+fixed translation rules; it requires its disclosure and has no legacy Agent CLI
+fallback. Translation failure preserves recognized text in history and the recovery
+panel, without automatically pasting untranslated text. All modes are fixed when
+the recording starts; neither a different stop shortcut nor a prior failed session
+can change that recording's mode. Text editing receives only glossary entries
+matching the current utterance. Voice-input STT sends no global glossary hints,
+including its batch fallback; meeting processing retains its glossary behavior.
+Heavy cleanup preserves context, concrete examples, distinct requests, negations,
+uncertainty and the speaker's perspective. It reorganizes the dictation without
+answering its questions or adding solutions. Explanations, opinions and narratives
+remain prose, with paragraph breaks at changes of thought. Only clear enumerations
+of questions, requests or parallel items use numbered points, with any useful
+introduction retained. Independent questions joined by repeated conjunctions also
+become a list, even without spoken numbering. Awkward speech and overlapping
+hedges are condensed while retaining meaningful uncertainty and all distinct
+details. A short coherent utterance stays a paragraph; existing
+sensible paragraphs and lists are preserved. It does not add topic labels or
+headings or impose a fixed number of points. Sparse-punctuation styles still
+retain the punctuation needed to keep long passages readable.
+The utterance is passed as quoted JSON data, and obvious Chinese-to-English
+language changes are rejected rather than silently inserted.
+Translation and voice questions skip normal cleanup. Failures retain the text,
+with the failure reason and timing in local history. The Voice Input page exposes
+the original alongside the final text, with separate copy actions.
 
-Realtime xAI requests include the current glossary keyterms. Dictation,
-translation and voice questions can reuse a trusted realtime transcript;
-startup/finalization are bounded and cancellation clears the matching session.
+Meeting xAI streams include glossary keyterms. Voice-input streams use microphone
+PCM only, with no silent system channel. Per-source PCM energy rejects transcript
+events wholly inside silence, and checks word intervals when supplied by the
+provider. This sanity check is not a substitute for acoustic recognition accuracy.
+On stop, voice input requests Finalize and audio.done. It can finish early only
+when an utterance final covers the last voiced audio and no partial remains;
+otherwise it waits for transcript.done under the existing deadline. Reconnect
+replay keeps the correct mono/stereo format. Startup/finalization are bounded and
+cancellation clears the matching session.
 Automatic insertion reports success only after Accessibility read-back confirms
 the text. If insertion cannot be verified, the text is kept on the clipboard for
 manual paste.
@@ -395,27 +448,53 @@ old snapshot restores its unresolved fence.
 ## `status_agent`
 
 The menu-bar Agent exposes recording state and global shortcuts. Hotkey modifiers
-are `cmd`, `shift`, `alt`, and `ctrl`. The default shortcuts are:
+are `fn`, `cmd`, `shift`, `alt`, and `ctrl`. The four sided modifiers also accept
+`left_` and `right_` prefixes. The default shortcuts are:
 
-- `ctrl+alt+Space`: dictation;
-- `ctrl+alt+T`: translation;
-- `ctrl+alt+A`: voice question into Agent Console.
+- `Fn`: dictation;
+- `Fn+Shift` (either Shift): translation;
+- `Fn+Space`: voice question into Agent Console.
+
+Standalone modifier keys include `Fn`, `Command`, `Shift`, `Option`, and `Control`.
+Use names such as `LeftCommand` or `RightOption` for an exact side. Existing
+custom shortcuts are preserved. Voice Input settings can record a shortcut or
+select its keys, and restore all three defaults without changing the translation
+language. Overlapping shortcuts are rejected.
 
 Use `yulu status-agent hotkeys` to inspect the effective values.
 
 `voice_input_mode` defaults to `"toggle"`: press once to start and again to
-finish. The optional `"hold"` mode starts on key down and finishes on key release
-for all three shortcuts. A release before capture starts queues one stop after
+finish. Modifier-only toggle shortcuts fire on release to disambiguate Fn from
+Fn combinations. The optional `"hold"` mode starts on key down (after a 200 ms
+chord-selection window for modifier-only keys) and finishes on key release.
+A release before capture starts queues one stop after
 confirmation; repeated key events cannot start another recording. Canceling
 clears the pending gesture, and callbacks from an older command cannot restore
 its overlay. Both modes are available in Voice Input settings.
 
+Onboarding and Voice Input settings show live microphone, system-audio, input,
+and optional notification access. Fn and sided shortcuts use the App's native
+event tap and require its input permission. On macOS 27 the permission is called
+Device Control and Data Access; earlier versions call it Accessibility. Returning
+from System Settings refreshes the checks. Opening a settings pane never marks
+access granted. Existing installations receive a dismissible reminder when access
+is missing, without resetting completed onboarding work.
+
+System-audio access is the result of the latest native startup probe or capture
+attempt, separate from whether system audio is currently being captured. Mic-only
+dictation preserves that access result. A subsequent failed check invalidates the
+result and displays "Check failed" instead of assuming macOS denied permission.
+Status refreshes read these observations without opening an audio device or
+requesting permission; an external permission change is confirmed by the next
+native probe or capture attempt. Notifications read the authorization of `Yulu`
+itself; permission previously granted to `Yulu Status Agent` does not transfer.
+
 The native voice panel follows the system light/dark appearance. While recording,
-it shows the input level, finish and cancel controls. An unverified or failed
-insertion keeps the recognized text visible with a Copy Text button until
-dismissed or another recording starts. The complete text remains in local
+it shows the input level, finish and cancel controls. Verified insertion closes
+the panel immediately. A dispatched paste that cannot be read back gets only a
+brief neutral notice; it does not open a copy panel or retry insertion. A known
+failure retains the Copy Text recovery panel. The complete text remains in local
 dictation history even if the destination application or clipboard fails.
-Only verified insertion displays the brief Inserted confirmation.
 
 ## Calendars and meeting detection
 

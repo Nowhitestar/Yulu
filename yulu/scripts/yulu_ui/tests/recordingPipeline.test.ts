@@ -1625,6 +1625,14 @@ describe("RecordingPipeline", () => {
     expect(() => pipeline!.enqueueCompletion({ audioPath: escapedLink })).toThrow("outside the configured recordings directory");
   });
 
+  it("keeps global glossary hints out of the dictation batch fallback while preserving literal alias correction", async () => {
+    const result = setup({ glossaryRows: [{ term: "Orion Labs", canonical: "OrionLabs", scope: "both" }] });
+    result.transcribe.mockResolvedValue({ transcript: "Open Orion Labs", provider: "test", chunks: 1, language: "en" });
+    await expect(pipeline!.transcribeOnDemand({ audioPath: result.audioPath, language: "en", dictation: true }))
+      .resolves.toMatchObject({ transcript: "Open OrionLabs" });
+    expect(result.transcribe).toHaveBeenCalledWith(realpathSync(result.audioPath), "en", undefined);
+  });
+
   it("warms and reuses the selected audio service for allowed on-demand WAVs", async () => {
     const setupResult = setup({
       glossaryRows: [{ term: "预录", canonical: "玉录", scope: "both" }],
