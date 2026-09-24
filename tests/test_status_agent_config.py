@@ -278,7 +278,7 @@ def test_status_agent_has_dictation_menu_entry():
     assert '"dictate_toggle"' in src
     assert '"dictate_translate"' in src
     assert "--target-bundle-id" in src
-    assert "currentInputTargetApplication()" in src
+    assert "currentInputTargetApplication(preferred: front)" in src
     assert "focusedInputApplication()" in src
     assert "isUsableInputTarget" in src
     assert "com.apple.loginwindow" in src
@@ -304,8 +304,12 @@ def test_status_agent_dictation_feedback_is_result_driven_and_explicit():
     assert '"没有听到清晰语音"' in src
     assert '"已复制，请按 ⌘V"' in src
     assert '"听写失败 · 录音已保留"' in src
-    assert 'showTimedVoiceFeedback(L("已输入", "Inserted"), sound: .success, duration: 0.8)' in src
-    assert 'showVoiceOverlay(L("正在确认完整录音…", "Finalizing recording…"), animation: .processing)' in src
+    # Verified insertion now dismisses the capsule silently. Native behavioral
+    # coverage for result classification and recovery lives in test_voice_overlay.
+    success = src[src.index("if presentation == .dismiss {") : src.index("} else if presentation == .unconfirmed {")]
+    assert "hideVoiceOverlay()" in success
+    assert "showTimedVoiceFeedback" not in success
+    assert "showVoiceRecovery" not in success
     assert "voiceOverlayStopButton" in src
     assert "voiceOverlayCancelButton" in src
     assert "voice overlay clicked" not in src
@@ -384,8 +388,8 @@ def test_status_agent_has_voice_chat_entry():
     assert "voiceChatWindowStatus" in src
     assert '"voice_chat_window_visible"' in src
     assert '"Stop Voice Chat"' in src
-    assert "voice chat recording active; ignoring dictation" in src
-    assert "voice chat recording active; ignoring translate dictation" in src
+    dictate = src[src.index("@objc func onDictateToggle()") : src.index("@objc func onVoiceChat()")]
+    assert dictate.count('if stopping && activeDictationIntent() == "voice_chat" { return }') == 2
 
 
 def test_status_agent_has_paste_clipboard_ipc():

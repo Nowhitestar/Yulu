@@ -300,7 +300,8 @@ def test_audio_daemon_silence_threshold_is_request_configured():
     assert "let silenceThreshold: Float" in text
     assert "silenceThresholdState = silenceThreshold" in text
     assert 'json["silence_threshold"]' in text
-    assert "self.calcRMS(samples) > self.silenceThresholdState" in text
+    assert "let rms = self.calcRMS(samples)" in text
+    assert "if rms > self.silenceThresholdState" in text
 
 
 def test_audio_daemon_mic_device_is_request_configured():
