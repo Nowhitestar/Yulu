@@ -15,8 +15,6 @@ interface RecordingMsg {
   file?: string;
 }
 
-type RealtimeMsg = import("../../../src/pubsub.js").AppChannels["realtime-transcript"];
-
 export function Pill() {
   const t = useT();
   const initial = trpc.recording.state.useQuery(undefined, {
@@ -26,7 +24,6 @@ export function Pill() {
   const [state, setState] = useState<PillState>("unknown");
   const [elapsed, setElapsed] = useState(0);
   const [level, setLevel] = useState(0);
-  const [realtime, setRealtime] = useState<RealtimeMsg | null>(null);
   const hotkey = (initial.data as { hotkey?: string } | undefined)?.hotkey ?? "⌘⇧V";
   const toggle = trpc.recording.toggle.useMutation();
 
@@ -39,7 +36,6 @@ export function Pill() {
       if (confirmedState === "idle") {
         setElapsed(0);
         setLevel(0);
-        setRealtime(null);
       }
     }
   }, [initial.data, initial.dataUpdatedAt]);
@@ -55,7 +51,6 @@ export function Pill() {
     if (msg.state === "idle") {
       setElapsed(0);
       setLevel(0);
-      setRealtime(null);
     }
     if (typeof msg.elapsedSec === "number") setElapsed(msg.elapsedSec);
     if (typeof msg.level === "number")      setLevel(msg.level);
@@ -63,10 +58,6 @@ export function Pill() {
 
   useWsChannel("daemons", (msg) => {
     if (msg.name === "com.yulu.audiodaemon" && msg.status !== "running") setState("daemonDown");
-  });
-
-  useWsChannel("realtime-transcript", (msg) => {
-    setRealtime(msg);
   });
 
   return <>
@@ -89,19 +80,11 @@ export function Pill() {
 
       case "recording":
         return (
-          <div className="pill-live-stack">
-            {realtime?.text && (
-              <div className="pill-live-transcript" role="log" aria-live="polite">
-                <div className="pill-live-heading">{t("pill.realtime")}</div>
-                <div className="pill-live-copy">{tailLines(realtime.text, 6)}</div>
-              </div>
-            )}
-            <div className="pill pill-recording" role="status" aria-label={t("pill.recordingAria")}>
-              <span className="pill-dot pulse" />
-              <span className="pill-time">{formatElapsed(elapsed)}</span>
-              <Meter level={level} />
-              <button className="pill-stop" disabled={toggle.isPending} onClick={() => toggle.mutate()} aria-label={t("pill.stopAria")}>■</button>
-            </div>
+          <div className="pill pill-recording" role="status" aria-label={t("pill.recordingAria")}>
+            <span className="pill-dot pulse" />
+            <span className="pill-time">{formatElapsed(elapsed)}</span>
+            <Meter level={level} />
+            <button className="pill-stop" disabled={toggle.isPending} onClick={() => toggle.mutate()} aria-label={t("pill.stopAria")}>■</button>
           </div>
         );
 
@@ -138,10 +121,6 @@ export function Pill() {
         );
     }
   }
-}
-
-function tailLines(text: string, count: number): string {
-  return text.split(/\n+/).map((line) => line.trim()).filter(Boolean).slice(-count).join("\n");
 }
 
 function formatElapsed(sec: number): string {

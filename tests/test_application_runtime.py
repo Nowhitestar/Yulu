@@ -6,6 +6,7 @@ import plistlib
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -142,7 +143,7 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     node_archive = archive(node_root, tmp_path / "node.tar.gz", node_root.name)
 
     python_root = tmp_path / "python"
-    write(python_root / "bin/python3", b"python-arm64\n", executable=True)
+    write(python_root / "bin/python3", b"#!/bin/sh\n# python-arm64 fixture: no executable runtime\nexit 0\n", executable=True)
     write(python_root / "lib/python3.13/os.py", b"# stdlib\n")
     python_archive = archive(python_root, tmp_path / "python.tar.gz", "python")
 
@@ -260,7 +261,7 @@ def test_prepare_application_runtime_stages_only_core_runtime_and_production_hos
     assert result.returncode == 0, result.stderr + result.stdout
     resources = app / "Contents/Resources"
     assert (resources / "runtime/bin/node").read_bytes() == b"node-arm64\n"
-    assert (resources / "runtime/python/bin/python3").read_bytes() == b"python-arm64\n"
+    assert b"python-arm64" in (resources / "runtime/python/bin/python3").read_bytes()
     assert (resources / "runtime/bin/ffmpeg").read_bytes() == b"ffmpeg-arm64\n"
     assert (resources / "runtime/licenses/node.txt").read_bytes() == b"node license\n"
     assert (resources / "runtime/licenses/ffmpeg.txt").read_bytes() == b"ffmpeg license\n"
@@ -276,6 +277,34 @@ def test_prepare_application_runtime_stages_only_core_runtime_and_production_hos
     assert (resources / "runtime/yulu/scripts/local_caption_runtime_pack.json").is_file()
     assert not (resources / "runtime/yulu/scripts/local-caption-model.bin").exists()
     assert not any(path.name.endswith(".onnx") for path in resources.rglob("*"))
+
+
+def test_application_python_bytecode_survives_relocation_without_runtime_writes(tmp_path: Path):
+    app = tmp_path / "Yulu.app"
+    runtime = app / "Contents/Resources/runtime"
+    python = runtime / "python/bin/python3"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(sys.executable)
+    write(runtime / "python/lib/test_stdlib.py", b"value = 42\n")
+    scripts = runtime / "yulu/scripts"
+    source = write(scripts / "probe.py", b'import sys\nprint("ready", sys.dont_write_bytecode)\n')
+    subprocess.run(["bash", str(ROOT / "packaging/scripts/precompile_application_python.sh"), str(app)], check=True)
+    caches = list(runtime.rglob("*.pyc"))
+    assert len(caches) == 2
+    # Checked source hashes are not needed inside the signed immutable bundle.
+    assert all(int.from_bytes(path.read_bytes()[4:8], "little") == 1 for path in caches)
+    assert all(str(tmp_path).encode() not in path.read_bytes() for path in caches)
+    before = {path.relative_to(app): sha256(path) for path in caches}
+    moved = tmp_path / "relocated.app"
+    app.rename(moved)
+    relocated_scripts = moved / scripts.relative_to(app)
+    # Timestamp changes during installation do not discard the hash-based cache.
+    os.utime(relocated_scripts / source.name, (1, 1))
+    result = subprocess.run([str(moved / python.relative_to(app)), "-B", "-v", "-m", "probe"],
+                            cwd=relocated_scripts, capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == "ready True"
+    assert "__pycache__/probe." in result.stderr
+    assert before == {path: sha256(moved / path) for path in before}
 
 
 @pytest.mark.parametrize("bundle", ["Contents", "Contents/Helpers/YuluCapture.app/Contents"])

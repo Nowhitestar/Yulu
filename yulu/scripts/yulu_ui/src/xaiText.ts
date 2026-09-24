@@ -3,6 +3,7 @@ import type { XaiCredentialManager, XaiCredentialSource } from "./xaiCredentials
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
 const SUMMARY_REQUEST_TIMEOUT_MS = 180_000;
 const CONVERSATION_REQUEST_TIMEOUT_MS = 30_000;
+export const DICTATION_TEXT_TIMEOUT_MS = 20_000;
 const MAX_INPUT_BYTES = 1_000_000;
 const MAX_INPUT_MESSAGES = 64;
 const MAX_OUTPUT_TOKENS = 8_192;
@@ -24,6 +25,8 @@ export interface XaiTextRequest {
   input: XaiTextMessage[];
   maxOutputTokens?: number;
   timeoutMs?: number;
+  /** Cancels superseded speculative dictation work; never changes provider. */
+  signal?: AbortSignal;
   /** Receives provisional full-text snapshots; only the returned result is final. */
   onText?: (text: string) => void;
 }
@@ -210,21 +213,23 @@ export class XaiTextClient {
   async request(request: XaiTextRequest): Promise<XaiTextResult> {
     const { model, maxOutputTokens } = validateRequest(request);
     const defaultTimeout = request.capability === "summary" ? SUMMARY_REQUEST_TIMEOUT_MS
-      : request.capability === "dictation" ? 8_000 : CONVERSATION_REQUEST_TIMEOUT_MS;
+      : request.capability === "dictation" ? DICTATION_TEXT_TIMEOUT_MS : CONVERSATION_REQUEST_TIMEOUT_MS;
     const timeoutMs = request.timeoutMs ?? defaultTimeout;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > defaultTimeout) {
       throw new Error("xAI text timeout is invalid");
     }
-    const signal = AbortSignal.timeout(timeoutMs);
+    const deadline = AbortSignal.timeout(timeoutMs);
+    const signal = request.signal ? AbortSignal.any([deadline, request.signal]) : deadline;
+    if (signal.aborted) throw signal.reason;
     let onAbort!: () => void;
     const cancelled = new Promise<never>((_, reject) => {
-      onAbort = () => reject(new Error("xAI text deadline exceeded before request"));
+      onAbort = () => reject(signal.reason);
       signal.addEventListener("abort", onAbort, { once: true });
       if (signal.aborted) onAbort();
     });
     const credential = await Promise.race([this.credentials.resolve(request.credentialSource), cancelled])
       .finally(() => signal.removeEventListener("abort", onAbort));
-    if (signal.aborted) throw new Error("xAI text deadline exceeded before request");
+    if (signal.aborted) throw signal.reason;
     if (request.credentialSource && credential.source !== request.credentialSource) {
       throw new Error(`Pinned xAI credential ${request.credentialSource} does not match resolved credential ${credential.source}`);
     }
@@ -243,11 +248,15 @@ export class XaiTextClient {
           input: request.input,
           max_output_tokens: maxOutputTokens,
           store: false,
+          // These models default to high reasoning; keep dictation editing quick.
+          ...(request.capability === "dictation" && /^grok-4\.[56](?:$|-)/.test(model)
+            ? { reasoning: { effort: "low" } } : {}),
           ...(request.onText ? { stream: true } : {}),
         }),
         signal,
       });
     } catch {
+      if (request.capability === "dictation" && signal.aborted) throw signal.reason;
       throw new XaiTextUnknownOutcomeError({
         capability: request.capability,
         model,
@@ -266,6 +275,7 @@ export class XaiTextClient {
         catch { throw new Error("xAI text response was invalid"); }
       }
     } catch (error) {
+      if (request.capability === "dictation" && signal.aborted) throw signal.reason;
       if (error instanceof XaiTextResponseTransportError) {
         throw new XaiTextUnknownOutcomeError({
           capability: request.capability,

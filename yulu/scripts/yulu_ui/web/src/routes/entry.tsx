@@ -4,6 +4,7 @@ import { Link, Navigate } from "react-router";
 import { useT } from "../i18n/LanguageProvider.js";
 import { trpc } from "../trpc.js";
 import { useWsChannel } from "../ws.js";
+import { PermissionReminder } from "../components/PermissionsPanel.js";
 import "./activate.css";
 
 export function OnboardingEntry({ children }: { children: ReactNode }) {
@@ -50,6 +51,7 @@ export function OnboardingEntry({ children }: { children: ReactNode }) {
   if (target === "onboarding") return <Navigate to="/onboarding" replace />;
   if (target === "normal") return (
     <>
+      <PermissionReminder />
       {children}
       {completedStem ? (
         <div className="activation-notice" role="status" aria-live="polite">

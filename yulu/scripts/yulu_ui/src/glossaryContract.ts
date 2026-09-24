@@ -52,7 +52,7 @@ export function buildGlossaryContract(rows: GlossaryRow[]): GlossaryContract {
   };
 }
 
-export function loadGlossaryContract(db: unknown): GlossaryContract {
+export function loadGlossaryContract(db: unknown, transcript?: string): GlossaryContract {
   if (!db || typeof db !== "object") return buildGlossaryContract([]);
   try {
     const prepare = (db as { prepare?: unknown }).prepare;
@@ -65,7 +65,14 @@ export function loadGlossaryContract(db: unknown): GlossaryContract {
       LIMIT 400
     `) as { all?: () => unknown };
     const rows = typeof statement.all === "function" ? statement.all() : [];
-    return buildGlossaryContract(Array.isArray(rows) ? rows as GlossaryRow[] : []);
+    const candidates = Array.isArray(rows) ? rows as GlossaryRow[] : [];
+    if (transcript === undefined) return buildGlossaryContract(candidates);
+    // Text editing only receives terms present in this utterance, including
+    // spaced aliases. Dictation STT deliberately receives no global word list.
+    const normalize = (value: string) => value.normalize("NFKC").replace(/\s+/gu, "").toLowerCase();
+    const utterance = normalize(transcript);
+    return buildGlossaryContract(candidates.filter((row) => [row.term, row.canonical]
+      .some((value) => typeof value === "string" && normalize(value).length > 0 && utterance.includes(normalize(value)))));
   } catch {
     return buildGlossaryContract([]);
   }

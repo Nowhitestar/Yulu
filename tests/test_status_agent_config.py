@@ -25,9 +25,9 @@ def test_load_defaults_when_block_missing(tmp_path, monkeypatch):
     assert block["enabled"] is True
     assert block["feedback_sounds"] is True
     assert block["voice_input_mode"] == "toggle"
-    assert block["hotkeys"]["dictate"]["key"] == "Space"
+    assert block["hotkeys"]["dictate"]["key"] == "Fn"
     assert block["hotkeys"]["translate"]["target_language"] == "English"
-    assert block["hotkeys"]["voice_chat"]["key"] == "A"
+    assert block["hotkeys"]["voice_chat"]["key"] == "Space"
 
 
 def test_load_defaults_when_config_file_missing(tmp_path, monkeypatch):
@@ -65,8 +65,8 @@ def test_status_agent_hotkeys_shape(tmp_path, monkeypatch):
     _stub_config(tmp_path, monkeypatch, {})
     hotkeys = sac.status_agent_hotkeys()
     assert [item["action"] for item in hotkeys] == ["dictate", "translate", "voice_chat"]
-    assert hotkeys[0]["keyCode"] == 49
-    assert hotkeys[0]["modifierMask"] == 0x1800
+    assert hotkeys[0]["keyCode"] == 63
+    assert hotkeys[0]["modifierMask"] == 0
     assert hotkeys[1]["targetLanguage"] == "English"
     assert all(item["inputMode"] == "toggle" for item in hotkeys)
 
@@ -210,7 +210,7 @@ def test_recorder_status_renders_streaming_partials_without_restarting_fade():
 def test_recorder_status_preserves_each_display_mode_during_streaming_updates():
     src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
     live_start = src.index("func liveCaptionSourceText")
-    live_end = src.index("func captionSpeechCharacterCount", live_start)
+    live_end = src.index("func isCaptionHesitation", live_start)
     live = src[live_start:live_end]
     render_start = src.index("func renderCaptions")
     render_end = src.index("func setCaption", render_start)
@@ -255,7 +255,7 @@ def test_recorder_status_bounds_live_caption_before_appkit_layout():
     visible_end = src.index("func captionString", visible_start)
     visible = src[visible_start:visible_end]
     live_start = src.index("func liveCaptionSourceText")
-    live_end = src.index("func captionSpeechCharacterCount", live_start)
+    live_end = src.index("func isCaptionHesitation", live_start)
     live = src[live_start:live_end]
 
     assert "let trimmed = boundedCaptionText(text, maxCharacters: captionLayoutCharacterLimit)" in visible

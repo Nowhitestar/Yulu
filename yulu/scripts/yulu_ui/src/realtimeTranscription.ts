@@ -18,6 +18,7 @@ import type {
   StreamingCaptionUpdate,
 } from "./localCaptionEngine.js";
 import type { AppChannels, PubSub } from "./pubsub.js";
+import { speculativeDictationText, type DictationPreview } from "./dictationPreview.js";
 
 export type TranscriptionLanguage = "zh" | "en" | "ja" | "auto";
 
@@ -37,6 +38,9 @@ export interface WavFormat {
 }
 
 interface Session {
+  dictation: boolean;
+  dictationSessionId?: string;
+  quietMs: number;
   audioPath: string;
   stem: string;
   title: string;
@@ -48,6 +52,7 @@ interface Session {
   text: string;
   partialBySource: Record<CaptionSource, string>;
   activePartialSource: CaptionSource | null;
+  stableCaption: { source: CaptionSource; text: string; endMs: number } | null;
   stableSegments: Array<{ source: CaptionSource; text: string; endMs: number; order: number }>;
   stableOrder: number;
   resampler: SourceSeparatedResampler;
@@ -187,7 +192,16 @@ export function dedupeTranscriptSegment(existing: string, incoming: string): str
 }
 
 function captionKey(value: string): string {
-  return value.toLocaleLowerCase().replace(/[^a-z0-9\u3400-\u9fff]+/g, "");
+  return value.toLocaleLowerCase()
+    .replace(/\b(?:um+|uh+|erm+)\b/g, "")
+    .replace(/(^|[\s，。！？、,.;:!?])[嗯呃额唔]+(?=$|[\s，。！？、,.;:!?])/g, "$1")
+    .replace(/[^a-z0-9\u3400-\u9fff]+/g, "");
+}
+
+/** Only isolated hesitation sounds, not short answers such as 对、不、不要、OK. */
+export function isCaptionHesitation(value: string): boolean {
+  const words = value.toLocaleLowerCase().split(/[\p{P}\s]+/u).filter(Boolean);
+  return words.length > 0 && words.every((word) => /^(?:[嗯呃额唔呢]+|um+|uh+|erm+)$/.test(word));
 }
 
 function bigrams(value: string): Set<string> {
@@ -200,6 +214,11 @@ function bigrams(value: string): Set<string> {
 export function captionsLikelyDuplicate(left: string, right: string): boolean {
   const a = captionKey(left);
   const b = captionKey(right);
+  // Similar wording with a changed number or negation can be a second speaker
+  // correcting the first; it is not an acoustic echo.
+  const meaningMarkers = (value: string) => value.toLocaleLowerCase()
+    .match(/\d+(?:\.\d+)?|[零〇一二三四五六七八九十百千万亿两]+|[不没无未勿别]|\b(?:not|no|never|cannot|can't|don't|won't)\b/g)?.join("|") ?? "";
+  if (meaningMarkers(left) !== meaningMarkers(right)) return false;
   if (Math.min(a.length, b.length) < 6) return a === b && a.length >= 3;
   if (a.includes(b) || b.includes(a)) return true;
   const aa = bigrams(a);
@@ -401,6 +420,7 @@ export class RealtimeTranscriptionCoordinator {
     pubsub: PubSub<AppChannels>;
     transcribe: (audioPath: string, language: TranscriptionLanguage) => Promise<TranscriptionResult>;
     streaming?: StreamingCaptionEngine | null;
+    dictationPreview?: DictationPreview;
     stabilize?: (text: string) => string;
     warm?: () => Promise<void>;
     translate?: (sourceText: string, targetLanguage: string, context: string[]) => Promise<string>;
@@ -429,6 +449,8 @@ export class RealtimeTranscriptionCoordinator {
     language: TranscriptionLanguage;
     replaceActive?: boolean;
     timeoutMs?: number;
+    dictationSessionId?: string;
+    dictation?: boolean;
   }): Promise<void> {
     if (this.starting) throw new Error("realtime transcription session is already starting");
     if (this.active && input.replaceActive === false) throw new Error("realtime transcription session is already active");
@@ -458,7 +480,8 @@ export class RealtimeTranscriptionCoordinator {
       if (this.starting !== starting) throw new Error("realtime transcription start cancelled");
       if (mode === "streaming") {
         await this.withDeadline(Promise.race([
-          this.options.streaming!.start(normalizeTranscriptionLanguage(input.language)), cancelled,
+          this.options.streaming!.start(normalizeTranscriptionLanguage(input.language),
+            input.dictation || input.dictationSessionId ? { dictation: true } : undefined), cancelled,
         ]), remaining());
       }
       if (this.starting !== starting) throw new Error("realtime transcription start cancelled");
@@ -469,6 +492,9 @@ export class RealtimeTranscriptionCoordinator {
       if (this.starting === starting) this.starting = null;
     }
     const session: Session = {
+      dictation: Boolean(input.dictation || input.dictationSessionId),
+      dictationSessionId: input.dictationSessionId,
+      quietMs: 0,
       audioPath,
       stem: basename(audioPath, ".wav"),
       title: input.title,
@@ -480,6 +506,7 @@ export class RealtimeTranscriptionCoordinator {
       text: "",
       partialBySource: { mic: "", system: "" },
       activePartialSource: null,
+      stableCaption: null,
       stableSegments: [],
       stableOrder: 0,
       resampler: new SourceSeparatedResampler(format),
@@ -505,6 +532,7 @@ export class RealtimeTranscriptionCoordinator {
     rmSync(sidecarPath(audioPath), { force: true });
     rmSync(coveragePath(audioPath), { force: true });
     this.active = session;
+    if (session.dictationSessionId) this.options.dictationPreview?.start(session.dictationSessionId);
     void this.options.warm?.().catch(() => {});
     this.publish(session, "starting", false);
     try {
@@ -584,6 +612,7 @@ export class RealtimeTranscriptionCoordinator {
       totalMs,
     });
     const trusted = session.error === null && assessment.trusted;
+    if (session.dictationSessionId) this.options.dictationPreview?.finish(session.dictationSessionId, session.text, trusted);
     const reason = session.error === null
       ? assessment.reason
       : `realtime transcription failed: ${session.error}`;
@@ -609,6 +638,7 @@ export class RealtimeTranscriptionCoordinator {
       starting.cancel();
     }
     if (session) {
+      if (session.dictationSessionId) this.options.dictationPreview?.cancel(session.dictationSessionId);
       this.active = null;
       session.error = "realtime transcription cancelled";
       if (session.timer) clearInterval(session.timer);
@@ -634,6 +664,7 @@ export class RealtimeTranscriptionCoordinator {
     if (this.starting) await this.cancel(this.starting.audioPath);
     if (this.active) await this.stop(this.active.audioPath);
     await this.options.streaming?.close();
+    this.options.dictationPreview?.close();
   }
 
   private async queuePump(force: boolean): Promise<void> {
@@ -672,9 +703,24 @@ export class RealtimeTranscriptionCoordinator {
       session.coveredMs = Math.round((session.offset - session.format.dataOffset) / bytesPerSecond * 1000);
       if (session.mode === "streaming") {
         const separated = session.resampler.feed(source);
+        if (session.dictation) delete separated.chunks.system;
+        if (session.dictationSessionId && separated.chunks.mic) {
+          const mic = separated.chunks.mic;
+          const duration = pcmDurationMs(mic);
+          const silence = trailingSilenceMs(mic);
+          session.quietMs = silence >= duration ? session.quietMs + duration : silence;
+        }
         try {
           const response = await this.options.streaming!.feed(separated.chunks);
-          if (this.active === session && session.error === null) this.applyStreamingUpdate(session, response);
+          if (this.active === session && session.error === null) {
+            this.applyStreamingUpdate(session, response);
+            if (session.dictationSessionId && !force) {
+              const partialText = this.partialText(session);
+              this.options.dictationPreview?.observe(session.dictationSessionId, {
+                text: speculativeDictationText(session.text, partialText), partialText, quietMs: session.quietMs,
+              });
+            }
+          }
         } catch (error) {
           if (this.active === session) await this.options.streaming?.abort();
           throw error;
@@ -693,11 +739,23 @@ export class RealtimeTranscriptionCoordinator {
     const accepted: string[] = [];
     const changedPartials: CaptionSource[] = [];
     for (const source of ["system", "mic"] as const) {
+      if (session.dictation && source !== "mic") continue;
       const update = response.updates[source];
       if (!update) continue;
       const partial = cleanTranscriptText(update.partial);
       if (partial !== session.partialBySource[source]) changedPartials.push(source);
       session.partialBySource[source] = partial;
+      const latest = update.stableCaption === undefined ? update.stable.at(-1) : update.stableCaption;
+      if (latest && latest.text && !isCaptionHesitation(latest.text)) {
+        const text = cleanTranscriptText(this.options.stabilize?.(latest.text) ?? latest.text);
+        const previous = session.stableCaption;
+        const echo = previous && previous.source !== source &&
+          Math.abs(previous.endMs - latest.endMs) <= 1_500 && captionsLikelyDuplicate(previous.text, text);
+        if (text && (!previous || latest.endMs >= previous.endMs || (echo && source === "system")) &&
+          !(echo && source === "mic")) {
+          session.stableCaption = { source, text, endMs: latest.endMs };
+        }
+      }
       if (update.replaceStable) {
         session.stableSegments = session.stableSegments.filter((segment) => segment.source !== source);
       }
@@ -728,7 +786,12 @@ export class RealtimeTranscriptionCoordinator {
         }
         session.stableSegments.push(candidate);
         session.chunks += 1;
-        accepted.push(text);
+        // Full-history corrections are for persistence, not caption translation.
+        const caption = update.stableCaption === undefined ? text : update.stableCaption?.text;
+        if (caption && !isCaptionHesitation(caption)) {
+          const display = cleanTranscriptText(this.options.stabilize?.(caption) ?? caption);
+          if (display) accepted.push(display);
+        }
       }
     }
     if (changedPartials.length === 1) session.activePartialSource = changedPartials[0]!;
@@ -760,15 +823,15 @@ export class RealtimeTranscriptionCoordinator {
   private displayText(session: Session): string {
     const partial = this.partialText(session);
     if (partial) return partial;
-    return session.stableSegments.at(-1)?.text ?? session.text;
+    return session.mode === "streaming" ? session.stableCaption?.text ?? "" : session.text;
   }
 
   private partialText(session: Session): string {
-    const system = session.partialBySource.system;
-    const mic = session.partialBySource.mic;
+    const system = isCaptionHesitation(session.partialBySource.system) ? "" : session.partialBySource.system;
+    const mic = isCaptionHesitation(session.partialBySource.mic) ? "" : session.partialBySource.mic;
     if (system && mic && captionsLikelyDuplicate(system, mic)) return system;
     const active = session.activePartialSource
-      ? session.partialBySource[session.activePartialSource]
+      ? { system, mic }[session.activePartialSource]
       : "";
     if (active) return active;
     return cleanTranscriptText([system, mic].filter(Boolean).join("\n"));

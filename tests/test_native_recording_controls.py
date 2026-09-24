@@ -271,6 +271,22 @@ def test_native_status_reports_its_own_input_permissions(running_controls):
     # live checks rather than assuming the installed App has the same access.
     assert isinstance(state["accessibility_trusted"], bool)
     assert isinstance(state["event_posting_allowed"], bool)
+    permissions = ipc(socket_path, "permission_status")
+    assert permissions["ok"] is True
+    assert isinstance(permissions["macos_major"], int)
+    assert isinstance(permissions["hotkeys_ready"], bool)
+    assert permissions["notifications"] == "unknown"  # CLI must not impersonate Yulu.app
+    assert ipc(socket_path, "open_permission_settings", permission="https://example.com") == {"ok": False}
+    assert ipc(socket_path, "open_permission_settings", permission="notifications") == {"ok": False}
+
+
+def test_old_or_unowned_dictation_progress_cannot_change_the_overlay(running_controls):
+    _, socket_path, _, _ = running_controls
+    before = ipc(socket_path, "status")["state"]
+    for stage in ["recording", "transcribing", "cleaning", "inserting"]:
+        assert ipc(socket_path, "dictation_progress", launcher_pid=999999, stage=stage,
+                   audio_path="/untrusted/Dictation.wav") == {"ok": False, "error": "stale_dictation"}
+    assert ipc(socket_path, "status")["state"] == before
 
 
 def test_notification_ipc_validates_events_without_impersonating_the_app(running_controls):
@@ -290,7 +306,7 @@ def test_notification_ipc_validates_events_without_impersonating_the_app(running
 @pytest.mark.parametrize("action", [
     "toggle", "stop", "dictate_toggle", "dictate_translate", "voice_chat",
     "open_inbox", "open_agent_console", "open_voice_chat", "paste_clipboard",
-    "preview_sound", "search", "notify",
+    "preview_sound", "search", "notify", "open_permission_settings", "shortcut_editing",
 ])
 def test_quiesced_controls_reject_work_until_resumed(running_controls, action):
     process, socket_path, _, _ = running_controls

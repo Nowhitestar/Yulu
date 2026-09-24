@@ -63,32 +63,6 @@ SEED_PROMPTS: list[dict] = [
         ),
     },
     {
-        "slug": "dictation-cleanup",
-        "name": "Dictation Cleanup",
-        "category": "voice",
-        "is_auto_run": False,
-        "sort_order": 5,
-        "content": (
-            "语音输入模式。输出可直接粘贴到当前光标处的正文："
-            "保留原意，补齐必要标点，去掉口头停顿词，不要摘要，"
-            "不要解释，不要寒暄。保留已经识别出的词，尤其是名称、数字、"
-            "术语和近音词；不要擅自改成另一个近音词。优先使用术语表里的专有名词写法。"
-        ),
-    },
-    {
-        "slug": "dictation-translate",
-        "name": "Dictation Translate",
-        "category": "voice",
-        "is_auto_run": False,
-        "sort_order": 6,
-        "content": (
-            "语音翻译输入模式。将语音内容翻译成{{target_language}}，"
-            "输出可直接粘贴到当前光标处的正文。保留原意和语气，"
-            "补齐必要标点，不要摘要，不要解释，不要寒暄。"
-            "优先使用术语表里的专有名词写法。"
-        ),
-    },
-    {
         "slug": "action-items",
         "name": "Action Items & Decisions",
         "category": "summary",

@@ -343,9 +343,9 @@ def test_config_example_has_status_agent_block():
     block = cfg.get("status_agent")
     assert block is not None
     assert block.get("enabled") is True
-    assert block["hotkeys"]["dictate"]["key"] == "Space"
+    assert block["hotkeys"]["dictate"] == {"key": "Fn", "modifiers": []}
     assert block["hotkeys"]["translate"]["target_language"] == "English"
-    assert block["hotkeys"]["voice_chat"]["key"] == "A"
+    assert block["hotkeys"]["voice_chat"] == {"key": "Space", "modifiers": ["fn"]}
 
 
 # ── Phase 6 — Global Search ──────────────────────────────────────────

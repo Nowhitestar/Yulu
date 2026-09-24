@@ -15,8 +15,10 @@ from prompts.seed import (
 def test_seed_constants_complete():
     slugs = {p["slug"] for p in SEED_PROMPTS}
     assert {"summary", "transcript-cleanup", "action-items"} <= slugs
-    # The voicemail category was removed; dictation prompts live under voice.
+    # Voice input uses cleanup preferences and built-in translation rules.
     assert not any(p["slug"].startswith("voicemail") for p in SEED_PROMPTS)
+    assert "dictation-cleanup" not in slugs
+    assert "dictation-translate" not in slugs
     for p in SEED_PROMPTS:
         assert p["category"] in ("summary", "cleanup", "voice")
         if p["category"] == "summary":
@@ -27,11 +29,6 @@ def test_seed_constants_complete():
                 "{{transcript}}", "{{best_transcript}}", "{{my_transcript}}",
                 "{{their_transcript}}", "{{speaker_transcript}}", "{{speaker_list}}",
             ))
-        elif p["slug"] in {"dictation-cleanup", "dictation-translate"}:
-            assert "{{transcript}}" not in p["content"]
-            assert "语音" in p["content"]
-            if p["slug"] == "dictation-translate":
-                assert "{{target_language}}" in p["content"]
         else:
             assert "{{transcript}}" in p["content"] or "{{best_transcript}}" in p["content"]
     # Automatic completion consumes summary templates only.
@@ -76,8 +73,8 @@ def test_seed_from_current_inserts(tmp_path):
     assert n["updated"] == 0
     assert repo.by_slug("summary") is not None
     assert repo.by_slug("transcript-cleanup").category == Category.CLEANUP
-    assert repo.by_slug("dictation-cleanup").category == Category.VOICE
-    assert repo.by_slug("dictation-translate").category == Category.VOICE
+    assert repo.by_slug("dictation-cleanup") is None
+    assert repo.by_slug("dictation-translate") is None
     assert all(p.source == Source.SEED for p in repo.list_prompts())
     assert repo.get_meta("seeded_at") is not None
 

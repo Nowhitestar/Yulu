@@ -1,5 +1,7 @@
 // src/settingsRegistry.ts
 import { z } from "zod";
+import { HotkeysSchema } from "./hotkeys.js";
+import { DictationCleanupLevelSchema, DictationCleanupModelSchema, DictationStyleSchema } from "./dictationPreferences.js";
 
 export type Daemon =
   | "audiodaemon"
@@ -40,14 +42,11 @@ const ThemeSettingSchema = z.object({
   custom: z.unknown().optional(),
 }).passthrough();
 
-const HotkeysSchema = z.record(z.object({
-  key: z.string(),
-  modifiers: z.array(z.enum(["cmd", "shift", "alt", "ctrl"])),
-  target_language: z.string().optional(),
-}).passthrough());
-
 const DictationSchema = z.object({
   cleanup_enabled: z.boolean().optional(),
+  cleanup_level: DictationCleanupLevelSchema.optional(),
+  cleanup_model: DictationCleanupModelSchema.optional(),
+  style: DictationStyleSchema.optional(),
   voice_chat_scope: z.enum(["general", "meetings"]).optional(),
   prompt_slug: z.string().optional(),
   translate_prompt_slug: z.string().optional(),

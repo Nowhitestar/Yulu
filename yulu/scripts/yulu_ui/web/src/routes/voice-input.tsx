@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Bot, Circle, Copy, Keyboard, Languages, Mic } from "lucide-react";
 import { trpc } from "../trpc.js";
-import { useT } from "../i18n/LanguageProvider.js";
+import { useLang, useT } from "../i18n/LanguageProvider.js";
+import { DEFAULT_HOTKEYS, formatHotkey } from "../../../src/hotkeys.js";
+import { usePermissions } from "../hooks/usePermissions.js";
 import "./voice-input.css";
 
 export const handle = { breadcrumb: "breadcrumb.voiceInput", filters: null };
@@ -15,6 +17,9 @@ interface HistoryItem {
   text: string;
   promptSlug: string;
   targetLanguage: string;
+  rawText?: string;
+  cleanupStatus?: string;
+  cleanupWarning?: string;
 }
 
 const ACTIONS: Array<{ id: VoiceAction; icon: typeof Mic }> = [
@@ -22,17 +27,6 @@ const ACTIONS: Array<{ id: VoiceAction; icon: typeof Mic }> = [
   { id: "translate", icon: Languages },
   { id: "voice_chat", icon: Bot },
 ];
-
-const MODS: Record<string, string> = { cmd: "⌘", shift: "⇧", ctrl: "⌃", alt: "⌥" };
-
-function hotkeyLabel(spec?: { key?: string; modifiers?: string[] }) {
-  if (!spec) return "—";
-  const mods = ["cmd", "shift", "ctrl", "alt"]
-    .filter((m) => spec.modifiers?.includes(m))
-    .map((m) => MODS[m])
-    .join("");
-  return `${mods}${spec.key || ""}` || "—";
-}
 
 function formatHistoryTime(value: string) {
   if (!value) return "";
@@ -48,6 +42,8 @@ function formatHistoryTime(value: string) {
 
 export function VoiceInput() {
   const t = useT();
+  const { lang } = useLang();
+  const permissions = usePermissions();
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const utils = trpc.useUtils();
   const config = trpc.config.get.useQuery();
@@ -60,7 +56,8 @@ export function VoiceInput() {
   const translateLanguage = config.data?.transcription.dictation.target_language || "English";
   const agent = health.data?.find((d) => d.name === "com.yulu.statusagent");
   const enabled = config.data?.status_agent.enabled ?? true;
-  const ready = enabled && agent?.status === "running" && transcriptionHealth.data?.available === true;
+  const ready = enabled && agent?.status === "running" && transcriptionHealth.data?.available === true &&
+    permissions.data?.input === "ready" && permissions.data.microphone === "ready";
   const state = recording.data?.state ?? "idle";
   const isRecording = state === "recording" && recording.data?.dictationActive;
   const isProcessing = state === "processing";
@@ -69,14 +66,15 @@ export function VoiceInput() {
     if (state === "idle") void utils.recording.history.invalidate();
   }, [state, utils]);
 
-  async function copyHistory(item: HistoryItem) {
+  async function copyHistory(item: HistoryItem, original = false) {
     try {
-      await navigator.clipboard.writeText(item.text);
+      await navigator.clipboard.writeText(original ? item.rawText ?? item.text : item.text);
     } catch {
       return;
     }
-    setCopiedId(item.id);
-    window.setTimeout(() => setCopiedId((current) => current === item.id ? null : current), 1200);
+    const id = original ? `${item.id}:original` : item.id;
+    setCopiedId(id);
+    window.setTimeout(() => setCopiedId((current) => current === id ? null : current), 1200);
   }
 
   const historyItems = (history.data ?? []) as HistoryItem[];
@@ -114,7 +112,7 @@ export function VoiceInput() {
                 <div className="voice-action-title">{t(`voiceInput.action.${id}`)}</div>
                 <div className="voice-action-meta">
                   <Keyboard size={13} strokeWidth={1.8} />
-                  <kbd>{hotkeyLabel(spec)}</kbd>
+                  <kbd>{formatHotkey(spec ?? DEFAULT_HOTKEYS[id], lang === "en")}</kbd>
                   {language && <span>{language}</span>}
                 </div>
               </div>
@@ -142,6 +140,15 @@ export function VoiceInput() {
                     {item.promptSlug && <span>{item.promptSlug}</span>}
                   </div>
                   <p>{item.text}</p>
+                  {item.cleanupWarning && <p className="voice-history-warning">{t("voiceInput.history.cleanupFailed")}</p>}
+                  {item.rawText && item.rawText !== item.text && <details className="voice-history-original">
+                    <summary>{t("voiceInput.history.original")}</summary>
+                    <p>{item.rawText}</p>
+                    <button type="button" className="voice-history-copy" onClick={() => { void copyHistory(item, true); }}>
+                      <Copy size={14} strokeWidth={2} />
+                      {t(copiedId === `${item.id}:original` ? "voiceInput.history.copied" : "voiceInput.history.copyOriginal")}
+                    </button>
+                  </details>}
                 </div>
                 <button
                   type="button"

@@ -6,10 +6,12 @@ import { promisify } from "node:util";
 import WebSocket from "ws";
 import { envWithFallbackPath, resolveExecutable } from "./executables.js";
 import type { GlossaryContract } from "./glossaryContract.js";
+import { AudioEvidence } from "./audioEvidence.js";
 import type {
   CaptionSource,
   CaptionSourceUpdate,
   StreamingCaptionEngine,
+  StreamingCaptionOptions,
   StreamingCaptionUpdate,
 } from "./localCaptionEngine.js";
 import type { TranscriptionLanguage } from "./realtimeTranscription.js";
@@ -24,9 +26,11 @@ interface XaiTranscriptEvent {
   type?: string;
   text?: string;
   is_final?: boolean;
+  speech_final?: boolean;
   channel_index?: number;
   start?: number;
   duration?: number;
+  words?: Array<{ text: string; start: number; end: number }>;
   message?: string;
 }
 
@@ -82,17 +86,17 @@ function keyterms(glossary?: GlossaryContract): string[] {
     .filter((term) => term.length > 0 && term.length <= 50))].slice(0, 100);
 }
 
-function realtimeUrl(language: TranscriptionLanguage, glossary?: GlossaryContract): URL {
+function realtimeUrl(language: TranscriptionLanguage, glossary?: GlossaryContract, dictation = false): URL {
   const url = new URL("wss://api.x.ai/v1/stt");
   url.searchParams.set("sample_rate", "16000");
   url.searchParams.set("encoding", "pcm");
   url.searchParams.set("interim_results", "true");
   url.searchParams.set("endpointing", "800");
-  url.searchParams.set("multichannel", "true");
-  url.searchParams.set("channels", "2");
+  if (!dictation) url.searchParams.set("multichannel", "true");
+  url.searchParams.set("channels", dictation ? "1" : "2");
   const formattedLanguage = xaiLanguage(language);
   if (formattedLanguage) url.searchParams.set("language", formattedLanguage);
-  for (const term of keyterms(glossary)) url.searchParams.append("keyterm", term);
+  if (!dictation) for (const term of keyterms(glossary)) url.searchParams.append("keyterm", term);
   return url;
 }
 
@@ -125,6 +129,8 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   private readonly elapsedMs: Record<CaptionSource, number> = { mic: 0, system: 0 };
   private readonly finalText: Record<CaptionSource, string> = { mic: "", system: "" };
   private readonly finalSegments: Record<CaptionSource, FinalTranscriptSegment[]> = { mic: [], system: [] };
+  private readonly captionChunks: Record<CaptionSource, FinalTranscriptSegment[]> = { mic: [], system: [] };
+  private readonly stableCaption: Record<CaptionSource, CaptionSourceUpdate["stableCaption"]> = { mic: null, system: null };
   private doneChannels = new Set<number>();
   private realtimeUrl: URL | null = null;
   private realtimeGeneration = 0;
@@ -136,6 +142,10 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   private reconnectDelayMs = REALTIME_RECONNECT_MIN_MS;
   private lastStreamingError: Error | null = null;
   private lifecycleGeneration = 0;
+  private dictation = false;
+  private evidence: Record<CaptionSource, AudioEvidence> | null = null;
+  private finalizedMicMs = 0;
+  private finishResolve: (() => void) | null = null;
 
   constructor(private readonly credentials: XaiCredentialManager) {}
 
@@ -147,7 +157,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     await this.credentials.resolve();
   }
 
-  async start(language: TranscriptionLanguage, glossary?: GlossaryContract): Promise<void> {
+  async start(language: TranscriptionLanguage, options: StreamingCaptionOptions & { glossary?: GlossaryContract } = {}): Promise<void> {
     const aborting = this.abort();
     const generation = this.lifecycleGeneration;
     await aborting;
@@ -164,13 +174,20 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     this.finalText.system = "";
     this.finalSegments.mic = [];
     this.finalSegments.system = [];
+    this.captionChunks.mic = [];
+    this.captionChunks.system = [];
+    this.stableCaption.mic = null;
+    this.stableCaption.system = null;
     this.realtimeGeneration = 0;
     this.sessionBaseMs = 0;
     this.voiceWithoutTranscriptMs = 0;
     this.replayChunks = [];
     this.replayBytes = 0;
+    this.dictation = options.dictation === true;
+    this.evidence = { mic: new AudioEvidence(), system: new AudioEvidence() };
+    this.finalizedMicMs = 0;
 
-    const url = realtimeUrl(language, glossary);
+    const url = realtimeUrl(language, options.glossary, this.dictation);
     this.realtimeUrl = url;
 
     await this.connectRealtimeWithRetry(url);
@@ -230,7 +247,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     });
     socket.once("close", () => {
       if (this.socket !== socket) return;
-      if (this.doneChannels.size >= 2) this.doneResolve?.();
+      if (this.doneChannels.size >= (this.dictation ? 1 : 2)) this.doneResolve?.();
       else this.fail(new Error("xAI streaming STT connection closed early"));
     });
     await withTimeout(this.ready, 15_000, "xAI streaming STT start timed out");
@@ -238,7 +255,9 @@ export class XaiAudioClient implements StreamingCaptionEngine {
 
   async feed(chunks: Partial<Record<CaptionSource, Buffer>>): Promise<StreamingCaptionUpdate> {
     const generation = this.lifecycleGeneration;
-    const pcm = interleaveStereo(chunks.mic, chunks.system);
+    const pcm = this.dictation ? chunks.mic ?? Buffer.alloc(0) : interleaveStereo(chunks.mic, chunks.system);
+    if (chunks.mic) this.evidence?.mic.append(chunks.mic);
+    if (!this.dictation && chunks.system) this.evidence?.system.append(chunks.system);
     this.elapsedMs.mic += audioMs(chunks.mic);
     this.elapsedMs.system += audioMs(chunks.system);
     this.appendReplay(pcm);
@@ -264,12 +283,18 @@ export class XaiAudioClient implements StreamingCaptionEngine {
       if (this.lastStreamingError) throw this.lastStreamingError;
       return { updates: {} };
     }
-    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "audio.done" }));
+    const finalized = new Promise<void>((resolve) => { this.finishResolve = resolve; });
+    if (socket.readyState === WebSocket.OPEN) {
+      if (this.dictation) socket.send(JSON.stringify({ type: "Finalize" }));
+      socket.send(JSON.stringify({ type: "audio.done" }));
+      this.resolveFinalizedTail();
+    }
     try {
-      await withTimeout(this.done!, 30_000, "xAI streaming STT finish timed out");
+      await withTimeout(this.dictation ? Promise.race([this.done!, finalized]) : this.done!, 30_000, "xAI streaming STT finish timed out");
       if (generation !== this.lifecycleGeneration) throw new Error("xAI streaming STT was cancelled");
       return this.drain();
     } finally {
+      this.finishResolve = null;
       socket.close();
       if (this.socket === socket) {
         this.socket = null;
@@ -287,6 +312,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     this.doneReject?.(error);
     this.readyReject = null;
     this.doneReject = null;
+    this.finishResolve = null;
     this.disconnectSocket();
     this.realtimeUrl = null;
     this.replayChunks = [];
@@ -445,15 +471,29 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     }
     const channel = Number(event.channel_index ?? 0);
     const source = SOURCE_BY_CHANNEL[channel];
-    if (!source) return;
-    const text = cleanTranscriptText(String(event.text ?? ""));
+    if (!source || (this.dictation && source !== "mic")) return;
+    const evidence = this.evidence?.[source];
+    const startMs = this.sessionBaseMs + Math.max(0, Number(event.start) || 0) * 1000;
+    const endMs = Number.isFinite(event.duration) ? startMs + Number(event.duration) * 1000 : this.elapsedMs[source];
+    const grounded = !evidence || (evidence.overlaps(startMs, endMs) &&
+      (!event.words?.length || event.words.every((word) => !/[\p{L}\p{N}]/u.test(word.text) || evidence.overlaps(
+        this.sessionBaseMs + word.start * 1000, this.sessionBaseMs + word.end * 1000))));
+    // Reject words from silent channels/intervals, including authoritative done
+    // revisions, so a silent result cannot overwrite accepted speech.
+    const text = grounded ? cleanTranscriptText(String(event.text ?? "")) : "";
     if (event.type === "transcript.partial") {
       if (text) this.voiceWithoutTranscriptMs = 0;
       if (event.is_final) {
         this.partial[source] = "";
+        const caption = this.utteranceCaption(source, text, event);
+        if (caption.text) this.stableCaption[source] = caption;
         this.commitFinalRevision(source, text, event);
+        if (grounded && source === "mic" && event.speech_final === true && Number.isFinite(event.duration)) {
+          this.finalizedMicMs = Math.max(this.finalizedMicMs, endMs);
+          this.resolveFinalizedTail();
+        }
       } else {
-        this.partial[source] = text;
+        this.partial[source] = this.utteranceCaption(source, text, event).text;
       }
       return;
     }
@@ -462,7 +502,15 @@ export class XaiAudioClient implements StreamingCaptionEngine {
       if (text) this.commitFinalRevision(source, text, event, true);
       this.partial[source] = "";
       this.doneChannels.add(channel);
-      if (this.doneChannels.size >= 2) this.doneResolve?.();
+      if (this.doneChannels.size >= (this.dictation ? 1 : 2)) this.doneResolve?.();
+    }
+  }
+
+  private resolveFinalizedTail(): void {
+    const evidence = this.evidence?.mic;
+    if (this.dictation && evidence && !this.partial.mic &&
+        (!evidence.lastVoiceMs || (this.finalText.mic && this.finalizedMicMs >= evidence.lastVoiceMs))) {
+      this.finishResolve?.();
     }
   }
 
@@ -472,12 +520,42 @@ export class XaiAudioClient implements StreamingCaptionEngine {
       updates[source] = {
         partial: this.partial[source],
         stable: this.pendingStable[source].splice(0),
+        stableCaption: this.stableCaption[source],
         audioMs: this.elapsedMs[source],
         ...(this.pendingReplace[source] ? { replaceStable: true } : {}),
       };
       this.pendingReplace[source] = false;
     }
     return { updates };
+  }
+
+  private utteranceCaption(source: CaptionSource, text: string, event: XaiTranscriptEvent): { text: string; endMs: number } {
+    const start = Number(event.start);
+    const duration = Number(event.duration);
+    const hasRange = Number.isFinite(start) && Number.isFinite(duration) && duration > 0;
+    const chunks = this.captionChunks[source];
+    const startMs = hasRange ? this.sessionBaseMs + Math.round(start * 1_000)
+      : chunks.at(-1)?.endMs ?? this.sessionBaseMs;
+    const endMs = hasRange ? this.sessionBaseMs + Math.round((start + duration) * 1_000)
+      : this.elapsedMs[source];
+    // A speech-final event already stitches/corrects every chunk in this utterance.
+    // A missing flag is treated as a standalone final for older server responses.
+    if (event.is_final && event.speech_final !== false) {
+      this.captionChunks[source] = [];
+      return { text, endMs };
+    }
+    const segments = chunks.filter((chunk) => !hasRange || endMs <= chunk.startMs || startMs >= chunk.endMs);
+    if (text) segments.push({ text, startMs, endMs, generation: this.realtimeGeneration });
+    segments.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+    if (event.is_final) this.captionChunks[source] = segments;
+    let combined = "";
+    for (const segment of segments) {
+      const addition = dedupeTranscriptSegment(combined, segment.text);
+      if (!addition) continue;
+      const separator = /[a-z0-9]$/i.test(combined) && /^[a-z0-9]/i.test(addition) ? " " : "";
+      combined += separator + addition;
+    }
+    return { text: combined, endMs };
   }
 
   private commitFinalRevision(
@@ -522,7 +600,7 @@ export class XaiAudioClient implements StreamingCaptionEngine {
 
   private appendReplay(pcm: Buffer): void {
     if (pcm.length === 0) return;
-    const maxBytes = REALTIME_REPLAY_MS * STEREO_PCM_BYTES_PER_MS;
+    const maxBytes = REALTIME_REPLAY_MS * (this.dictation ? 32 : STEREO_PCM_BYTES_PER_MS);
     const chunk = pcm.length > maxBytes ? pcm.subarray(pcm.length - maxBytes) : pcm;
     this.replayChunks.push(chunk);
     this.replayBytes += chunk.length;
@@ -536,12 +614,14 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     if (!this.realtimeUrl) throw new Error("xAI streaming STT session is not configured");
     if (Date.now() < this.reconnectNotBeforeMs) return;
     const replay = Buffer.concat(this.replayChunks);
-    const replayDurationMs = Math.floor(replay.length / STEREO_PCM_BYTES_PER_MS);
+    const replayDurationMs = Math.floor(replay.length / (this.dictation ? 32 : STEREO_PCM_BYTES_PER_MS));
     this.disconnectSocket();
     this.realtimeGeneration += 1;
     this.sessionBaseMs = Math.max(0, Math.max(this.elapsedMs.mic, this.elapsedMs.system) - replayDurationMs);
     this.partial.mic = "";
     this.partial.system = "";
+    this.captionChunks.mic = [];
+    this.captionChunks.system = [];
     if (!await this.connectRealtimeWithRetry(this.realtimeUrl)) return;
     if (generation !== this.lifecycleGeneration) throw new Error("xAI streaming STT was cancelled");
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {

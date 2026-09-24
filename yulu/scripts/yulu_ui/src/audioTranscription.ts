@@ -5,6 +5,7 @@ import type { GlossaryContract } from "./glossaryContract.js";
 import type {
   CaptionSource,
   StreamingCaptionEngine,
+  StreamingCaptionOptions,
   StreamingCaptionUpdate,
 } from "./localCaptionEngine.js";
 import type { LocalCaptionManager } from "./localCaptionManager.js";
@@ -126,7 +127,7 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     else await this.xai.warm();
   }
 
-  async start(language: TranscriptionLanguage): Promise<void> {
+  async start(language: TranscriptionLanguage, options?: StreamingCaptionOptions): Promise<void> {
     this.requireXaiTranscriptionConsent();
     const generation = ++this.generation;
     if (this.active) await this.active.abort();
@@ -134,7 +135,9 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     const engine = selectedEngine(this.config) === "local" ? this.local : this.xai;
     this.active = engine;
     try {
-      if (engine === this.xai) await this.xai.start(language, this.glossary?.());
+      if (engine === this.xai) await this.xai.start(language, {
+        ...options, glossary: options?.dictation ? undefined : this.glossary?.(),
+      });
       else await engine.start(language);
       if (generation !== this.generation) throw new Error("Realtime transcription was cancelled");
     }

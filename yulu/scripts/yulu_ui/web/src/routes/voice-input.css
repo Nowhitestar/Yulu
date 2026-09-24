@@ -9,6 +9,11 @@
   box-shadow: var(--shadow);
 }
 
+.voice-history-original { margin-top: 10px; color: var(--fg-3); font-size: 12px; }
+.voice-history-original summary { cursor: pointer; width: fit-content; }
+.voice-history-original p { white-space: pre-wrap; }
+.voice-history-main .voice-history-warning { color: var(--fg-3); font-size: 12px; }
+
 .voice-input-head {
   display: flex;
   align-items: flex-start;

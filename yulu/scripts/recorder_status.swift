@@ -9,8 +9,8 @@ import Foundation
 let expandedMaxWidth: CGFloat = 760
 let expandedHeight: CGFloat = 176
 let collapsedWindowSize: CGFloat = 92
-let toolbarWidth: CGFloat = 420
-let compactToolbarWidth: CGFloat = 30
+let toolbarWidth: CGFloat = 480
+let compactToolbarWidth: CGFloat = 128
 let toolbarHeight: CGFloat = 30
 let screenMargin: CGFloat = 16
 let transcriptTailBytes: UInt64 = 64 * 1024
@@ -207,9 +207,65 @@ final class GripView: NSView {
     }
 }
 
+/// A quiet dotted trace, with a low breath at rest and a smooth audio envelope.
+/// It is drawn directly over the desktop when the toolbar is tucked away.
+final class CaptionWaveView: NSView {
+    static let blue = NSColor(hex: "#60AAF3")
+    static let profile: [CGFloat] = [0.04, 0.07, 0.06, 0.12, 0.08, 0.18, 0.10, 0.15,
+        0.24, 0.36, 0.64, 0.44, 0.82, 1, 0.74, 0.50, 0.34, 0.48, 0.22,
+        0.14, 0.20, 0.09, 0.14, 0.08, 0.10, 0.06, 0.08, 0.04, 0.05]
+    var level: CGFloat = 0 { didSet { needsDisplay = true } }
+    private var envelope: CGFloat = 0
+    private var timer: Timer?
+    private var active = false
+    override var mouseDownCanMoveWindow: Bool { true }
+    deinit { timer?.invalidate() }
+
+    func setAnimating(_ enabled: Bool) {
+        active = enabled
+        timer?.invalidate()
+        timer = nil
+        needsDisplay = true
+        guard enabled, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let next = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.envelope += (self.level - self.envelope) * (self.level > self.envelope ? 0.28 : 0.12)
+            self.needsDisplay = true
+            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { self.setAnimating(self.active) }
+        }
+        timer = next
+        RunLoop.main.add(next, forMode: .common)
+    }
+
+    static func audioLevel(_ status: [String: Any]?, expectedPath: String) -> CGFloat {
+        guard let status, status["recording"] as? Bool == true,
+              !expectedPath.isEmpty, status["file"] as? String == expectedPath else { return 0 }
+        let mic = (status["micLevel"] as? NSNumber)?.doubleValue ?? 0
+        let system = (status["systemLevel"] as? NSNumber)?.doubleValue ?? 0
+        let rms = max(mic.isFinite ? mic : 0, system.isFinite ? system : 0)
+        return CGFloat(min(1, max(0, (20 * log10(max(rms, 0.00001)) + 55) / 45)))
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let t = ProcessInfo.processInfo.systemUptime
+        let breath = reduced ? 0.06 : 0.06 + 0.025 * CGFloat(sin(t * 2.1))
+        let amplitude = max(breath, min(1, reduced ? level : envelope))
+        let step = bounds.width / CGFloat(Self.profile.count)
+        let width = min(2.4, step * 0.54)
+        for (i, shape) in Self.profile.enumerated() {
+            let drift = reduced ? 1 : 0.88 + 0.12 * CGFloat(sin(t * 3.2 - Double(i) * 0.48))
+            let height = width + min(16, bounds.height - width) * amplitude * shape * drift
+            Self.blue.withAlphaComponent(0.58 + 0.42 * shape).setFill()
+            let rect = NSRect(x: CGFloat(i) * step + (step - width) / 2,
+                y: (bounds.height - height) / 2, width: width, height: height)
+            NSBezierPath(roundedRect: rect, xRadius: width / 2, yRadius: width / 2).fill()
+        }
+    }
+}
+
 final class RecordingButton: NSButton {
     var stoppingState = false { didSet { needsDisplay = true } }
-    var compactAppearance = false { didSet { needsDisplay = true } }
     private var hovered = false
     private var tracking: NSTrackingArea?
 
@@ -239,43 +295,33 @@ final class RecordingButton: NSButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if compactAppearance {
-            NSColor(hex: "#E64C43").setFill()
-            let indicator = NSRect(x: bounds.midX - 3.5, y: bounds.midY - 3.5, width: 7, height: 7)
-            if stoppingState {
-                NSBezierPath(roundedRect: indicator, xRadius: 1.4, yRadius: 1.4).fill()
-            } else {
-                NSBezierPath(ovalIn: indicator).fill()
-            }
-            return
-        }
         let active = hovered || stoppingState || window?.firstResponder === self
-        if active {
-            NSColor(hex: "#E64C43", alpha: 0.12).setFill()
-            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
-        }
+        CaptionWaveView.blue.withAlphaComponent(active ? 0.24 : 0.13).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
 
         let label = stoppingState
             ? L("停止中…", "Stopping…")
-            : (active ? L("点击停止", "Stop") : L("录制中", "Recording"))
+            : L("结束", "Stop")
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
             .foregroundColor: NSColor.white.withAlphaComponent(isEnabled ? 0.90 : 0.52),
         ]
         let frames = contentFrames()
-        NSColor(hex: "#E64C43").setFill()
-        if active {
-            NSBezierPath(roundedRect: frames.indicator, xRadius: 1.4, yRadius: 1.4).fill()
-        } else {
-            NSBezierPath(ovalIn: frames.indicator).fill()
-        }
+        CaptionWaveView.blue.setFill()
+        NSBezierPath(roundedRect: frames.indicator, xRadius: 1.4, yRadius: 1.4).fill()
         label.draw(in: frames.label, withAttributes: attributes)
     }
 
     func contentFrames() -> (indicator: NSRect, label: NSRect) {
+        let label = stoppingState ? L("停止中…", "Stopping…") : L("结束", "Stop")
+        let labelWidth = ceil((label as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+        ]).width)
+        let groupWidth = 7 + 6 + labelWidth
+        let x = (bounds.width - groupWidth) / 2
         return (
-            NSRect(x: 7, y: bounds.midY - 3.5, width: 7, height: 7),
-            NSRect(x: 20, y: bounds.midY - 7, width: 44, height: 14)
+            NSRect(x: x, y: bounds.midY - 3.5, width: 7, height: 7),
+            NSRect(x: x + 13, y: bounds.midY - 7, width: labelWidth, height: 14)
         )
     }
 }
@@ -489,6 +535,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var root: HoverRootView!
     var toolbar: DraggableEffectView!
     var grip: GripView!
+    var waveView: CaptionWaveView!
     var recordingButton: RecordingButton!
     var timeLabel: NSTextField!
     var sourceLanguageLabel: NSTextField!
@@ -522,6 +569,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var timeTimer: Timer?
     var stateTimer: Timer?
     var captionTimer: Timer?
+    var levelTimer: Timer?
+    var levelRequestPending = false
     var toolbarHideWorkItem: DispatchWorkItem?
     var reconnectWorkItem: DispatchWorkItem?
     let webSocketSession = URLSession(configuration: .default)
@@ -544,7 +593,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        [timeTimer, stateTimer, captionTimer].forEach { $0?.invalidate() }
+        [timeTimer, stateTimer, captionTimer, levelTimer].forEach { $0?.invalidate() }
+        waveView?.setAnimating(false)
         toolbarHideWorkItem?.cancel()
         reconnectWorkItem?.cancel()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
@@ -610,6 +660,13 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         grip = GripView(frame: .zero)
         toolbar.addSubview(grip)
+
+        waveView = CaptionWaveView(frame: .zero)
+        waveView.toolTip = L("正在录制 · 拖动调整位置", "Recording · Drag to move")
+        waveView.setAccessibilityElement(true)
+        waveView.setAccessibilityRole(.image)
+        waveView.setAccessibilityLabel(L("正在录制", "Recording"))
+        toolbar.addSubview(waveView)
 
         recordingButton = RecordingButton(frame: .zero)
         recordingButton.target = self
@@ -711,23 +768,26 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
             logoView.isHidden = true
             toolbar.isHidden = false
             toolbar.frame = toolbarFrame(compact: toolbarCompact, in: root.bounds)
-            recordingButton.compactAppearance = toolbarCompact
+            toolbar.layer?.backgroundColor = toolbarCompact ? NSColor.clear.cgColor : NSColor(hex: "#17191D", alpha: 0.92).cgColor
+            toolbar.layer?.borderWidth = toolbarCompact ? 0 : 1
+            waveView.setAnimating(!stopping)
             layoutCaptionLabels()
-            let fullControls = [grip, timeLabel, sourceLanguageLabel, targetPopup, displayPopup, collapseButton]
+            let fullControls = [grip, timeLabel, sourceLanguageLabel, targetPopup, displayPopup, recordingButton, collapseButton]
             fullControls.forEach { $0?.isHidden = toolbarCompact }
             if toolbarCompact {
-                recordingButton.frame = compactRecordingButtonFrame(in: toolbar.bounds)
+                waveView.frame = toolbar.bounds.insetBy(dx: 8, dy: 4)
                 return
             }
-            var x: CGFloat = 10
-            grip.frame = NSRect(x: x, y: 9, width: 8, height: 12); x += 16
-            recordingButton.frame = NSRect(x: x, y: 3, width: 68, height: 24); x += 74
-            timeLabel.frame = NSRect(x: x, y: 7, width: 38, height: 16); x += 47
-            sourceLanguageLabel.frame = NSRect(x: x, y: 7, width: 50, height: 16); x += 52
-            targetPopup.frame = NSRect(x: x, y: 3, width: 88, height: 24); x += 90
-            displayPopup.frame = NSRect(x: x, y: 3, width: 66, height: 24)
+            grip.frame = NSRect(x: 12, y: 9, width: 8, height: 12)
+            waveView.frame = NSRect(x: 30, y: 4, width: 64, height: 22)
+            timeLabel.frame = NSRect(x: 106, y: 7, width: 40, height: 16)
+            sourceLanguageLabel.frame = NSRect(x: 157, y: 7, width: 50, height: 16)
+            targetPopup.frame = NSRect(x: 207, y: 3, width: 78, height: 24)
+            displayPopup.frame = NSRect(x: 293, y: 3, width: 68, height: 24)
+            recordingButton.frame = NSRect(x: 373, y: 3, width: 66, height: 24)
             collapseButton.frame = NSRect(x: toolbar.bounds.width - 30, y: 3, width: 24, height: 24)
         } else {
+            waveView.setAnimating(false)
             toolbar.isHidden = true
             sourceLabel.isHidden = true
             translationLabel.isHidden = true
@@ -772,14 +832,17 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
     }
 
-    func compactRecordingButtonFrame(in bounds: NSRect) -> NSRect {
-        NSRect(x: bounds.midX - 12, y: bounds.midY - 12, width: 24, height: 24)
-    }
-
     func setToolbarCompact(_ compact: Bool) {
         guard toolbarCompact != compact, expanded, !closing else { return }
         toolbarCompact = compact
         layoutViews()
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0.45
+            fade.toValue = 1
+            fade.duration = 0.16
+            toolbar.layer?.add(fade, forKey: "toolbar-reveal")
+        }
     }
 
     func moveWindow(to origin: NSPoint) {
@@ -826,10 +889,26 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         timeTimer = Timer.scheduledTimer(timeInterval: 1, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
         stateTimer = Timer.scheduledTimer(timeInterval: 2, target: self, selector: #selector(checkState), userInfo: nil, repeats: true)
         captionTimer = Timer.scheduledTimer(timeInterval: 1.5, target: self, selector: #selector(updateCaptionFallback), userInfo: nil, repeats: true)
-        [timeTimer, stateTimer, captionTimer].forEach { $0?.addToCommonRunLoop() }
+        levelTimer = Timer.scheduledTimer(timeInterval: 0.2, target: self, selector: #selector(updateAudioLevel), userInfo: nil, repeats: true)
+        [timeTimer, stateTimer, captionTimer, levelTimer].forEach { $0?.addToCommonRunLoop() }
         tick()
         checkState()
         updateCaptionFallback()
+    }
+
+    @objc func updateAudioLevel() {
+        guard !closing, expanded, !stopping, !levelRequestPending else { return }
+        levelRequestPending = true
+        // Never put the socket round trip on AppKit's animation/interaction thread.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let status = self?.audioDaemonStatus()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.levelRequestPending = false
+                guard !self.closing else { return }
+                self.waveView.level = CaptionWaveView.audioLevel(status, expectedPath: self.currentAudioPath)
+            }
+        }
     }
 
     @objc func tick() {
@@ -909,6 +988,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !path.isEmpty, path != currentAudioPath else { return }
         currentAudioPath = path
         lastSequence = -1
+        lastWebSocketEventAt = .distantPast
         lastFileSize = 0
         lastFileGrowthAt = Date()
         postTranslationOptions()
@@ -916,10 +996,13 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func updateCaptionFallback() {
         guard !closing, !unhealthy, Date().timeIntervalSince(lastWebSocketEventAt) > 3, !currentAudioPath.isEmpty else { return }
+        // Quiet speech is not a broken connection. Do not replace a selected
+        // live utterance with older file contents during an ordinary pause.
+        guard webSocketTask == nil || lastWebSocketEventAt == .distantPast else { return }
         let path = realtimeTranscriptPath(audioPath: currentAudioPath)
         guard FileManager.default.fileExists(atPath: path) else { return }
         let lines = captionLines(readTail(path: path))
-        guard let latest = lines.suffix(2).nilIfEmpty?.joined(separator: " ") else { return }
+        guard let latest = lines.last(where: { !isCaptionHesitation($0) }) else { return }
         setSourceCaption(latest)
     }
 
@@ -1197,7 +1280,10 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sourceLanguageLabel.stringValue = sourceLanguageTitle(sourceLanguage) + " →"
         let stableSource = payload["sourceText"] as? String ?? ""
         let partialSource = (payload["partialText"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let source = liveCaptionSourceText(stable: stableSource, partial: partialSource, current: sourceText)
+        let source = liveCaptionSourceText(
+            text: payload["text"] as? String,
+            stable: stableSource, partial: partialSource, current: sourceText
+        )
         let incomingTranslation = (payload["translationText"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let translationStatus = payload["translationStatus"] as? String ?? "disabled"
         let translation = liveCaptionTranslationText(
@@ -1221,11 +1307,16 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    func liveCaptionSourceText(stable: String, partial: String, current: String = "") -> String {
+    func liveCaptionSourceText(text: String? = nil, stable: String, partial: String, current: String = "") -> String {
+        // The Host selects the current utterance; sourceText can contain a full
+        // transcript correction and must not be reconstructed as live subtitles.
+        if let text = text {
+            return boundedCaptionText(text, maxCharacters: captionLayoutCharacterLimit)
+        }
         let stableText = boundedCaptionText(stable, maxCharacters: stableCaptionCharacterLimit)
         let partialText = boundedCaptionText(partial, maxCharacters: partialCaptionCharacterLimit)
         guard !partialText.isEmpty else { return stableText }
-        if captionSpeechCharacterCount(partialText) < 3 {
+        if isCaptionHesitation(partialText) {
             return stableText.isEmpty
                 ? boundedCaptionText(current, maxCharacters: captionLayoutCharacterLimit)
                 : stableText
@@ -1239,9 +1330,11 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return incomingText.isEmpty ? current : incomingText
     }
 
-    func captionSpeechCharacterCount(_ text: String) -> Int {
-        text.unicodeScalars.reduce(into: 0) { count, scalar in
-            if CharacterSet.alphanumerics.contains(scalar) { count += 1 }
+    func isCaptionHesitation(_ text: String) -> Bool {
+        let words = text.lowercased().components(separatedBy: CharacterSet.punctuationCharacters.union(.whitespacesAndNewlines))
+            .filter { !$0.isEmpty }
+        return !words.isEmpty && words.allSatisfy {
+            $0.range(of: "^(?:[嗯呃额唔呢]+|um+|uh+|erm+)$", options: .regularExpression) != nil
         }
     }
 
@@ -1280,6 +1373,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         stopping = true
         recordingButton.stoppingState = true
         recordingButton.isEnabled = false
+        waveView?.setAnimating(false)
         showToolbar()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let response = requestRecordingStop()
@@ -1301,6 +1395,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         stopping = false
         recordingButton.stoppingState = false
         recordingButton.isEnabled = true
+        waveView?.setAnimating(expanded && !closing)
         if response["ok"] as? Bool == true, response["state"] as? String == "completed" {
             warningText = ""
         } else if response["state"] as? String == "failed" {
@@ -1338,7 +1433,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func finishAndExit() {
         guard !closing else { return }
         closing = true
-        [timeTimer, stateTimer, captionTimer].forEach { $0?.invalidate() }
+        [timeTimer, stateTimer, captionTimer, levelTimer].forEach { $0?.invalidate() }
+        waveView?.setAnimating(false)
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.12
@@ -1356,10 +1452,6 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 extension Timer {
     func addToCommonRunLoop() { RunLoop.current.add(self, forMode: .common) }
-}
-
-extension ArraySlice {
-    var nilIfEmpty: ArraySlice<Element>? { isEmpty ? nil : self }
 }
 
 let arguments = CommandLine.arguments
@@ -1396,7 +1488,12 @@ if arguments.contains("--self-test") {
     assert(app.liveCaptionTranslationText(incoming: "", status: "pending", current: "Previous") == "Previous")
     assert(app.liveCaptionTranslationText(incoming: " Next ", status: "ready", current: "Previous") == "Next")
     assert(app.liveCaptionTranslationText(incoming: "Next", status: "disabled", current: "Previous") == "")
-    assert(app.captionSpeechCharacterCount("嗯，OK！") == 3)
+    assert(app.isCaptionHesitation("嗯，呃……"))
+    for answer in ["对", "不", "不要", "好", "OK", "2", "嗯，好"] {
+        assert(app.liveCaptionSourceText(stable: "上一句", partial: answer) == answer)
+    }
+    assert(app.liveCaptionSourceText(text: "当前句子", stable: "历史一\n历史二", partial: "另一份草稿") == "当前句子")
+    assert(app.liveCaptionSourceText(text: "", stable: "历史字幕", partial: "嗯") == "")
     let hugeCaption = String(repeating: "历史字幕", count: 5_000) + "最新一句"
     let boundedCaption = app.boundedCaptionText(hugeCaption, maxCharacters: 240)
     assert(Array(boundedCaption).count == 241 && boundedCaption.hasPrefix("…") && boundedCaption.hasSuffix("最新一句"))
@@ -1424,10 +1521,37 @@ if arguments.contains("--self-test") {
     assert(shortScreenOffset > 34 && shortScreenOffset < 35)
     let compactToolbar = app.toolbarFrame(compact: true, in: NSRect(x: 0, y: 0, width: 900, height: 176))
     assert(compactToolbar.width == compactToolbarWidth)
-    let compactButton = RecordingButton(frame: app.compactRecordingButtonFrame(in: NSRect(origin: .zero, size: compactToolbar.size)))
-    assert(compactButton.frame.midX == compactToolbar.width / 2 && compactButton.frame.midY == toolbarHeight / 2)
-    assert(compactButton.frame.width == 24)
-    compactButton.compactAppearance = true
+    let status: [String: Any] = ["recording": true, "file": "/tmp/meeting.wav", "micLevel": 0, "systemLevel": 0.1]
+    assert(CaptionWaveView.audioLevel(status, expectedPath: "/tmp/meeting.wav") > 0.5)
+    assert(CaptionWaveView.audioLevel(status, expectedPath: "/tmp/other.wav") == 0)
+    assert(CaptionWaveView.audioLevel(nil, expectedPath: "/tmp/meeting.wav") == 0)
+    // Exercise the real WebSocket -> label path in original-only mode, without
+    // opening windows or connecting to the user's capture/Host.
+    let replay = AppDel(title: "caption replay", path: "")
+    replay.root = HoverRootView(frame: NSRect(x: 0, y: 0, width: 900, height: 176))
+    replay.sourceLanguageLabel = NSTextField(labelWithString: "")
+    replay.sourceLabel = OutlinedCaptionLabel(frame: sourceCaptionFrame)
+    replay.translationLabel = OutlinedCaptionLabel(frame: .zero)
+    let replayDir = FileManager.default.temporaryDirectory.appendingPathComponent("yulu-caption-replay-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: replayDir, withIntermediateDirectories: true)
+    replay.currentAudioPath = replayDir.appendingPathComponent("caption.wav").path
+    let payload: [String: Any] = [
+        "stem": "caption", "sequence": 1, "text": "当前句子", "sourceText": "旧句子\n旧句子",
+        "partialText": "嗯", "translationText": "Current sentence", "translationStatus": "disabled"
+    ]
+    replay.handleWebSocketFrame(["channel": "realtime-transcript", "payload": payload])
+    assert(replay.sourceText == "当前句子" && replay.translationLabel.isHidden)
+    let fallbackPath = replay.realtimeTranscriptPath(audioPath: replay.currentAudioPath)
+    try "旧句子\n旧句子\n".write(toFile: fallbackPath, atomically: true, encoding: .utf8)
+    replay.lastWebSocketEventAt = Date(timeIntervalSinceNow: -10)
+    replay.webSocketTask = replay.webSocketSession.webSocketTask(with: URL(string: "ws://127.0.0.1:1/ws")!)
+    replay.updateCaptionFallback()
+    assert(replay.sourceText == "当前句子") // no replay on an ordinary pause
+    replay.webSocketTask = nil
+    replay.updateCaptionFallback()
+    assert(replay.sourceText == "旧句子") // one paragraph if the connection really failed
+    replay.webSocketSession.invalidateAndCancel()
+    try FileManager.default.removeItem(at: replayDir)
     print("recorder_status self-test ok")
     exit(0)
 }

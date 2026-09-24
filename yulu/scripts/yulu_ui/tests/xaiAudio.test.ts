@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { XaiAudioClient } from "../src/xaiAudio.js";
+import type { StreamingCaptionUpdate } from "../src/localCaptionEngine.js";
 
 const roots: string[] = [];
 const originalPath = process.env.PATH;
@@ -17,12 +18,44 @@ afterEach(() => {
 });
 
 describe("XaiAudioClient", () => {
+  it("assembles chunk captions, replaces an utterance final, and keeps earlier history out of the next caption", () => {
+    const client = new XaiAudioClient({ resolve: vi.fn(), cachedStatus: vi.fn() } as never);
+    const internal = client as unknown as { handleMessage(raw: string): void; drain(): StreamingCaptionUpdate };
+    const send = (text: string, start: number, duration: number, is_final: boolean, speech_final = false) => {
+      internal.handleMessage(JSON.stringify({ type: "transcript.partial", channel_index: 1, text, start, duration, is_final, speech_final }));
+      return internal.drain().updates.system!;
+    };
+    expect(send("我们讨论雨露", 0, 3, true).stableCaption?.text).toBe("我们讨论雨露");
+    expect(send("的实时字幕", 3, 1, false).partial).toBe("我们讨论雨露的实时字幕");
+    expect(send("的实时字幕", 3, 2, true).stableCaption?.text).toBe("我们讨论雨露的实时字幕");
+    const revised = send("我们讨论语录的实时字幕。", 0, 5, true, true);
+    expect(revised.stableCaption?.text).toBe("我们讨论语录的实时字幕。");
+    expect(revised.stable).toEqual([{ text: "我们讨论语录的实时字幕。", endMs: 5_000 }]);
+    expect(send("嗯", 6, 0.3, false).partial).toBe("嗯");
+    expect(send("不要", 6, 1, false).partial).toBe("不要");
+    const next = send("不要重复。", 6, 2, true, true);
+    expect(next.stableCaption?.text).toBe("不要重复。");
+    expect(next.stable[0]?.text).toBe("我们讨论语录的实时字幕。\n不要重复。");
+    internal.handleMessage(JSON.stringify({ type: "transcript.done", channel_index: 1, text: "我们讨论语录的实时字幕。不要重复。", duration: 8 }));
+    expect(internal.drain().updates.system?.stableCaption?.text).toBe("不要重复。");
+  });
+
+  it("replaces overlapping interim revisions without duplicating locked English chunks", () => {
+    const client = new XaiAudioClient({ resolve: vi.fn(), cachedStatus: vi.fn() } as never);
+    const internal = client as unknown as { handleMessage(raw: string): void; drain(): StreamingCaptionUpdate };
+    internal.handleMessage(JSON.stringify({ type: "transcript.partial", channel_index: 0, text: "We should", start: 0, duration: 3, is_final: true, speech_final: false }));
+    internal.handleMessage(JSON.stringify({ type: "transcript.partial", channel_index: 0, text: "leave early", start: 3, duration: 1, is_final: false, speech_final: false }));
+    expect(internal.drain().updates.mic?.partial).toBe("We should leave early");
+    internal.handleMessage(JSON.stringify({ type: "transcript.partial", channel_index: 0, text: "We should leave earlier", start: 0, duration: 4, is_final: false, speech_final: false }));
+    expect(internal.drain().updates.mic?.partial).toBe("We should leave earlier");
+  });
+
   it("sends bounded glossary keyterms on the realtime connection", async () => {
     const credentials = { resolve: vi.fn(async () => ({ accessToken: "test", source: "oauth" as const })) };
     const client = new XaiAudioClient(credentials as never);
     const connect = vi.spyOn(client as unknown as { connectRealtime(credential: unknown, url: URL): Promise<void> }, "connectRealtime")
       .mockResolvedValue(undefined);
-    await client.start("zh", { prompt: `AgentKey，雨录，AgentKey，${"x".repeat(51)}`, replacements: [], summaryInstruction: "" });
+    await client.start("zh", { glossary: { prompt: `AgentKey，雨录，AgentKey，${"x".repeat(51)}`, replacements: [], summaryInstruction: "" } });
     expect(connect.mock.calls[0]![1].searchParams.getAll("keyterm")).toEqual(["AgentKey", "雨录"]);
     await client.abort();
   });
@@ -67,6 +100,7 @@ describe("XaiAudioClient", () => {
     const rejected = expect(oldFeed).rejects.toThrow("cancelled");
     await client.abort();
     await client.start("zh");
+    (client as any).evidence.mic.append(Buffer.alloc(32_000, 20));
     internal.handleMessage(JSON.stringify({ type: "transcript.partial", channel_index: 0,
       text: "新会话的完整文字", is_final: true, start: 0, duration: 1 }));
     await rejected;

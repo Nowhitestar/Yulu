@@ -133,6 +133,7 @@ export interface RecordingCompletionInput {
 export interface OnDemandTranscriptionInput {
   audioPath: string;
   language?: TranscriptionLanguage;
+  dictation?: boolean;
 }
 
 export interface SummaryRegenerationInput {
@@ -240,7 +241,7 @@ export class RecordingPipeline {
     const result = await this.options.transcription.transcribeFile(
       audioPath,
       normalizeTranscriptionLanguage(input.language ?? this.options.config.read().transcription.language),
-      glossary,
+      input.dictation ? undefined : glossary,
     );
     return { ...result, transcript: glossary ? applyGlossaryContract(result.transcript, glossary) : result.transcript };
   }

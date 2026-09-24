@@ -1,0 +1,37 @@
+.permissions-panel {
+  margin-bottom: 20px;
+  padding: 22px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  background: var(--glass-paper);
+  color: var(--fg);
+  scroll-margin-top: 20px;
+}
+.permissions-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.permissions-heading h2 { display: flex; align-items: center; gap: 8px; margin: 0; font: 600 20px/1.3 var(--font-heading); }
+.permissions-heading h2 svg { color: var(--accent); }
+.permissions-heading p, .permissions-copy p { margin: 6px 0 0; color: var(--fg-2); font-size: 13px; line-height: 1.5; }
+.permissions-list { margin-top: 12px; }
+.permissions-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 16px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--edge); }
+.permissions-copy h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.permissions-copy h3 small { margin-left: 8px; color: var(--fg-2); font-size: 11px; font-weight: 400; }
+.permissions-copy .permissions-path { color: var(--fg-3); font-size: 12px; }
+.permissions-state { display: inline-flex; align-items: center; gap: 5px; color: var(--fg-2); font-size: 12px; white-space: nowrap; }
+.permissions-row[data-state="ready"] .permissions-state { color: var(--green); }
+.permissions-row[data-state="needsAttention"] .permissions-state { color: var(--accent); }
+.permissions-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--edge); border-radius: var(--radius-control); background: var(--glass-2); color: var(--fg); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.permissions-action:disabled { opacity: .6; cursor: wait; }
+.permissions-action:focus-visible, .permission-reminder a:focus-visible, .permission-reminder button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.permissions-footnote { margin: 14px 0 0; color: var(--fg-2); font-size: 12px; line-height: 1.5; }
+.permissions-error { color: var(--red); font-size: 13px; }
+.permission-reminder { display: flex; align-items: center; gap: 10px; margin: 12px 20px; padding: 10px 14px; border: 1px solid var(--edge); border-radius: var(--radius-control); background: var(--glass-paper); color: var(--fg-2); font-size: 13px; line-height: 1.5; }
+.permission-reminder > svg, .permission-reminder a { color: var(--accent); flex-shrink: 0; }
+.permission-reminder span { flex: 1; }
+.permission-reminder button { display: flex; padding: 4px; border: 0; background: transparent; color: var(--fg-2); cursor: pointer; }
+@media (max-width: 760px) {
+  .permissions-panel { padding: 16px; }
+  .permissions-heading { flex-wrap: wrap; }
+  .permissions-row { grid-template-columns: 1fr auto; gap: 10px; }
+  .permissions-copy { grid-column: 1 / -1; }
+  .permission-reminder { margin: 10px; flex-wrap: wrap; }
+}

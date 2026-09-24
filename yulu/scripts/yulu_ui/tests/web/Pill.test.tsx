@@ -136,7 +136,7 @@ describe("Pill state machine", () => {
     expect(screen.getByText(/音频守护/)).toBeInTheDocument();
   });
 
-  it("shows realtime Chinese transcript while recording", () => {
+  it("keeps recording controls without an in-app live transcript popup", () => {
     render(<Pill />);
     act(() => wsHandlers.get("recording")?.({ state: "recording" }));
     act(() => wsHandlers.get("realtime-transcript")?.({
@@ -147,7 +147,9 @@ describe("Pill state machine", () => {
       coveredMs: 15_000,
       trusted: false,
     }));
-    expect(screen.getByText(/实时转写/)).toBeInTheDocument();
-    expect(screen.getByText(/这是中文/)).toBeInTheDocument();
+    expect(screen.queryByRole("log")).not.toBeInTheDocument();
+    expect(screen.queryByText(/实时转写|这是中文/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /停止/ })).toBeInTheDocument();
+    expect(screen.getByText("0:00")).toBeInTheDocument();
   });
 });

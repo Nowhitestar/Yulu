@@ -3,6 +3,7 @@ import { CheckCircle2, Circle, Sparkles } from "lucide-react";
 import { Link } from "react-router";
 import { useT } from "../i18n/LanguageProvider.js";
 import { trpc } from "../trpc.js";
+import { PermissionsPanel } from "../components/PermissionsPanel.js";
 import "./onboarding.css";
 
 export const handle = { breadcrumb: "nav.onboarding", filters: null };
@@ -67,6 +68,8 @@ export function OnboardingHome() {
           <small>{data.version}</small>
         </div>
       </header>
+
+      <PermissionsPanel />
 
       <article className="onboarding-card onboarding-core" data-testid="onboarding-core-activation">
         <div className="onboarding-card-heading">

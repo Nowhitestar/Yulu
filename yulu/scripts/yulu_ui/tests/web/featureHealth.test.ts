@@ -6,6 +6,7 @@ const now = Date.parse("2026-09-18T04:00:00Z");
 function healthy(): FeatureInputs {
   return {
     now,
+    permissions: { input: "ready" },
     config: { transcription: { engine: "local" }, agent_pipeline: { enabled: true, auto_process_recordings: true }, status_agent: { enabled: true }, calendars: [{ enabled: true }] },
     capture: { reachable: true, recording: false, micReady: true, sysReady: true },
     recording: { state: "idle" },
@@ -18,6 +19,17 @@ function healthy(): FeatureInputs {
 const feature = (input: FeatureInputs, id: string) => buildFeatureHealth(input).find((row) => row.id === id)!;
 
 describe("feature readiness", () => {
+  it("never claims voice input is ready without current input permission", () => {
+    const input = healthy();
+    input.permissions = { input: "needs_attention" };
+    expect(feature(input, "voice")).toMatchObject({ state: "attention", detail: "inputPermission" });
+    input.permissions = undefined;
+    expect(feature(input, "voice")).toMatchObject({ state: "unchecked", detail: "inputPermissionUnknown" });
+    input.permissions = { input: "unknown" };
+    expect(feature(input, "voice").state).toBe("unchecked");
+    input.permissions = { input: "check_failed" };
+    expect(feature(input, "voice")).toMatchObject({ state: "unchecked", detail: "inputPermissionUnknown" });
+  });
   it("does not claim availability before any observation", () => {
     expect(buildFeatureHealth({}).every((row) => row.state === "unchecked")).toBe(true);
   });

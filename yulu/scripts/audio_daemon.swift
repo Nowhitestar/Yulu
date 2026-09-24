@@ -117,6 +117,31 @@ let SAMPLE_RATE: UInt32 = 48000
 let DEFAULT_MIC_GAIN: Float = 2.4
 
 var SYS_READY = false
+// Access is observed by an actual probe/capture attempt. Intentionally skipping
+// system audio for dictation is not evidence that macOS revoked access.
+final class SystemAudioAccessObservation {
+    private let lock = NSLock()
+    private var value = "unknown"
+
+    var status: String {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+
+    func recordCheck(succeeded: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        // A device/setup error does not prove permission was denied.
+        value = succeeded ? "granted" : "check_failed"
+    }
+}
+let SYS_ACCESS = SystemAudioAccessObservation()
+
+func recordSystemAudioCheck(succeeded: Bool, error: String = "") {
+    SYS_READY = succeeded
+    SYS_ERROR = error
+    SYS_ACCESS.recordCheck(succeeded: succeeded)
+}
+
 /// When true, SCStream / ScreenCaptureKit is intentionally not started
 /// (voicemail / dictation use case). The WAV's R channel stays at 0.
 var SYS_DISABLED = false
@@ -661,6 +686,9 @@ class AudioRecorder {
     private var sysGapMicFallbackLogged = false
     private var micGainState: Float = DEFAULT_MIC_GAIN
     private var micLevelState: Float = 0
+    private var systemLevelState: Float = 0
+    private var micLevelUpdatedAt: TimeInterval = 0
+    private var systemLevelUpdatedAt: TimeInterval = 0
     private var meetingMicStateState: MeetingMicState = .unknown
     private var autoStopRequested = false
 
@@ -696,7 +724,11 @@ class AudioRecorder {
     }
 
     var micLevel: Float {
-        syncState { micLevelState }
+        syncState { ProcessInfo.processInfo.systemUptime - micLevelUpdatedAt < 0.5 ? micLevelState : 0 }
+    }
+
+    var systemLevel: Float {
+        syncState { ProcessInfo.processInfo.systemUptime - systemLevelUpdatedAt < 0.5 ? systemLevelState : 0 }
     }
 
     var meetingMicState: MeetingMicState {
@@ -751,6 +783,9 @@ class AudioRecorder {
             sysBuf = []
             micBuf = []
             micLevelState = 0
+            systemLevelState = 0
+            micLevelUpdatedAt = 0
+            systemLevelUpdatedAt = 0
             sysGapMicFallbackLogged = false
             meetingMicStateState = .unknown
             autoStopRequested = false
@@ -777,6 +812,9 @@ class AudioRecorder {
             sysBuf = []
             micBuf = []
             micLevelState = 0
+            systemLevelState = 0
+            micLevelUpdatedAt = 0
+            systemLevelUpdatedAt = 0
             meetingMicStateState = .unknown
             writeState(recording: false)
             log("⏹ \(dur)s")
@@ -789,7 +827,10 @@ class AudioRecorder {
             guard let self = self, self.isRecordingState else { return }
             self.sysBuf.append(contentsOf: samples)
             self.sysGapMicFallbackLogged = false
-            if self.calcRMS(samples) > self.silenceThresholdState {
+            let rms = self.calcRMS(samples)
+            self.systemLevelState = max(rms, self.systemLevelState * 0.72)
+            self.systemLevelUpdatedAt = ProcessInfo.processInfo.systemUptime
+            if rms > self.silenceThresholdState {
                 self.lastSysAudioTime = Date()
             }
             self.mixAndWriteOnQueue()
@@ -804,6 +845,7 @@ class AudioRecorder {
             self.micBuf.append(contentsOf: ints)
             let rms = self.calcRMS(ints)
             self.micLevelState = self.meetingMicStateState == .muted ? 0 : max(rms, self.micLevelState * 0.72)
+            self.micLevelUpdatedAt = ProcessInfo.processInfo.systemUptime
             if self.meetingMicStateState != .muted && rms > self.silenceThresholdState {
                 self.lastMicAudioTime = Date()
             }
@@ -1405,7 +1447,7 @@ final class ScreenCaptureKitBackend: CaptureBackend {
             do {
                 let content = try await SCShareableContent.current
                 guard let d = content.displays.first else {
-                    SYS_READY = false; SYS_ERROR = "no display"
+                    recordSystemAudioCheck(succeeded: false, error: "no display")
                     log("Sys probe failed: no display"); return
                 }
                 let filter = SCContentFilter(display: d, excludingWindows: [])
@@ -1414,10 +1456,10 @@ final class ScreenCaptureKitBackend: CaptureBackend {
                 let s = SCStream(filter: filter, configuration: config, delegate: nil)
                 try await s.startCapture()
                 try? await s.stopCapture()  // immediately tear down — we just wanted the TCC handshake
-                SYS_READY = true; SYS_ERROR = ""
+                recordSystemAudioCheck(succeeded: true)
                 log("🔊 Sys capture probe OK (idle until recording starts)")
             } catch {
-                SYS_READY = false; SYS_ERROR = (error as NSError).localizedDescription
+                recordSystemAudioCheck(succeeded: false, error: (error as NSError).localizedDescription)
                 log("Sys capture probe failed: \(SYS_ERROR)")
             }
         }
@@ -1440,7 +1482,10 @@ final class ScreenCaptureKitBackend: CaptureBackend {
             defer { sem.signal() }
             do {
                 let content = try await SCShareableContent.current
-                guard let d = content.displays.first else { log("No display"); return }
+                guard let d = content.displays.first else {
+                    recordSystemAudioCheck(succeeded: false, error: "no display")
+                    log("No display"); return
+                }
                 let filter = SCContentFilter(display: d, excludingWindows: [])
                 let config = SCStreamConfiguration()
                 config.capturesAudio = true
@@ -1448,10 +1493,10 @@ final class ScreenCaptureKitBackend: CaptureBackend {
                 try await s.startCapture()
                 try s.addStreamOutput(output, type: .audio, sampleHandlerQueue: .global())
                 self.stream = s
-                SYS_READY = true; SYS_ERROR = ""
+                recordSystemAudioCheck(succeeded: true)
                 log("🔊 Sys capture started (display \(d.displayID))")
             } catch {
-                SYS_READY = false; SYS_ERROR = (error as NSError).localizedDescription
+                recordSystemAudioCheck(succeeded: false, error: (error as NSError).localizedDescription)
                 log("Sys capture failed: \(SYS_ERROR)")
             }
         }
@@ -1607,10 +1652,10 @@ final class ProcessTapBackend: CaptureBackend {
         teardown()
         lifecycleLock.unlock()
         if ok {
-            SYS_READY = true; SYS_ERROR = ""
+            recordSystemAudioCheck(succeeded: true)
             log("🔊 Sys tap probe OK (idle until recording starts)")
         } else {
-            SYS_READY = false; SYS_ERROR = _lastError
+            recordSystemAudioCheck(succeeded: false, error: _lastError)
             log("Sys tap probe failed: \(_lastError)")
         }
     }
@@ -1645,11 +1690,11 @@ final class ProcessTapBackend: CaptureBackend {
             captureGeneration &+= 1
             zeroRecoveryPolicy.resetForRecording()
             lock.unlock()
-            SYS_READY = true; SYS_ERROR = ""
+            recordSystemAudioCheck(succeeded: true)
             log("🔊 Sys tap capture started")
         } else {
             lifecycleLock.unlock()
-            SYS_READY = false; SYS_ERROR = _lastError
+            recordSystemAudioCheck(succeeded: false, error: _lastError)
             log("Sys tap capture failed: \(_lastError)")
         }
     }
@@ -1881,10 +1926,10 @@ final class ProcessTapBackend: CaptureBackend {
             }
         }
         if rebuilt {
-            SYS_READY = true; SYS_ERROR = ""
+            recordSystemAudioCheck(succeeded: true)
             log("🔊 Sys tap rebuilt after zero-buffer recovery")
         } else {
-            SYS_READY = false; SYS_ERROR = _lastError
+            recordSystemAudioCheck(succeeded: false, error: _lastError)
             log("Sys tap rebuild failed: \(_lastError)")
         }
         lock.lock()
@@ -2323,7 +2368,9 @@ class SocketServer {
             if wasRecording { onRecordingStop?() }
             resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
-            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "micLevel": recorder.micLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue, "serviceOwner": SERVICE_OWNER, "pid": ProcessInfo.processInfo.processIdentifier, "productVersion": PRODUCT_VERSION, "bundleVersion": BUNDLE_VERSION, "captureIPCVersion": CAPTURE_IPC_VERSION]
+            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "micLevel": recorder.micLevel, "systemLevel": recorder.systemLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue, "serviceOwner": SERVICE_OWNER, "pid": ProcessInfo.processInfo.processIdentifier, "productVersion": PRODUCT_VERSION, "bundleVersion": BUNDLE_VERSION, "captureIPCVersion": CAPTURE_IPC_VERSION]
+            resp["sysPermission"] = SYS_ACCESS.status
+            resp["sysDisabled"] = SYS_DISABLED
         case "audio_devices":
             resp = listAudioDevices?() ?? ["error": "coreaudio_device_provider_unavailable"]
         case "quit": resp = ["status":"bye"]; send(c, resp)
@@ -2606,6 +2653,27 @@ if CommandLine.arguments.contains("--self-test") {
     assert(recovery.observe(allZero: true, running: true, rebuilding: false))
 
     let recorder = AudioRecorder()
+    // Exercise the real mic-only start path without opening hardware or asking
+    // for permissions. Both supported backends must preserve the last check.
+    assert(SYS_ACCESS.status == "unknown")
+    var permissionBackends: [CaptureBackend] = [ScreenCaptureKitBackend(recorder: recorder)]
+    if #available(macOS 14.4, *) {
+        permissionBackends.append(ProcessTapBackend(recorder: recorder))
+    }
+    SYS_DISABLED = true
+    for backend in permissionBackends {
+        recordSystemAudioCheck(succeeded: true)
+        backend.startCapture()
+        assert(!SYS_READY && SYS_ACCESS.status == "granted")
+        backend.stopCapture()
+        assert(SYS_ACCESS.status == "granted")
+        recordSystemAudioCheck(succeeded: false, error: "test device unavailable")
+        backend.startCapture()
+        assert(!SYS_READY && SYS_ACCESS.status == "check_failed")
+        recordSystemAudioCheck(succeeded: true)
+        assert(SYS_READY && SYS_ACCESS.status == "granted" && SYS_ERROR.isEmpty)
+    }
+    SYS_DISABLED = false
     recorder._selfTestSetSilenceState(
         recording: true,
         micLast: Date(timeIntervalSinceNow: -2),
@@ -2620,6 +2688,15 @@ if CommandLine.arguments.contains("--self-test") {
         silenceSeconds: 1
     )
     assert(!recorder.silenceExpired())
+    // The caption envelope includes system audio, while a muted mic stays quiet.
+    assert(recorder.micLevel == 0 && recorder.systemLevel == 0)
+    recorder.onSysAudio([3_276, -3_276])
+    assert(recorder.systemLevel > 0.09 && recorder.micLevel == 0)
+    recorder.updateMeetingMicState(.muted)
+    recorder.onMicAudio([0.5, -0.5])
+    assert(recorder.micLevel == 0)
+    Thread.sleep(forTimeInterval: 0.55)
+    assert(recorder.systemLevel == 0) // A disconnected/stalled source must not stick.
     print("audio_daemon self-test ok")
     exit(0)
 }

@@ -4,10 +4,15 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PubSub, type AppChannels } from "../src/pubsub.js";
 import type { StreamingCaptionEngine, StreamingCaptionUpdate } from "../src/localCaptionEngine.js";
+import { DictationPreview } from "../src/dictationPreview.js";
+import { DictationTextService } from "../src/dictationText.js";
+import { defaultYuluConfig } from "../src/config.js";
+import { buildGlossaryContract } from "../src/glossaryContract.js";
 import {
   RealtimeTranscriptionCoordinator,
   assessRealtimeTranscript,
   captionsLikelyDuplicate,
+  isCaptionHesitation,
   dedupeTranscriptSegment,
   segmentCutBytes,
   sourceSeparated16kPcm,
@@ -50,6 +55,121 @@ function monoPcm(seconds: number, sample: number): Buffer {
 }
 
 describe("RealtimeTranscriptionCoordinator", () => {
+  it("uses microphone-only transport and results for translation/voice input without a cleanup session", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-mic-only-")); roots.push(root);
+    const audioPath = join(root, "voice.wav"); writeStereoWav(audioPath, 0.1, 1000, 2000);
+    const engine: StreamingCaptionEngine = {
+      provider: "test", warm: vi.fn(async () => {}), start: vi.fn(async () => {}),
+      feed: vi.fn(async () => ({ updates: {
+        mic: { partial: "", stable: [{ text: "麦克风原话", endMs: 100 }], audioMs: 100 },
+        system: { partial: "无关系统内容", stable: [{ text: "不应混入的系统内容", endMs: 100 }], audioMs: 100 },
+      } })),
+      finish: vi.fn(async () => ({ updates: {} })), abort: vi.fn(async () => {}), close: vi.fn(async () => {}),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({ pubsub: new PubSub<AppChannels>(), streaming: engine,
+      transcribe: vi.fn(), pollMs: 60_000 });
+    await coordinator.start({ audioPath, title: "Dictation", language: "zh", dictation: true });
+    expect(engine.start).toHaveBeenCalledWith("zh", { dictation: true });
+    expect(vi.mocked(engine.feed).mock.calls[0]![0].system).toBeUndefined();
+    expect(await coordinator.stop(audioPath)).toMatchObject({ stableText: "麦克风原话", trusted: true });
+  });
+  it.each(["嗯，呃……", "呢", "uh, um", "嗯"])("recognizes isolated hesitation: %s", (text) => {
+    expect(isCaptionHesitation(text)).toBe(true);
+  });
+  it.each(["对", "不", "不要", "好", "OK", "2", "嗯，好", "那个项目", "金额", ""])("preserves meaningful short speech: %s", (text) => {
+    expect(isCaptionHesitation(text)).toBe(false);
+  });
+  it("deduplicates filler variants without conflating short opposite answers", () => {
+    expect(captionsLikelyDuplicate("嗯，再等一会", "呃，再等一会")).toBe(true);
+    expect(captionsLikelyDuplicate("要", "不要")).toBe(false);
+    expect(captionsLikelyDuplicate("好的", "不行")).toBe(false);
+    expect(captionsLikelyDuplicate("我们明天下午三点开始讨论方案", "我们明天下午四点开始讨论方案")).toBe(false);
+    expect(captionsLikelyDuplicate("我们现在应该立即发布这个版本", "我们现在不应该立即发布这个版本")).toBe(false);
+  });
+
+  it("keeps only the current utterance across cumulative revisions, pauses and short replies", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-caption-utterance-"));
+    roots.push(root);
+    const audioPath = join(root, "meeting.wav");
+    writeStereoWav(audioPath, 0.05);
+    const update: StreamingCaptionUpdate = { updates: { system: {
+      partial: "", stable: [{ text: "上一段已经讲完。\n现在讨论雨露。", endMs: 1_000 }],
+      stableCaption: { text: "现在讨论雨露。", endMs: 1_000 }, audioMs: 1_000, replaceStable: true,
+    } } };
+    const pubsub = new PubSub<AppChannels>();
+    const events: AppChannels["realtime-transcript"][] = [];
+    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
+    const engine: StreamingCaptionEngine = {
+      provider: "test", warm: vi.fn(), start: vi.fn(), abort: vi.fn(), close: vi.fn(),
+      feed: vi.fn(async () => update), finish: vi.fn(async () => ({ updates: {} })),
+    };
+    const coordinator = new RealtimeTranscriptionCoordinator({ pubsub, streaming: engine, transcribe: vi.fn(), pollMs: 60_000,
+      stabilize: (text) => text.replaceAll("雨露", "语录"),
+    });
+    try {
+      await coordinator.start({ audioPath, title: "test", language: "zh" });
+      expect(events.at(-1)).toMatchObject({ text: "现在讨论语录。", sourceText: "现在讨论语录。", stableText: "上一段已经讲完。\n现在讨论语录。" });
+      // Replay through the coordinator seam without waiting for or touching a live capture.
+      const internal = coordinator as unknown as { active: never; applyStreamingUpdate(session: never, update: StreamingCaptionUpdate): void };
+      const send = (partial: string) => internal.applyStreamingUpdate(internal.active, { updates: { system: {
+        partial, stable: [], stableCaption: { text: "现在讨论雨露。", endMs: 1_000 }, audioMs: 1_500,
+      } } });
+      send("嗯，呃……");
+      expect(events.at(-1)?.text).toBe("现在讨论语录。");
+      send("对");
+      expect(events.at(-1)?.text).toBe("对");
+      send("不要");
+      expect(events.at(-1)?.text).toBe("不要");
+      expect(readFileSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"), "utf8"))
+        .toBe("上一段已经讲完。\n现在讨论语录。\n");
+      internal.applyStreamingUpdate(internal.active, { updates: {
+        system: { partial: "嗯，再等一会", stable: [], audioMs: 2_000 },
+        mic: { partial: "呃，再等一会", stable: [], audioMs: 2_000 },
+      } });
+      expect(events.at(-1)?.text).toBe("嗯，再等一会");
+    } finally { await coordinator.close(); }
+  });
+
+  it("prepares only an explicit dictation on microphone silence and reuses the trusted final whole text", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-preview-pause-"));
+    roots.push(root);
+    const audioPath = join(root, "dictation.wav");
+    writeStereoWav(audioPath, 1, 5_000, 0);
+    const raw = "嗯，明天四点讨论方案。";
+    const config = defaultYuluConfig();
+    config.transcription.engine = "xai";
+    config.intelligence.conversation = { provider: "xai", model: "selected" };
+    const request = vi.fn(async () => ({ text: "明天四点讨论方案。", model: "selected", credentialSource: "oauth" as const }));
+    const preview = new DictationPreview(new DictationTextService({ config: { read: () => config }, text: { request },
+      credentialSource: () => "oauth", hasDisclosure: () => true, glossary: () => buildGlossaryContract([]) }));
+    let first = true;
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      dictationPreview: preview, pubsub: new PubSub<AppChannels>(), transcribe: vi.fn(), pollMs: 10,
+      streaming: { provider: "test", warm: vi.fn(), start: vi.fn(), abort: vi.fn(), close: vi.fn(),
+        feed: vi.fn(async () => {
+          const stable = first ? [{ text: raw, endMs: 500 }] : [];
+          first = false;
+          return { updates: { mic: { stable, partial: "", audioMs: 1_000 } } };
+        }), finish: vi.fn(async () => ({ updates: {} })),
+      },
+    });
+    try {
+      await coordinator.start({ audioPath, title: "Dictation", language: "zh", dictationSessionId: "capture-session" });
+      expect(request).not.toHaveBeenCalled();
+      // The newly appended tail is silence; already-consumed voiced frames do
+      // not need to be replayed to test the WAV tail/quiet-time boundary.
+      writeStereoWav(audioPath, 1.8, 0, 0);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      const final = await coordinator.stop(audioPath);
+      expect(final).toMatchObject({ trusted: true, stableText: raw });
+      await expect(preview.clean({ text: raw, context: "", timeoutMs: 8_000, sessionId: "capture-session" }))
+        .resolves.toMatchObject({ text: "明天四点讨论方案。", cleanupSource: "preview" });
+      expect(request).toHaveBeenCalledOnce();
+      first = true;
+      await coordinator.start({ audioPath, title: "Meeting", language: "zh" });
+      expect(request).toHaveBeenCalledOnce();
+    } finally { await coordinator.close(); }
+  });
   it("bounds startup and ignores a late handshake without leaving a phantom session", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-start-deadline-"));
     roots.push(root);
@@ -211,7 +331,7 @@ describe("RealtimeTranscriptionCoordinator", () => {
 
     await coordinator.start({ audioPath, title: "流式会议", language: "zh" });
 
-    expect(engine.start).toHaveBeenCalledWith("zh");
+    expect(engine.start).toHaveBeenCalledWith("zh", undefined);
     expect(engine.feed).toHaveBeenCalledOnce();
     const chunks = vi.mocked(engine.feed).mock.calls[0]![0];
     expect(chunks.mic?.readInt16LE(0)).toBe(1_000);
