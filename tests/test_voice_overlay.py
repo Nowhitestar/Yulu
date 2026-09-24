@@ -267,14 +267,16 @@ final class OffscreenVoicePanel: NSPanel {
 ''', encoding="utf-8")
     binary = build / "preview"
     env = os.environ.copy()
-    env.setdefault("DEVELOPER_DIR", "/Library/Developer/CommandLineTools")
+    # Honor the selected toolchain, including Xcode on CI. A cold SDK/module
+    # cache can take more than a minute; this budget is only for compilation,
+    # not the startup/stop response deadlines asserted by the test binary.
     result = subprocess.run([
         "swiftc", "-parse-as-library", "-D", "YULU_NATIVE_RECORDING_LIBRARY",
         str(SCRIPTS / "status_agent.swift"), str(SCRIPTS / "native_notifications.swift"), str(source),
-        "-module-cache-path", "/private/tmp/yulu-swift-module-cache",
+        "-module-cache-path", str(build / "swift-cache"),
         "-framework", "Cocoa", "-framework", "Carbon", "-framework", "WebKit",
         "-framework", "UserNotifications", "-o", str(binary),
-    ], env=env, capture_output=True, text=True, timeout=60)
+    ], env=env, capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stderr
     return binary
 
