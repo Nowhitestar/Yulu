@@ -17,7 +17,9 @@ def manager(tmp_path):
     config.write_text(json.dumps({"calendars": [{"enabled": True}], "meeting_detection": {"enabled": True}}))
     for script, _, _ in SERVICES.values():
         (tmp_path / script).write_text(
-            "import signal, time\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\ntime.sleep(120)\n"
+            "import os, signal, time\nfrom pathlib import Path\n"
+            "signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+            "Path(f'ready-{os.getpid()}').touch()\ntime.sleep(120)\n"
         )
     manager = ReminderServices(tmp_path, config, tmp_path / "logs")
     try:
@@ -61,6 +63,13 @@ def test_health_and_controls_target_app_owned_children(manager):
     assert started["pid"] > 0 and started["pid"] != status["pid"]
     restarted = manager.command({"label": "com.yulu.scheduler", "action": "restart"})
     assert restarted["pid"] != started["pid"]
+    # Popen returning does not mean the fixture has installed its HUP handler.
+    # Key readiness by PID so a previous child's marker cannot satisfy a restart.
+    deadline = time.monotonic() + 5
+    while not (manager.script_dir / f"ready-{restarted['pid']}").exists():
+        assert manager.children["com.yulu.scheduler"].poll() is None
+        assert time.monotonic() < deadline, "reminder fixture did not become ready"
+        time.sleep(.02)
     assert manager.command({"label": "com.yulu.scheduler", "action": "sighup"})["ok"]
     assert manager.command({"label": "arbitrary-process", "action": "stop"})["ok"] is False
 
