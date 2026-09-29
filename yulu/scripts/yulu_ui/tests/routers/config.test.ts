@@ -26,6 +26,23 @@ function makeCtx() {
 }
 
 describe("configRouter", () => {
+  it("hides both icons without stopping or reloading recording controls", async () => {
+    const { ctx, start, stop, sighup, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      for (const key of ["ui.show_dock_icon", "ui.show_menu_bar_icon"]) {
+        const result = await caller.update({ key, value: false });
+        expect(result.daemonsNeedingRestart).toEqual([]);
+        expect(result.daemonsNeedingSighup).toEqual([]);
+        expect(result.applyErrors).toEqual([]);
+      }
+      expect((await caller.get()).status_agent.enabled).toBe(true);
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      expect(sighup).not.toHaveBeenCalled();
+    } finally { cleanup(); }
+  });
+
   it("requires the process-local UI bearer for generic settings mutations", async () => {
     const { ctx, cleanup } = makeCtx();
     ctx.uiMutationAuthorized = false;

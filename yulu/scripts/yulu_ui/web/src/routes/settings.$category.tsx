@@ -22,10 +22,10 @@ import { AdvancedDisclosure } from "../components/settings/AdvancedDisclosure.js
 
 import { AgentConnectorSettings } from "../components/settings/AgentConnectorSettings.js";
 
-function GeneralSettings() {
+function GeneralSettings({ tracker }: { tracker: SettingsRestartTracker }) {
   const t = useT();
   return <>
-    <HotkeySection />
+    <HotkeySection tracker={tracker} />
     <AboutSection />
     <AdvancedDisclosure title={t("settings.diagnostics")} note={t("settings.diagnostics.note")}>
       <CapabilitiesSection />
@@ -53,7 +53,7 @@ function ConnectionSettings() {
 }
 
 const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => ReactNode> = {
-  general: () => <GeneralSettings />,
+  general: (tracker) => <GeneralSettings tracker={tracker} />,
   recording: (tracker) => <>
     <AudioSection tracker={tracker} />
     <TranscriptionSection tracker={tracker} />

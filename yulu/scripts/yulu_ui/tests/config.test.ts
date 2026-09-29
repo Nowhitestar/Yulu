@@ -26,6 +26,24 @@ function makeCfg(): { path: string; mgr: ConfigManager; cleanup: () => void } {
 }
 
 describe("ConfigManager", () => {
+  it("persists independent icon visibility without changing native controls", () => {
+    const { path, mgr, cleanup } = makeCfg();
+    try {
+      const initial = mgr.read();
+      expect(initial.ui.show_dock_icon).toBe(true);
+      expect(initial.ui.show_menu_bar_icon).toBe(true);
+      for (const [dock, menu] of [[false, true], [false, false], [true, false], [true, true]]) {
+        mgr.update("ui.show_dock_icon", dock);
+        mgr.update("ui.show_menu_bar_icon", menu);
+        const reopened = new ConfigManager(path).read();
+        expect(reopened.ui.show_dock_icon).toBe(dock);
+        expect(reopened.ui.show_menu_bar_icon).toBe(menu);
+        expect(reopened.status_agent).toEqual(initial.status_agent);
+      }
+      expect(() => mgr.update("ui.show_dock_icon", "false")).toThrow();
+    } finally { cleanup(); }
+  });
+
   it("reads + caches by mtime", () => {
     const { mgr, cleanup } = makeCfg();
     try {

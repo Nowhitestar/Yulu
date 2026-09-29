@@ -100,7 +100,9 @@ describe("XaiAudioClient", () => {
     const rejected = expect(oldFeed).rejects.toThrow("cancelled");
     await client.abort();
     await client.start("zh");
-    (client as any).evidence.mic.append(Buffer.alloc(32_000, 20));
+    const voicedPcm = Buffer.alloc(32_000);
+    for (let i = 0; i < voicedPcm.length; i += 2) voicedPcm.writeInt16LE(Math.round(Math.sin(i / 20) * 600), i);
+    (client as any).evidence.mic.append(voicedPcm);
     internal.handleMessage(JSON.stringify({ type: "transcript.partial", channel_index: 0,
       text: "新会话的完整文字", is_final: true, start: 0, duration: 1 }));
     await rejected;

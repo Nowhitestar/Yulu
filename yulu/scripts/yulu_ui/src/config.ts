@@ -145,6 +145,8 @@ export const ConfigSchema = z.object({
   agent_pipeline: AgentPipelineSchema,
   ui: z.object({
     language: z.enum(["zh", "en"]).default("zh"),
+    show_dock_icon: z.boolean().default(true),
+    show_menu_bar_icon: z.boolean().default(true),
     theme: ThemeSchema,
   }).passthrough().default({}),
 }).passthrough();

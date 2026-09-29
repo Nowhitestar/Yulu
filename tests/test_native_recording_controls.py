@@ -198,6 +198,11 @@ def running_controls(native_controls_binary, request):
             "PATH": "/usr/bin:/bin",
         }), encoding="utf-8")
         started = time.monotonic()
+        if getattr(request, "param", "normal") == "hidden-icon":
+            (data_root / "data").mkdir(exist_ok=True)
+            (data_root / "data/config.json").write_text(
+                json.dumps({"ui": {"show_menu_bar_icon": False}}), encoding="utf-8"
+            )
         arguments = [str(native_controls_binary), str(config)]
         if getattr(request, "param", "normal") == "prepare-only":
             arguments.append("--prepare-only")
@@ -232,6 +237,27 @@ def running_controls(native_controls_binary, request):
             assert process.returncode == 0
         assert not socket_path.exists()
         assert not (data_root / "ipc/status_agent.pid").exists()
+
+
+@pytest.mark.parametrize("running_controls", ["normal", "hidden-icon"], indirect=True)
+def test_menu_bar_visibility_applies_without_restarting_native_controls(running_controls, request):
+    process, socket_path, environment_file, _ = running_controls
+    environment = json.loads(environment_file.read_text())
+    config = Path(environment["YULU_APPLICATION_SUPPORT_DIR"]) / "config.json"
+    initially_visible = request.node.callspec.params["running_controls"] != "hidden-icon"
+    assert ipc(socket_path, "status")["menu_bar_icon_visible"] is initially_visible
+    inode = socket_path.stat().st_ino
+    for visible in [False, True, False, True]:
+        pending = config.with_suffix(".pending")
+        pending.write_text(json.dumps({"ui": {"show_menu_bar_icon": visible}}))
+        pending.replace(config)
+        deadline = time.monotonic() + 4
+        while ipc(socket_path, "status")["menu_bar_icon_visible"] is not visible:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        assert process.poll() is None
+        assert socket_path.stat().st_ino == inode
+        assert lifecycle(process, "readiness") == "ready"
 
 
 @pytest.mark.parametrize("running_controls", ["normal", "slow-hotkeys"], indirect=True)

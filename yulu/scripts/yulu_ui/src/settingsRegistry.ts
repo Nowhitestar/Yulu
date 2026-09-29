@@ -80,6 +80,8 @@ export const TextProviderSelectionSchema = z.union([
 export const SETTINGS: SettingDef[] = [
   { path: "ui.language",                 category: "general", label: "Language", type: "select", validate: z.enum(["zh", "en"]), reload: R.sighup("statusagent") },
   { path: "ui.theme",                    category: "general", label: "Theme", type: "preset", validate: ThemeSettingSchema, reload: R.none },
+  { path: "ui.show_dock_icon",           category: "general", label: "Show Dock icon", type: "toggle", validate: z.boolean(), reload: R.none },
+  { path: "ui.show_menu_bar_icon",       category: "general", label: "Show menu bar icon", type: "toggle", validate: z.boolean(), reload: R.none },
   { path: "audio.mic_device",            category: "audio", label: "麦克风设备",   type: "select",  validate: z.string(),                  reload: R.none },
   { path: "audio.system_audio_device",   category: "audio", label: "系统音设备",   type: "select",  validate: z.string().nullable(),       reload: R.restart("audiodaemon") },
   { path: "audio.output_dir",            category: "audio", label: "录音输出目录", type: "path",    validate: z.string().min(1),           reload: R.none, danger: true },

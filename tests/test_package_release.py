@@ -688,9 +688,17 @@ def test_user_and_operator_guidance_use_dmg_as_the_only_installable_release():
     skill = (ROOT / "skills" / "yulu" / "SKILL.md").read_text(encoding="utf-8")
     bundled_skill = (ROOT / "yulu" / "SKILL.md").read_text(encoding="utf-8")
 
-    for guide in (readme, readme_zh, skill, bundled_skill):
+    for guide in (readme, readme_zh):
+        assert "https://github.com/Nowhitestar/Yulu/releases/latest" in guide
+        assert "`.dmg`" in guide
+        assert "**Yulu.app**" in guide
+        assert "docs/operations.md" in guide
+    assert "**Applications**" in readme
+    assert "「应用程序」" in readme_zh
+    for guide in (skill, bundled_skill):
         assert "yulu-macos-arm64-vX.Y.Z.dmg" in guide
         assert "/Applications" in guide
+    for guide in (readme, readme_zh, skill, bundled_skill):
         assert "raw.githubusercontent.com/Nowhitestar/Yulu/main/install.sh" not in guide
     assert "gh attestation verify yulu-macos-arm64-vX.Y.Z.dmg" in security
     assert "grep '  yulu-macos-arm64-vX.Y.Z.dmg$' checksums.txt | shasum -a 256 -c -" in security

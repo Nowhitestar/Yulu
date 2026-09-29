@@ -55,13 +55,14 @@ def test_shell_late_startup_health_recovers_without_resetting_services():
     assert "retry(" not in slow_poll
 
 
-def compile_yulu_app_inspector(tmp_path: Path) -> Path:
+def compile_yulu_app_inspector(tmp_path: Path, *flags: str) -> Path:
     binary = tmp_path / "yulu_app"
     result = subprocess.run(
         [
             "bash",
             str(SCRIPTS / "build_yulu_shell.sh"),
             str(binary),
+            *flags,
         ],
         capture_output=True,
         text=True,
@@ -69,6 +70,20 @@ def compile_yulu_app_inspector(tmp_path: Path) -> Path:
     )
     assert result.returncode == 0, result.stderr
     return binary
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native macOS window behavior")
+def test_dock_icon_toggle_preserves_window_and_reopen(tmp_path: Path):
+    binary = compile_yulu_app_inspector(tmp_path, "-D", "YULU_DEVELOPMENT_SMOKE")
+    result = subprocess.run(
+        [str(binary), "--icon-visibility-smoke"], capture_output=True, text=True, timeout=20
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "dockHideRestore": True,
+        "closedWindowReopen": True,
+        "minimizedWindowReopen": True,
+    }
 
 
 def test_shell_edit_shortcuts_use_the_webview_first_responder():

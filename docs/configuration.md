@@ -509,6 +509,15 @@ stability, and cooldown for recording prompts.
 Interactive calendar reasoning and other connector actions belong to the selected
 general Agent.
 
+## App icons
+
+**Settings → General** controls `ui.show_dock_icon` and `ui.show_menu_bar_icon`.
+Both default to `true` and apply without restarting the App or capture services.
+Hiding the Dock icon also removes Yulu from Command-Tab. Hiding the menu bar icon
+keeps recording, reminders, and voice shortcuts running; it does not change
+`status_agent.enabled`. Even with both icons hidden, reopen Yulu from Spotlight
+or Applications to access Settings and restore them.
+
 ## Themes
 
 `ui.theme.family` is `default`, `ayu`, `paper`, or `custom`.
