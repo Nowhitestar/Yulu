@@ -1,6 +1,26 @@
-# Phase 13 closeout — accepted scope, updated 2026-09-15
+# Phase 13 closeout — reconciled 2026-09-29
 
-## Current closeout scope
+## Final reconciliation
+
+- The legacy-caption migration and rollback defects in #200 were repaired in
+  #201, #207 and #209. The physical migration reached `committed`; #170 records
+  the accepted public RC21 closeout and preserved task/artifact evidence. A
+  September 29 read-only check still finds the migration committed.
+- Stable `v0.23.0` was published from the accepted RC21 source as recorded in
+  #171. Subsequent releases reached `v0.26.0`. The September 28 whole-App local
+  update to `0.26.0-local.20260928.1` (build 1694) passed signed-bundle, service,
+  database, configuration-preservation and native icon-control checks, with a
+  recoverable previous-App/data backup. Host health remains OK on September 29.
+- The deferred exact RC21-to-`v0.23.0` update was not replayed. It is superseded
+  by later whole-App updates, not relabeled as a passing historical test. The
+  fresh-install/legacy-upgrade and other waived journeys retain the explicit
+  limitations below. No new recording, model call or external share was needed
+  for this issue reconciliation.
+- #145, #171 and #200 have no remaining implementation work under the accepted
+  scope. Their issue closeout records distinguish shipped source, installed
+  checks, reused evidence and unperformed historical journeys.
+
+## Accepted scope — September 15
 
 The owner explicitly accepted physical-Mac closeout and stopping further VM
 repetitions on September 15. This decision supersedes the historical test matrix

@@ -2389,6 +2389,7 @@ class IPCServer {
             var resp: [String: Any] = ["ok": true]
             resp["state"] = app.state.rawValue
             resp["dictation_active"] = app.activeRecordingIsDictation
+            resp["menu_bar_icon_visible"] = app.statusItem?.isVisible ?? false
             let inputAccess = app.inputAccessCheck()
             resp["accessibility_trusted"] = inputAccess.trusted
             resp["event_posting_allowed"] = inputAccess.posting
@@ -2533,6 +2534,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         activeAppLanguage = readAppLanguage()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        refreshMenuBarVisibility()
         if let btn = statusItem.button {
             btn.title = ""
             btn.toolTip = L("Yulu — 点击开始录制", "Yulu — click to record")
@@ -2666,7 +2668,20 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func refreshMenuBarVisibility() {
+        let config = configData().flatMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+        }
+        let ui = config?["ui"] as? [String: Any]
+        let visible = ui?["show_menu_bar_icon"] as? Bool ?? true
+        // Keep the item and native controls alive: hiding is not a service stop.
+        if let statusItem, statusItem.isVisible != visible {
+            statusItem.isVisible = visible
+        }
+    }
+
     private func poll() {
+        refreshMenuBarVisibility()
         modifierHotkeys.retryIfNeeded()
         // Move the blocking socket round-trip OFF the main thread.
         // DaemonClient.send does a blocking read with no timeout — when

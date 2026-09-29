@@ -225,29 +225,34 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
 
     for guidance in (readme, readme_zh, skill, issue_template, release_notes):
         assert "CLIProxyAPI" not in guidance
-    assert "Grok CLI-compatible OAuth" in readme
-    assert "兼容 Grok CLI 的 OAuth" in readme_zh
-    assert "latest stable Yulu" in readme
-    assert "Yulu 最新稳定版" in readme_zh
-    assert "public release candidate" in readme
-    assert "公开候选版" in readme_zh
+    configuration = (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
+    assert "Grok CLI-compatible OAuth" in configuration
+    assert "兼容 Grok CLI 的 OAuth" in skill
+    assert "separate manual confirmation" in readme
+    assert "分享纪要需要单独手动确认" in readme_zh
+    assert "Cloud features are opt-in" in readme
+    assert "云端能力按需启用" in readme_zh
     assert "xAI、Codex 或 Claude Code" in skill
     assert "Hermes 负责会议纪要" not in skill
     assert "Hermes 租约任务规则" not in skill
     assert "手动 Share Action" in skill
     assert "Official GitHub Release DMG" in issue_template
     assert 'placeholder: "Yulu 0.25.0"' in issue_template
-    assert "bounded direct connector RPC" in readme
-    assert "只读对账不会另建页面" in readme_zh
     for guidance in (readme, readme_zh):
         assert "https://github.com/Nowhitestar/Yulu/releases/latest)" in guidance
         assert "releases/tag/v0.23.0-rc.21" not in guidance
-        assert "docs/release-notes/v0.25.0.md" in guidance
+        assert "docs/configuration.md" in guidance
+        assert "docs/operations.md" in guidance
+        release_links = re.findall(r"\]\((docs/release-notes/[^)]+\.md)\)", guidance)
+        assert release_links
+        assert all((ROOT / path).is_file() for path in release_links)
     operations = (ROOT / "docs" / "operations.md").read_text(encoding="utf-8")
     assert "For the `v0.23.0-rc.19` public-DMG acceptance harness" in operations
     assert "one-line installer" not in issue_template
     assert "compatible Hermes Agent" not in issue_template
-    for guidance in (readme, readme_zh, skill):
+    # Detailed operational paths belong in the linked guides, keeping the
+    # product READMEs short while retaining the install/privacy contract.
+    for guidance in (operations, skill):
         assert "~/Library/Application Support/Yulu" in guidance
         assert "~/Library/Caches/Yulu" in guidance
         assert "~/Library/Logs/Yulu" in guidance
@@ -296,9 +301,9 @@ def test_dmg_guidance_does_not_require_an_unbundled_global_cli():
     skill = (ROOT / "skills/yulu/SKILL.md").read_text(encoding="utf-8")
     operations = (ROOT / "docs/operations.md").read_text(encoding="utf-8")
 
-    assert "DMG does not install a global `yulu` command" in readme
-    for guidance in (readme_zh, skill):
-        assert "DMG 不会安装全局 `yulu` 命令" in guidance
+    assert "DMG does not install a global `yulu` shell command" in " ".join(readme.split())
+    assert "DMG 不会安装全局 `yulu` 终端命令" in readme_zh
+    assert "DMG 不会安装全局 `yulu` 命令" in skill
     for guidance in (readme, readme_zh, skill):
         assert "docs/operations.md#dmg-and-cli-entry-points" in guidance
     assert "python/bin/python3.13 -B -m provision.mcp install --agent codex" in operations

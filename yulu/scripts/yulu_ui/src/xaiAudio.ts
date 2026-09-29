@@ -72,10 +72,6 @@ function interleaveStereo(mic: Buffer | undefined, system: Buffer | undefined): 
   return output;
 }
 
-function audioMs(pcm: Buffer | undefined): number {
-  return Math.floor((pcm?.length ?? 0) / 32);
-}
-
 function xaiLanguage(language: TranscriptionLanguage): string | null {
   return language === "en" || language === "ja" ? language : null;
 }
@@ -92,6 +88,9 @@ function realtimeUrl(language: TranscriptionLanguage, glossary?: GlossaryContrac
   url.searchParams.set("encoding", "pcm");
   url.searchParams.set("interim_results", "true");
   url.searchParams.set("endpointing", "800");
+  // xAI's permissive 0.08 default can decode background noise as speech.
+  // Keep the gate below 0.5 for quiet voices; local evidence also checks timing.
+  url.searchParams.set("vad_threshold", "0.3");
   if (!dictation) url.searchParams.set("multichannel", "true");
   url.searchParams.set("channels", dictation ? "1" : "2");
   const formattedLanguage = xaiLanguage(language);
@@ -256,14 +255,22 @@ export class XaiAudioClient implements StreamingCaptionEngine {
   async feed(chunks: Partial<Record<CaptionSource, Buffer>>): Promise<StreamingCaptionUpdate> {
     const generation = this.lifecycleGeneration;
     const pcm = this.dictation ? chunks.mic ?? Buffer.alloc(0) : interleaveStereo(chunks.mic, chunks.system);
-    if (chunks.mic) this.evidence?.mic.append(chunks.mic);
-    if (!this.dictation && chunks.system) this.evidence?.system.append(chunks.system);
-    this.elapsedMs.mic += audioMs(chunks.mic);
-    this.elapsedMs.system += audioMs(chunks.system);
+    const channelBytes = pcm.length / (this.dictation ? 1 : 2);
+    for (const source of this.dictation ? ["mic"] as const : ["mic", "system"] as const) {
+      // Match the zero padding sent on the wire; an absent/short channel must
+      // not shift later speech evidence into the wrong part of the recording.
+      let channel = chunks[source];
+      if (channel?.length !== channelBytes) {
+        const padded = Buffer.alloc(channelBytes);
+        channel?.copy(padded);
+        channel = padded;
+      }
+      this.evidence?.[source].append(channel);
+      this.elapsedMs[source] += channelBytes / 32;
+    }
     this.appendReplay(pcm);
-    const voicedMs = Math.max(audioMs(chunks.mic), audioMs(chunks.system));
-    if ((chunks.mic && hasVoice(chunks.mic)) || (chunks.system && hasVoice(chunks.system))) {
-      this.voiceWithoutTranscriptMs += voicedMs;
+    if ((chunks.mic && hasVoice(chunks.mic)) || (!this.dictation && chunks.system && hasVoice(chunks.system))) {
+      this.voiceWithoutTranscriptMs += channelBytes / 32;
     }
     const socketOpen = this.socket?.readyState === WebSocket.OPEN;
     if (pcm.length > 0 && (!socketOpen || this.voiceWithoutTranscriptMs >= REALTIME_STALL_VOICE_MS)) {
@@ -475,13 +482,23 @@ export class XaiAudioClient implements StreamingCaptionEngine {
     const evidence = this.evidence?.[source];
     const startMs = this.sessionBaseMs + Math.max(0, Number(event.start) || 0) * 1000;
     const endMs = Number.isFinite(event.duration) ? startMs + Number(event.duration) * 1000 : this.elapsedMs[source];
+    const words = event.words?.filter((word) => /[\p{L}\p{N}]/u.test(word.text));
     const grounded = !evidence || (evidence.overlaps(startMs, endMs) &&
-      (!event.words?.length || event.words.every((word) => !/[\p{L}\p{N}]/u.test(word.text) || evidence.overlaps(
-        this.sessionBaseMs + word.start * 1000, this.sessionBaseMs + word.end * 1000))));
+      (words?.length ? words.every((word) => evidence.overlaps(
+        this.sessionBaseMs + word.start * 1000, this.sessionBaseMs + word.end * 1000)) :
+        // Without word offsets, old speech anywhere in a cumulative range must
+        // not authorize a new sentence after a long pause. Use audio time, not
+        // arrival time, so delayed finals from a real utterance remain valid.
+        evidence.overlaps(Math.max(startMs, endMs - 800), endMs)));
     // Reject words from silent channels/intervals, including authoritative done
     // revisions, so a silent result cannot overwrite accepted speech.
     const text = grounded ? cleanTranscriptText(String(event.text ?? "")) : "";
     if (event.type === "transcript.partial") {
+      if (!grounded) {
+        this.partial[source] = "";
+        if (event.is_final && event.speech_final !== false) this.captionChunks[source] = [];
+        return;
+      }
       if (text) this.voiceWithoutTranscriptMs = 0;
       if (event.is_final) {
         this.partial[source] = "";

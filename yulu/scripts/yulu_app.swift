@@ -4419,6 +4419,24 @@ func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
 }
 #endif
 
+func applyDockIconVisibility(_ visible: Bool, application: NSApplication, window: NSWindow?) {
+    let policy: NSApplication.ActivationPolicy = visible ? .regular : .accessory
+    guard application.activationPolicy() != policy else { return }
+    let wasVisible = window?.isVisible == true && window?.isMiniaturized == false
+    let wasActive = application.isActive
+    guard application.setActivationPolicy(policy) else { return }
+    // Changing policy can hide/deactivate a window. Keep an open Settings window
+    // usable, without opening a previously closed window or taking focus.
+    if wasVisible {
+        if wasActive {
+            window?.makeKeyAndOrderFront(nil)
+            application.activate(ignoringOtherApps: true)
+        } else {
+            window?.orderFront(nil)
+        }
+    }
+}
+
 final class YuluApplication: NSObject, NSApplicationDelegate {
     private let launchPolicy: LaunchPolicy
     private let layout: BundleLayout
@@ -4428,6 +4446,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     private var webContent: ApplicationWebContent?
     private var webView: WKWebView? { webContent?.webView }
     private var serviceWindow: NSWindow?
+    private var iconPreferencesTimer: Timer?
     private let backgroundServices = BackgroundServiceRegistry()
     private var migrationCoordinator: ApplicationMigrationCoordinator?
     private weak var cancelMigrationMenuItem: NSMenuItem?
@@ -4471,6 +4490,11 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         YuluNotificationPresenter.shared.configure { [weak self] route in self?.openNativeRoute(route) }
         #endif
         installMainMenu()
+        refreshDockIconVisibility()
+        iconPreferencesTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.refreshDockIconVisibility()
+        }
+        iconPreferencesTimer?.tolerance = 0.2
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 680),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -4478,6 +4502,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             defer: false
         )
         window.title = "Yulu"
+        window.isReleasedWhenClosed = false
         configureWindowChrome(window)
         self.window = window
         if let guidance = launchPolicy.guidance {
@@ -4533,6 +4558,8 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        iconPreferencesTimer?.invalidate()
+        iconPreferencesTimer = nil
         #if canImport(YuluNativeRecording)
         nativeRecording?.stop()
         #endif
@@ -4579,8 +4606,22 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
+        window?.deminiaturize(nil)
         window?.makeKeyAndOrderFront(nil)
+        sender.activate(ignoringOtherApps: true)
         return true
+    }
+
+    private func refreshDockIconVisibility() {
+        guard let applicationPaths else { return }
+        let data = applicationPaths.configReadFiles.lazy.compactMap {
+            FileManager.default.contents(atPath: $0.path)
+        }.first
+        let config = data.flatMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+        }
+        let ui = config?["ui"] as? [String: Any]
+        applyDockIconVisibility(ui?["show_dock_icon"] as? Bool ?? true, application: NSApp, window: window)
     }
 
     private func centeredMessage(_ title: String, detail: String) -> NSView {
@@ -5170,6 +5211,54 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
 let policy = LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path)
 let layout = BundleLayout(bundleURL: Bundle.main.bundleURL)
 #if YULU_DEVELOPMENT_SMOKE
+func runIconVisibilitySmoke() throws {
+    let app = NSApplication.shared
+    let previousApp = NSWorkspace.shared.frontmostApplication
+    app.setActivationPolicy(.regular)
+    app.finishLaunching()
+    // A non-installed policy cannot register services, start capture, or load
+    // the user's Host. Exercise only the real AppKit window/reopen behavior.
+    let shell = YuluApplication(
+        launchPolicy: LaunchPolicy.evaluate(bundlePath: "/private/tmp/YuluIconSmoke.app"),
+        layout: layout, port: 17891
+    )
+    shell.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+    defer {
+        shell.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+        app.windows.forEach { $0.orderOut(nil) }
+        previousApp?.activate(options: [.activateIgnoringOtherApps])
+    }
+    guard let window = app.windows.first(where: { $0.title == "Yulu" }) else {
+        throw NSError(domain: "IconVisibilitySmoke", code: 1)
+    }
+    func verify(_ condition: @autoclosure () -> Bool) throws {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        guard condition() else { throw NSError(domain: "IconVisibilitySmoke", code: 2) }
+    }
+    applyDockIconVisibility(false, application: app, window: window)
+    try verify(app.activationPolicy() == .accessory && window.isVisible)
+    window.close()
+    try verify(!window.isVisible && !shell.applicationShouldTerminateAfterLastWindowClosed(app))
+    applyDockIconVisibility(true, application: app, window: window)
+    try verify(app.activationPolicy() == .regular && !window.isVisible)
+    applyDockIconVisibility(false, application: app, window: window)
+    _ = shell.applicationShouldHandleReopen(app, hasVisibleWindows: false)
+    try verify(app.activationPolicy() == .accessory && window.isVisible)
+    window.miniaturize(nil)
+    _ = shell.applicationShouldHandleReopen(app, hasVisibleWindows: true)
+    try verify(window.isVisible && !window.isMiniaturized)
+    applyDockIconVisibility(true, application: app, window: window)
+    try verify(app.activationPolicy() == .regular && window.isVisible)
+    try writeJSON(["dockHideRestore": true, "closedWindowReopen": true, "minimizedWindowReopen": true])
+}
+
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--icon-visibility-smoke" {
+    do { try runIconVisibilitySmoke(); exit(0) }
+    catch {
+        fputs("development icon visibility smoke failed: \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
+}
 let port = Int(ProcessInfo.processInfo.environment["YULU_UI_PORT"] ?? "7777") ?? 7777
 if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--web-navigation-smoke" {
     do {

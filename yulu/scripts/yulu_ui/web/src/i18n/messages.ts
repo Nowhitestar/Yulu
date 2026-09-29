@@ -262,6 +262,11 @@ export const en: Messages = {
   "lang.en": "English",
   "settings.general.language.label": "Language",
   "settings.general.language.help": "Display language for the Yulu interface.",
+  "settings.general.dockIcon": "Show Dock icon",
+  "settings.general.dockIcon.help": "Hiding it also removes Yulu from the Command-Tab app switcher.",
+  "settings.general.menuBarIcon": "Show menu bar icon",
+  "settings.general.menuBarIcon.help": "Recording and voice shortcuts keep working when the icon is hidden.",
+  "settings.general.icons.reopen": "No restart needed. You can reopen Yulu from Spotlight or Applications, even with both icons hidden.",
 
   // ---- App / brand ----
   "app.name": "Yulu",
@@ -1797,6 +1802,11 @@ export const zh: Messages = {
   "lang.en": "English",
   "settings.general.language.label": "语言",
   "settings.general.language.help": "Yulu 界面的显示语言。",
+  "settings.general.dockIcon": "显示 Dock 图标",
+  "settings.general.dockIcon.help": "隐藏后，Yulu 也不会出现在 Command-Tab 应用切换列表中。",
+  "settings.general.menuBarIcon": "显示菜单栏图标",
+  "settings.general.menuBarIcon.help": "隐藏图标后，录音和语音快捷键仍可使用。",
+  "settings.general.icons.reopen": "无需重启。即使两个图标都隐藏，也可从 Spotlight 或「应用程序」重新打开 Yulu。",
 
   // ---- App / brand ----
   "app.name": "Yulu",

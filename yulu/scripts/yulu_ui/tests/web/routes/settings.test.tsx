@@ -9,6 +9,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const shortcutEditingMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 
 const SCHEMA = [
+  { path: "ui.show_dock_icon", category: "general", label: "Show Dock icon", type: "toggle", reload: { kind: "none" } },
+  { path: "ui.show_menu_bar_icon", category: "general", label: "Show menu bar icon", type: "toggle", reload: { kind: "none" } },
   { path: "audio.mic_device",         category: "audio",         label: "麦克风设备", type: "select", reload: { kind: "none" } },
   { path: "audio.output_dir",         category: "audio",         label: "录音输出目录", type: "path", reload: { kind: "none" } },
   { path: "transcription.engine",     category: "transcription", label: "音频引擎",  type: "select", reload: { kind: "none" } },
@@ -706,6 +708,22 @@ describe("Settings — recording-guard + undo (Task 5)", () => {
     recording.state = "idle";
     configUpdateSpy.mockClear();
     restartSpy.mockClear();
+  });
+
+  it("both icon toggles stay editable during recording and explain how to reopen", async () => {
+    recording.state = "recording";
+    const { getByRole, getByText } = wrap("/settings/general");
+    const dock = getByRole("switch", { name: "显示 Dock 图标" });
+    const menu = getByRole("switch", { name: "显示菜单栏图标" });
+    expect(dock).toHaveAttribute("aria-checked", "true");
+    expect(menu).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(dock);
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith({ key: "ui.show_dock_icon", value: false }));
+    fireEvent.click(menu);
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith({ key: "ui.show_menu_bar_icon", value: false }));
+    expect(configUpdateSpy).toHaveBeenCalledTimes(2);
+    expect(restartSpy).not.toHaveBeenCalled();
+    expect(getByText(/即使两个图标都隐藏/)).toBeVisible();
   });
 
   it("while recording, a restart-class field is locked (disabled, not editable)", () => {

@@ -28,6 +28,8 @@
   },
   "ui": {
     "language": "zh",
+    "show_dock_icon": true,
+    "show_menu_bar_icon": true,
     "theme": {
       "family": "default",
       "mode": "auto",
