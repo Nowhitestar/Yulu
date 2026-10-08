@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+    # The release-please PR touches only these files. GitHub holds runs for
+    # PRs opened by github-actions[bot] as action_required, and unapproved runs
+    # turn into zero-job failures on merge. The merge commit's push run and the
+    # publish job's gates validate the release instead.
+    paths-ignore:
+      - VERSION
+      - CHANGELOG.md
+      - .release-please-manifest.json
 
 # Cancel old runs when a new commit is pushed to the same branch.
 concurrency:

@@ -11,6 +11,12 @@ name: PR Title Lint
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+    # release-please generates a conventional title for its release PR, which
+    # touches only these files. See ci.yml for why bot-opened runs stay held.
+    paths-ignore:
+      - VERSION
+      - CHANGELOG.md
+      - .release-please-manifest.json
 
 permissions:
   pull-requests: read
