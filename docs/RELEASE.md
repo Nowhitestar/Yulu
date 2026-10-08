@@ -56,7 +56,10 @@ make test
 
 1. Merge the conventional feature/fix PR into `main`.
 2. Wait for the `Release Please` workflow to create or update its release PR.
-3. Review that PR's VERSION and CHANGELOG diff, wait for CI, then merge it.
+3. Review that PR's VERSION and CHANGELOG diff, then merge it. The release PR
+   has no PR checks by design: it touches only release-please-owned files, and
+   GitHub would hold runs for a PR opened by `github-actions[bot]` for approval.
+   The merge commit's `main` CI and step 5's gates validate the release.
 4. release-please creates the tag and a **draft** GitHub Release.
 5. The chained publish job checks out that tag, reruns Python/Node/Swift gates,
    signs, notarizes, staples, packages and attests the DMG, uploads all required

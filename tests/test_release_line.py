@@ -339,3 +339,17 @@ def test_full_ci_budget_covers_python_and_swift_gates():
 
     assert "timeout-minutes: 20" in build_job
     assert "timeout-minutes: 15" in ui_job
+
+
+def test_pr_checks_skip_only_the_release_please_pr():
+    package = json.loads((ROOT / "release-please-config.json").read_text(encoding="utf-8"))["packages"]["."]
+    owned = (package["version-file"], package["changelog-path"], ".release-please-manifest.json")
+    expected = "    paths-ignore:\n" + "".join(f"      - {path}\n" for path in owned)
+
+    for name in ("ci.yml", "pr-title-lint.yml"):
+        workflow = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+        before, trigger = workflow.split("  pull_request:\n", 1)
+        trigger = trigger.split("\n\n", 1)[0] + "\n"
+
+        assert trigger.endswith(expected), name
+        assert "paths-ignore" not in before, name
