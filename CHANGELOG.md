@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.27.2](https://github.com/Nowhitestar/Yulu/compare/v0.27.1...v0.27.2) (2026-10-10)
+
+
+### Bug Fixes
+
+* publish signed releases without requiring notarization ([#238](https://github.com/Nowhitestar/Yulu/issues/238)) ([be3cf0e](https://github.com/Nowhitestar/Yulu/commit/be3cf0e818760482c8f47c1451f3edfd362bd420))
+
 ## [0.27.1](https://github.com/Nowhitestar/Yulu/compare/v0.27.0...v0.27.1) (2026-10-10)
 
 
