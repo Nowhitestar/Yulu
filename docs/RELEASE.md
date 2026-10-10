@@ -62,8 +62,9 @@ make test
    The merge commit's `main` CI and step 5's gates validate the release.
 4. release-please creates the tag and a **draft** GitHub Release.
 5. The chained publish job checks out that tag, reruns Python/Node/Swift gates,
-   signs, notarizes, staples, packages and attests the DMG, uploads all required
-   assets, and verifies their remote bytes.
+   signs, packages and attests the DMG, uploads all required assets, and verifies
+   their remote bytes. Starting with v0.27.2, it explicitly selects
+   `YULU_RELEASE_NOTARIZATION=skip`; Apple notarization is not attempted.
 6. Only after all assets are present does the workflow make the Release public.
 
 Before closing a release-line alignment ticket, read back every changed public
@@ -93,6 +94,30 @@ appends them to the generated changelog entry. Do not update the published
 version, feed or download guidance merely because release notes were prepared.
 Tags with a prerelease suffix are published as prereleases.
 
+### Distribution without an active Apple Developer membership
+
+The current release path retains the existing valid Developer ID certificate
+and the existing Sparkle signing key. It requires neither an
+active membership nor App Store Connect notarization credentials while that
+certificate remains valid. Revocation or certificate expiry must fail signing;
+there is no automatic fallback to unsigned or ad-hoc release code. A replacement
+Developer ID certificate would require membership again.
+
+`sign_and_notarize.sh` and `verify_dmg.sh` default to `required` notarization.
+Only the release workflow explicitly selects `skip`. This skips submission and
+stapling, not code-signature, Team ID, runtime, archive-signature, or provenance
+checks. Gatekeeper must accept the artifact or reject it specifically as
+`Unnotarized Developer ID`; other rejection reasons remain failures. Internal
+`--validation` builds keep their existing notarized contract.
+
+Release notes and install guidance must disclose the absence of notarization
+and explain System Settings → Privacy & Security → Open Anyway for a blocked
+first launch. Do not disable Gatekeeper, remove quarantine, or present signed-only
+verification as notarization. Before publishing, verify the downloaded DMG with
+`YULU_RELEASE_NOTARIZATION=skip bash packaging/scripts/verify_dmg.sh /absolute/path/to/release.dmg`
+and check the signed feed against the public asset. Existing update identity,
+signed-feed enforcement, and downgrade protection remain in effect.
+
 ## Manual escape hatch
 
 `.github/workflows/release.yml` still accepts a manually pushed `v*.*.*` tag for
@@ -120,9 +145,10 @@ packaging/scripts/checksums.sh "$DRY_DIST" "v${VERSION}"
 echo "$DRY_DIST"
 ```
 
-This creates an unsigned packaging-only DMG. Developer ID signing, App and DMG
-notarization/stapling, Gatekeeper checks, and Sparkle signature verification run
-only in the credentialed release workflow.
+This creates an unsigned packaging-only DMG. Developer ID signing, Gatekeeper
+assessment, and Sparkle signature verification run in the credentialed release
+workflow. Notarization/stapling additionally require the `required` profile and
+an eligible Apple Developer account.
 
 ## Consolidated Phase 13 acceptance
 
@@ -130,7 +156,7 @@ Use `docs/phase13-closeout.md` for the current evidence and remaining outcomes.
 The signed internal App has passed physical migration recovery and manual-share
 acceptance; it is not evidence that a later public DMG has been installed.
 
-- Bind downloaded public bytes, checksums, signature/notarization, attestation,
+- Bind downloaded public bytes, checksums, signature and notarization status, attestation,
   runtime metadata and any installed observation to the final tag/source/digest.
 - Preserve applicable native/pipeline/manual-share results; do not resend a
   verified QA share just to obtain a receipt labelled with a later build number.

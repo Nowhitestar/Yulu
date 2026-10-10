@@ -4,7 +4,8 @@ name: Release publish (reusable)
 #   - release-please.yml (automatic, on Release PR merge)
 #   - release.yml        (manual escape hatch, on `v*.*.*` tag push)
 # It checks out the tag, re-runs the test suite, packages the assets, and
-# creates/updates the GitHub Release with one signed, notarized, stapled DMG.
+# creates/updates the GitHub Release with one Developer ID-signed DMG.
+# Current releases retain the existing signing identity without Apple notarization.
 # The local-caption Runtime Pack remains a separate optional asset; it is not an
 # installer and is never included in the drag-to-Applications disk image.
 
@@ -32,6 +33,7 @@ jobs:
       contents: read
     env:
       TAG: ${{ inputs.tag }}
+      YULU_RELEASE_NOTARIZATION: skip
     steps:
       # release-please force-creates tags for draft releases, but the caller SHA
       # remains the stable source on both paths: the release merge commit for
@@ -176,21 +178,19 @@ jobs:
           assert all(len(wheel["sha256"]) == 64 for wheel in pack["wheels"])
           PY
 
-      # sign_and_notarize.sh builds and signs nested code bottom-up, notarizes and
-      # staples the immutable App, packages it with an Applications alias, then
-      # signs/notarizes/staples and mounts the final public DMG for verification.
+      # Retain Developer ID and Sparkle signing without requiring an active
+      # Apple Developer membership for notarization. The explicit mode only
+      # permits the missing-notary Gatekeeper result; all signatures, the
+      # runtime inventory, and the mounted DMG layout still have to verify.
       # Secrets are passed by NAME only (D-08); the helper never echoes a value
       # and uses no `set -x`. The keychain it creates is torn down in the
       # always-run "Clean up signing keychain" step at the end of the job.
-      - name: Sign, package, and notarize release DMG
+      - name: Sign and package release DMG
         env:
           YULU_CODESIGN_IDENTITY: ${{ secrets.YULU_CODESIGN_IDENTITY }}
           YULU_CODESIGN_P12_BASE64: ${{ secrets.YULU_CODESIGN_P12_BASE64 }}
           P12_PWD: ${{ secrets.P12_PWD }}
           KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
-          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           YULU_SPARKLE_FEED_URL: https://raw.githubusercontent.com/Nowhitestar/Yulu/sparkle-feed/appcast.xml
           YULU_SPARKLE_PUBLIC_ED_KEY: lzut/+rQs8ZM9JEHaQFmsHgnEZPjr6gLWCdQZ0j1Anc=
           YULU_RELEASE_VERSION: ${{ steps.release-identity.outputs.release_version }}

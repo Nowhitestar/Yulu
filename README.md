@@ -49,6 +49,9 @@ Requires **macOS 13+ and Apple Silicon** for official releases.
 
 1. Download the `.dmg` from [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases/latest),
    drag **Yulu.app** into **Applications**, and open it.
+   Starting with v0.27.2, releases are signed but not Apple-notarized. If macOS
+   blocks the first launch, use **System Settings → Privacy & Security → Open Anyway**
+   after checking that you downloaded Yulu from the official release page.
 2. Follow setup to grant microphone and system-audio access. Allow input control
    for global shortcuts and automatic text insertion.
 3. Install the local speech model, or explicitly connect xAI for cloud

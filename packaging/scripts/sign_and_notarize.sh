@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 # Build and publish one Developer ID-signed Application Runtime inside one DMG.
-# Nested code is signed bottom-up by build_audio_daemon.sh. This helper then
-# notarizes/staples the immutable App, creates the drag-to-Applications DMG,
-# signs/notarizes/staples that final DMG, and verifies the mounted public bytes.
+# Nested code is signed bottom-up by build_audio_daemon.sh. Notarization is
+# required unless the caller explicitly selects the signed-only release mode.
+# Both modes verify the signed App, DMG, runtime, and Sparkle update signatures.
 set -euo pipefail
 
 UPDATE_RELEASE_MODE=0
 VALIDATION_ONLY=0
+NOTARIZATION="${YULU_RELEASE_NOTARIZATION:-required}"
+case "$NOTARIZATION" in
+  required|skip) ;;
+  *)
+    echo "YULU_RELEASE_NOTARIZATION must be required or skip" >&2
+    exit 64
+    ;;
+esac
 if [[ $# -gt 1 ]]; then
   echo "usage: sign_and_notarize.sh [--update-release|--validation]" >&2
   exit 64
 fi
+
 if [[ $# -eq 1 ]]; then
   [[ "$1" == "--update-release" || "$1" == "--validation" ]] || {
     echo "usage: sign_and_notarize.sh [--update-release|--validation]" >&2
@@ -27,6 +36,11 @@ if [[ $# -eq 1 ]]; then
     # Validation Apps cannot check for or publish updates.
     unset YULU_SPARKLE_FEED_URL YULU_SPARKLE_PUBLIC_ED_KEY YULU_SPARKLE_PRIVATE_ED_KEY
   fi
+fi
+
+if [[ "$VALIDATION_ONLY" == "1" && "$NOTARIZATION" != "required" ]]; then
+  echo "Internal notarized validation Apps require notarization" >&2
+  exit 64
 fi
 
 require_env() {
@@ -88,9 +102,11 @@ require_env YULU_CODESIGN_IDENTITY
 require_env YULU_CODESIGN_P12_BASE64
 require_env P12_PWD
 require_env KEYCHAIN_PWD
-require_env ASC_KEY_P8_BASE64
-require_env ASC_KEY_ID
-require_env ASC_ISSUER_ID
+if [[ "$NOTARIZATION" == "required" ]]; then
+  require_env ASC_KEY_P8_BASE64
+  require_env ASC_KEY_ID
+  require_env ASC_ISSUER_ID
+fi
 require_update_env YULU_SPARKLE_FEED_URL
 require_update_env YULU_SPARKLE_PUBLIC_ED_KEY
 require_update_env YULU_SPARKLE_PRIVATE_ED_KEY
@@ -159,7 +175,9 @@ else
   bash "$REPO_DIR/packaging/scripts/verify_application_runtime.sh" "$YULU_APP"
 fi
 
-printf '%s' "$ASC_KEY_P8_BASE64" | base64 --decode > "$ASC_KEY_P8"
+if [[ "$NOTARIZATION" == "required" ]]; then
+  printf '%s' "$ASC_KEY_P8_BASE64" | base64 --decode > "$ASC_KEY_P8"
+fi
 
 notarize_app() {
   local app="$1" archive
@@ -178,7 +196,11 @@ notarize_app() {
   rm -f "$archive"
 }
 
-notarize_app "$YULU_APP"
+if [[ "$NOTARIZATION" == "required" ]]; then
+  notarize_app "$YULU_APP"
+else
+  echo "Building a Developer ID-signed release without Apple notarization."
+fi
 
 if [[ "$VALIDATION_ONLY" == "1" ]]; then
   # Only an immutable whole App is handed off. No DMG, Release or appcast is
@@ -192,7 +214,7 @@ if [[ "$VALIDATION_ONLY" == "1" ]]; then
   exit 0
 fi
 
-# Package only the already immutable/stapled App. No build or signing step may
+# Package only the already immutable App. No build or signing step may
 # mutate Yulu.app after this point.
 bash "$REPO_DIR/packaging/scripts/package.sh" "$TAG" \
   --dist "$REPO_DIR/dist" --skip-build >/dev/null
@@ -207,14 +229,17 @@ codesign --force --timestamp --sign "$YULU_CODESIGN_IDENTITY" "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 # ASC_KEY_ID is required indirectly by require_env above.
 # shellcheck disable=SC2153
-xcrun notarytool submit "$DMG" \
-  --key "$ASC_KEY_P8" \
-  --key-id "$ASC_KEY_ID" \
-  --issuer "$ASC_ISSUER_ID" \
-  --wait
-xcrun stapler staple "$DMG"
-xcrun stapler validate "$DMG"
-bash "$REPO_DIR/packaging/scripts/verify_dmg.sh" "$DMG"
+if [[ "$NOTARIZATION" == "required" ]]; then
+  xcrun notarytool submit "$DMG" \
+    --key "$ASC_KEY_P8" \
+    --key-id "$ASC_KEY_ID" \
+    --issuer "$ASC_ISSUER_ID" \
+    --wait
+  xcrun stapler staple "$DMG"
+  xcrun stapler validate "$DMG"
+fi
+YULU_RELEASE_NOTARIZATION="$NOTARIZATION" \
+  bash "$REPO_DIR/packaging/scripts/verify_dmg.sh" "$DMG"
 
 if [[ "$UPDATE_RELEASE_MODE" == "1" ]]; then
   [[ -x "$SPARKLE_TOOLS/generate_appcast" && -x "$SPARKLE_TOOLS/sign_update" ]] || {
@@ -265,4 +290,4 @@ PY
   rm -rf "$APPCAST_WORK"
 fi
 
-echo "Signed, notarized, and stapled release DMG: $DMG"
+echo "Verified signed release DMG (notarization: $NOTARIZATION): $DMG"

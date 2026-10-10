@@ -3,6 +3,7 @@ set -euo pipefail
 
 DMG="${1:-}"
 EXPECTED_TEAM_ID="${YULU_EXPECTED_TEAM_ID:-WMU9678ZQL}"
+NOTARIZATION="${YULU_RELEASE_NOTARIZATION:-required}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 fail() {
@@ -12,6 +13,8 @@ fail() {
 
 [[ -n "$DMG" && "$DMG" == /*.dmg && -f "$DMG" ]] || \
     fail "expected an existing absolute .dmg path"
+[[ "$NOTARIZATION" == "required" || "$NOTARIZATION" == "skip" ]] || \
+    fail "YULU_RELEASE_NOTARIZATION must be required or skip"
 
 verify_developer_id() {
     local code="$1" details
@@ -23,10 +26,32 @@ verify_developer_id() {
         fail "release code has the wrong signing Team ID: $code"
 }
 
+# In the explicit signed-only mode, tolerate only the expected missing-notary
+# assessment. Revoked identities, broken signatures, and other failures remain
+# errors. This does not add a Gatekeeper exception or change system settings.
+assess_signed_only() {
+    local assessment status=0
+    assessment="$(spctl "$@" 2>&1)" || status=$?
+    if [[ "$status" == "0" ]]; then
+        printf '%s\n' "$assessment"
+    elif [[ "$status" == "3" && \
+            $'\n'"$assessment"$'\n' == *$'\nsource=Unnotarized Developer ID\n'* ]]; then
+        printf '%s\n' "$assessment"
+        echo "Apple notarization is absent; first launch may require Open Anyway."
+    else
+        printf '%s\n' "$assessment" >&2
+        fail "Gatekeeper rejected the signed release for a reason other than missing notarization"
+    fi
+}
+
 codesign --verify --strict --verbose=2 "$DMG"
 verify_developer_id "$DMG"
-xcrun stapler validate "$DMG"
-spctl -a -vv -t open --context context:primary-signature "$DMG"
+if [[ "$NOTARIZATION" == "required" ]]; then
+    xcrun stapler validate "$DMG"
+    spctl -a -vv -t open --context context:primary-signature "$DMG"
+else
+    assess_signed_only -a -vv -t open --context context:primary-signature "$DMG"
+fi
 
 ATTACH_PLIST="$(mktemp "${TMPDIR:-/tmp}/yulu-dmg-attach.XXXXXX")"
 VOLUME_INFO_PLIST="$(mktemp "${TMPDIR:-/tmp}/yulu-dmg-volume.XXXXXX")"
@@ -93,9 +118,13 @@ PY
 APP="$MOUNT_POINT/Yulu.app"
 codesign --verify --deep --strict --verbose=2 "$APP"
 verify_developer_id "$APP"
-xcrun stapler validate "$APP"
-spctl -a -vv -t exec "$APP"
+if [[ "$NOTARIZATION" == "required" ]]; then
+    xcrun stapler validate "$APP"
+    spctl -a -vv -t exec "$APP"
+else
+    assess_signed_only -a -vv -t exec "$APP"
+fi
 YULU_REQUIRE_SPARKLE_CONFIGURATION=1 \
   bash "$SCRIPT_DIR/verify_application_runtime.sh" "$APP"
 
-echo "Verified signed, notarized, stapled DMG: $DMG"
+echo "Verified signed DMG (notarization: $NOTARIZATION): $DMG"
