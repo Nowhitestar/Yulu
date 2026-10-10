@@ -94,6 +94,8 @@ def test_cross_language_update_contract_constants_match() -> None:
         ("0.23.0-rc.4", "0.23.0"),
         ("0.23.0-rc.4", "0.24.0"),
         ("0.23.0", "0.24.0"),
+        ("0.26.0-local.20260929.1", "0.27.0"),
+        ("0.26.0-local.20260929.1", "0.26.0"),
     ],
 )
 def test_release_identity_policy_allows_only_forward_lines(
@@ -135,6 +137,17 @@ def test_release_identity_policy_allows_only_forward_lines(
         ("0.23.0-rc4", "0.23.0"),
         ("0.23.0-beta.1", "0.23.0"),
         ("01.23.0", "1.24.0"),
+        ("0.26.0-local.20260929.1", "0.25.9"),
+        ("0.26.0-local.20260929.1", "0.26.0-rc.1"),
+        ("0.26.0-local.20260929.1", "0.27.0-rc.1"),
+        ("0.26.0-local.20260929.1", "0.27.0-local.20261010.1"),
+        ("0.26.0", "0.27.0-local.20261010.1"),
+        ("0.26.0-local.20260929.0", "0.27.0"),
+        ("0.26.0-local.20260929.01", "0.27.0"),
+        ("0.26.0-local.20260931.1", "0.27.0"),
+        ("0.26.0-local.20260929", "0.27.0"),
+        ("0.26.0-local.20260929.1.extra", "0.27.0"),
+        ("00.26.0-local.20260929.1", "0.27.0"),
     ],
 )
 def test_release_identity_policy_rejects_downgrade_and_unknown_formats(
@@ -159,6 +172,29 @@ def test_release_identity_policy_rejects_downgrade_and_unknown_formats(
                 to_version=to_release,
                 to_build="732",
             )
+
+
+@pytest.mark.parametrize("target_build", ["1694", "1695", "01696"])
+def test_local_repair_still_requires_a_strictly_increasing_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target_build: str
+) -> None:
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_migration import MigrationBlocked
+    from application_update import ApplicationUpdate, ApplicationUpdatePaths
+
+    paths = ApplicationUpdatePaths(
+        durable_root=tmp_path / "data",
+        cache_root=tmp_path / "cache",
+    )
+    with ApplicationUpdate(paths) as authority:
+        with pytest.raises(MigrationBlocked, match="build is not monotonic"):
+            authority.begin(
+                from_version="0.26.0-local.20260929.1",
+                from_build="1695",
+                to_version="0.27.0",
+                to_build=target_build,
+            )
+    assert not paths.journal_path.exists()
 
 
 def test_recording_or_unknown_capture_state_defers_without_mutation(
@@ -933,8 +969,20 @@ def test_verified_previous_app_replaces_new_app_only_after_new_app_exit_and_keep
     assert events[-1] == "relaunch:Yulu.app"
 
 
+@pytest.mark.parametrize(
+    ("current_version", "current_build", "target_version", "target_build"),
+    [
+        ("0.23.0-rc.4", "731", "0.23.0", "732"),
+        ("0.26.0-local.20260929.1", "1695", "0.27.0", "1702"),
+    ],
+)
 def test_session_transcript_never_registers_new_host_before_checkpoint(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    current_version: str,
+    current_build: str,
+    target_version: str,
+    target_build: str,
 ) -> None:
     monkeypatch.syspath_prepend(str(SCRIPTS))
     from application_update import ApplicationUpdatePaths, run_update_session
@@ -975,10 +1023,10 @@ def test_session_transcript_never_registers_new_host_before_checkpoint(
     run_update_session(
         paths=paths,
         application_path=application,
-        current_version="0.23.0-rc.4",
-        current_build="731",
-        target_version="0.23.0",
-        target_build="732",
+        current_version=current_version,
+        current_build=current_build,
+        target_version=target_version,
+        target_build=target_build,
         databases={"host": database},
         input_stream=messages,
         output_stream=output,
@@ -987,8 +1035,8 @@ def test_session_transcript_never_registers_new_host_before_checkpoint(
             "identifier": "com.yulu.app",
             "teamIdentifier": "WMU9678ZQL",
             "cdHash": "a" * 40,
-            "version": "0.23.0-rc.4",
-            "build": "731",
+            "version": current_version,
+            "build": current_build,
         },
     )
 
@@ -1002,6 +1050,9 @@ def test_session_transcript_never_registers_new_host_before_checkpoint(
     ]
     assert actions.index("install_update") > actions.index("unregister_services")
     assert (paths.checkpoint_dir / "host.sqlite").exists()
+    journal = json.loads(paths.journal_path.read_text())
+    assert journal["from"] == {"version": current_version, "build": current_build}
+    assert journal["to"] == {"version": target_version, "build": target_build}
 
 
 def test_terminal_transaction_is_archived_before_a_later_update_begins(

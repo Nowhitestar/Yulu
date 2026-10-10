@@ -593,6 +593,36 @@ describe("server", () => {
     }
   });
 
+  it("sends a stable failure category through realtime, warm-up, and final transcription", async () => {
+    const configDir = join(env.root, ".config", "yulu");
+    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
+    const failure = new AgentUnavailableError("fetch failed", {
+      cause: Object.assign(new Error("TLS connection reset"), { code: "ECONNRESET" }),
+    });
+    const realtime = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "start").mockRejectedValueOnce(failure);
+    const warm = vi.spyOn(RecordingPipeline.prototype, "warmTranscription").mockRejectedValueOnce(failure);
+    const final = vi.spyOn(RecordingPipeline.prototype, "transcribeOnDemand").mockRejectedValueOnce(failure);
+    try {
+      for (const [path, status] of [
+        ["/api/recordings/realtime/start", 400],
+        ["/api/agent/transcription/warm", 503],
+        ["/api/agent/transcribe", 503],
+      ] as const) {
+        const response = await fetch(`${env.baseUrl}${path}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
+          body: JSON.stringify({ audioPath: "/test.wav", title: "Dictation", language: "zh" }),
+        });
+        expect(response.status).toBe(status);
+        expect(await response.json()).toMatchObject({ ok: false, detail: "fetch failed", failureReason: "network" });
+      }
+    } finally {
+      realtime.mockRestore();
+      warm.mockRestore();
+      final.mockRestore();
+    }
+  });
+
   it("rejects undisclosed xAI audio at realtime, on-demand, and scheduled production boundaries", async () => {
     const root = mkdtempSync(join(tmpdir(), "yulu-xai-consent-guard-"));
     const configDir = join(root, ".config", "yulu");

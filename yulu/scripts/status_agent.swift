@@ -655,6 +655,64 @@ func voiceResultPresentation(pasted: Bool, dispatched: Bool, failed: Bool) -> Vo
     return dispatched ? .unconfirmed : .recovery
 }
 
+struct VoiceFailureFeedback {
+    let title: String
+    let hint: String
+    let duration: TimeInterval
+}
+
+func voiceFailureFeedback(code: String, wasStopping: Bool, audioPreserved: Bool, copied: Bool) -> VoiceFailureFeedback {
+    let title: String
+    let advice: String
+    switch code {
+    case "transcription_network":
+        title = L("网络连接失败，未能转写", "Network connection failed")
+        advice = L("请检查网络或代理连接后重试。", "Check your network or proxy connection and try again.")
+    case "transcription_secure_connection":
+        title = L("转写服务的安全连接失败", "Could not verify a secure connection")
+        advice = L("请检查系统时间和代理证书设置。", "Check your system clock and proxy certificate settings.")
+    case "transcription_timeout":
+        title = L("等待转写结果超时", "Transcription timed out")
+        advice = L("服务未及时响应，请稍后重试。", "The service did not respond in time. Try again shortly.")
+    case "transcription_credentials":
+        title = L("转写服务需要授权", "Transcription needs authorization")
+        advice = L("请在 Yulu 设置中重新连接转写服务。", "Reconnect the transcription service in Yulu settings.")
+    case "transcription_permission":
+        title = L("转写服务拒绝访问", "Transcription access denied")
+        advice = L("请检查账号是否有语音转写权限。", "Check that your account has access to speech transcription.")
+    case "transcription_rate_limit":
+        title = L("转写请求过于频繁", "Too many transcription requests")
+        advice = L("请稍等片刻再试。", "Wait a moment before trying again.")
+    case "transcription_service":
+        title = L("转写服务暂时不可用", "Transcription service unavailable")
+        advice = L("服务端返回异常，请稍后重试。", "The service returned an error. Try again shortly.")
+    case "transcription_configuration":
+        title = L("转写服务尚未就绪", "Transcription is not set up")
+        advice = L("请在 Yulu 设置中检查转写引擎和授权。", "Check your transcription engine and authorization in Yulu settings.")
+    case "host_unavailable", "host_timeout":
+        title = code == "host_timeout"
+            ? L("Yulu 本地服务响应超时", "Yulu's local service timed out")
+            : L("无法连接 Yulu 本地服务", "Cannot connect to Yulu's local service")
+        advice = L("请重新打开 Yulu 后重试。", "Reopen Yulu and try again.")
+    case "no_speech":
+        title = L("没有听到清晰语音", "No clear speech detected")
+        advice = L("请靠近麦克风说话，并检查麦克风输入。", "Speak closer to the microphone and check your microphone input.")
+    case "paste_failed":
+        title = L("未能自动输入文字", "Could not insert your text")
+        advice = copied ? L("文字已复制，请点击输入框后按 ⌘V。", "Text copied. Click your text field and press ⌘V.")
+            : L("请检查目标输入框及 Yulu 的输入权限。", "Check the target text field and Yulu's input access.")
+    default:
+        title = wasStopping ? L("未能完成转写", "Could not complete transcription")
+            : L("无法开始听写", "Could not start dictation")
+        advice = wasStopping ? L("请重试；若持续失败，请查看 Yulu 的健康状态。", "Try again. If this continues, check Yulu's health status.")
+            : L("请检查麦克风权限和 Yulu 的运行状态。", "Check microphone access and that Yulu is running.")
+    }
+    // A start failure may still reference the previous session's audio file.
+    let saved = wasStopping && audioPreserved ? L("录音已保留。", "Recording saved.") : ""
+    return VoiceFailureFeedback(title: title, hint: [advice, saved].filter { !$0.isEmpty }.joined(separator: "\n"),
+        duration: code == "no_speech" ? 6 : 10)
+}
+
 struct PasteTextSnapshot {
     let value: String?
     let selection: CFRange?
@@ -1573,7 +1631,8 @@ class VoiceOverlayContentView: VoiceOverlayContainerView {
         statusLabel.maximumNumberOfLines = mode == .failure ? 0 : 1
         statusLabel.lineBreakMode = mode == .failure ? .byWordWrapping : .byTruncatingTail
         statusLabel.cell?.wraps = mode == .failure
-        hintLabel.isHidden = !recovery
+        hintLabel.isHidden = !exception || hint.isEmpty
+        hintLabel.maximumNumberOfLines = mode == .failure ? 0 : 2
         waveView.toolTip = nil
         waveView.setAccessibilityElement(true)
         waveView.setAccessibilityRole(.image)
@@ -1591,11 +1650,13 @@ class VoiceOverlayContentView: VoiceOverlayContainerView {
         stopButton.visualScale = 0.5
         cancelButton.visualScale = exception ? 1 : 0.5
         let width: CGFloat = exception ? 360 : Self.capsuleSize.width
-        if recovery {
+        if exception {
             hintHeight = max(16, ceil((hint as NSString).boundingRect(
-                with: NSSize(width: width - 98, height: 100),
+                with: NSSize(width: width - (recovery ? 98 : 66), height: 500),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 attributes: [.font: hintLabel.font!]).height) + 2)
+        }
+        if recovery {
             let measured = (transcript as NSString).boundingRect(
                 with: NSSize(width: width - 32, height: 500),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
@@ -1608,7 +1669,7 @@ class VoiceOverlayContentView: VoiceOverlayContainerView {
             attributes: [.font: statusLabel.font!]).height) + 4)
         needsLayout = true
         return NSSize(width: width, height: recovery ? max(61, 43 + hintHeight) + 47 + transcriptHeight
-            : mode == .failure ? max(52, noticeHeight + 28) : Self.capsuleSize.height)
+            : mode == .failure ? max(52, noticeHeight + 28 + (hint.isEmpty ? 0 : hintHeight + 6)) : Self.capsuleSize.height)
     }
 
     override func layout() {
@@ -1629,9 +1690,11 @@ class VoiceOverlayContentView: VoiceOverlayContainerView {
         cancelButton.frame = NSRect(x: bounds.width - 40, y: (rowHeight - 32) / 2, width: 32, height: 32)
         let textEnd = cancelButton.isHidden ? right : cancelButton.frame.minX - 8
         let textStart: CGFloat = waveView.isHidden ? 18 : 50
-        statusLabel.frame = NSRect(x: textStart, y: mode == .recovery ? 13 : (rowHeight - noticeHeight) / 2,
+        let titleY: CGFloat = mode == .recovery ? 13 : hintLabel.isHidden ? (rowHeight - noticeHeight) / 2 : 14
+        statusLabel.frame = NSRect(x: textStart, y: titleY,
             width: textEnd - textStart, height: mode == .recovery ? 19 : noticeHeight)
-        hintLabel.frame = NSRect(x: textStart, y: 33, width: textEnd - textStart, height: hintHeight)
+        hintLabel.frame = NSRect(x: textStart, y: mode == .recovery ? 33 : statusLabel.frame.maxY + 6,
+            width: textEnd - textStart, height: hintHeight)
         transcriptLabel.frame = NSRect(x: 16, y: max(61, 43 + hintHeight), width: bounds.width - 32, height: transcriptHeight)
         copyButton.frame = NSRect(x: bounds.width - 112, y: bounds.height - 40, width: 96, height: 28)
         permissionButton.frame = NSRect(x: 16, y: bounds.height - 40, width: 152, height: 28)
@@ -2388,6 +2451,9 @@ class IPCServer {
         mainResponse(admission: nil) { app in
             var resp: [String: Any] = ["ok": true]
             resp["state"] = app.state.rawValue
+            if app.state == .recording, let startedAt = app.recordingStartedAt {
+                resp["recording_started_at"] = startedAt
+            }
             resp["dictation_active"] = app.activeRecordingIsDictation
             resp["menu_bar_icon_visible"] = app.statusItem?.isVisible ?? false
             let inputAccess = app.inputAccessCheck()
@@ -2490,6 +2556,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var capturedPasteTarget: CapturedPasteTarget?
     var pollerTimer: Timer?
     var state: AgentState = .daemonDown
+    var recordingStartedAt: Double?
     var activeRecordingIsDictation = false
     var daemonDownStreak: Int = 0
     var launcherPids: [Int32] = []
@@ -2710,6 +2777,12 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         daemonDownStreak = 0
         let recording = (resp["recording"] as? Bool) ?? false
+        if recording, let startedAt = resp["recordingStartedAt"] as? Double,
+           startedAt.isFinite, startedAt > 0 {
+            recordingStartedAt = startedAt
+        } else {
+            recordingStartedAt = nil
+        }
         if let micLevel = resp["micLevel"] as? NSNumber {
             voiceOverlayWave?.level = normalizedMicLevel(micLevel.doubleValue)
         }
@@ -2926,7 +2999,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func showTimedVoiceFeedback(
         _ text: String,
         sound: VoiceFeedbackSound?,
-        duration: TimeInterval
+        duration: TimeInterval,
+        hint: String = ""
     ) {
         processingDetailWorkItem?.cancel()
         feedbackDismissWorkItem?.cancel()
@@ -2941,7 +3015,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         feedbackVisibleUntil = Date().addingTimeInterval(duration)
         applyState(.idle)
-        showVoiceOverlay(text, animation: .failure)
+        showVoiceOverlay(text, animation: .failure, hint: hint)
         if let sound { feedbackPlayer.play(sound) }
         let dismiss = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -3355,18 +3429,11 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         let code = result?["error_code"] as? String ?? "transcription_failed"
-        let message: String
-        if !wasStopping {
-            message = L("无法开始听写", "Could not start dictation")
-        } else if code == "no_speech" {
-            message = L("没有听到清晰语音", "No clear speech detected")
-        } else if code == "paste_failed" {
-            message = L("已复制，请按 ⌘V", "Copied — press ⌘V")
-        } else {
-            message = L("听写失败 · 录音已保留", "Dictation failed · Recording saved")
-        }
+        let feedback = voiceFailureFeedback(code: code, wasStopping: wasStopping,
+            audioPreserved: result?["audio_preserved"] as? Bool == true,
+            copied: result?["copied"] as? Bool == true)
         log("dictation result failure status=\(status) code=\(code) error=\(error)")
-        showTimedVoiceFeedback(message, sound: .failure, duration: code == "no_speech" ? 2.5 : 4.0)
+        showTimedVoiceFeedback(feedback.title, sound: .failure, duration: feedback.duration, hint: feedback.hint)
         poll()
     }
 

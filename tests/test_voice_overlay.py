@@ -27,6 +27,63 @@ final class OffscreenVoicePanel: NSPanel {
     static func main() throws {
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
+        if CommandLine.arguments[1] == "failure-feedback" {
+            activeAppLanguage = AppLanguage(rawValue: CommandLine.arguments[2])!
+            let canvas = NSView(frame: NSRect(x: 0, y: 0, width: 432, height: 680))
+            let appearance = NSAppearance(named: .aqua)!
+            canvas.appearance = appearance
+            canvas.wantsLayer = true
+            canvas.layer?.backgroundColor = NSColor(calibratedWhite: 0.94, alpha: 1).cgColor
+            let window = NSWindow(contentRect: canvas.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = canvas
+            let codes = ["transcription_network", "transcription_secure_connection", "transcription_timeout",
+                "transcription_credentials", "transcription_permission", "transcription_rate_limit", "transcription_service",
+                "transcription_configuration", "host_unavailable", "host_timeout", "no_speech", "paste_failed", "transcription_failed"]
+            let samples: Set<String> = ["transcription_network", "transcription_timeout", "transcription_credentials",
+                "transcription_service", "host_unavailable"]
+            var y: CGFloat = 662
+            for code in codes {
+                let feedback = voiceFailureFeedback(code: code, wasStopping: true, audioPreserved: true, copied: false)
+                precondition(!feedback.title.isEmpty && !feedback.hint.isEmpty && feedback.duration >= 6)
+                precondition(feedback.hint.contains(L("录音已保留", "Recording saved")))
+                let view = VoiceOverlayContentView(frame: .zero)
+                view.appearance = appearance
+                let size = view.update(title: feedback.title, hint: feedback.hint, mode: .failure)
+                precondition(size.width == 360 && size.height <= 200)
+                view.frame = NSRect(origin: .zero, size: size)
+                view.layoutSubtreeIfNeeded()
+                precondition(!view.statusLabel.isHidden && !view.hintLabel.isHidden)
+                precondition(view.hintLabel.maximumNumberOfLines == 0)
+                precondition(view.statusLabel.frame.maxY < view.hintLabel.frame.minY)
+                precondition(view.hintLabel.frame.maxY <= size.height - 12)
+                precondition(view.hintLabel.frame.maxX < view.cancelButton.frame.minX)
+                let measured = (feedback.hint as NSString).boundingRect(
+                    with: NSSize(width: view.hintLabel.frame.width, height: 500),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    attributes: [.font: view.hintLabel.font!])
+                precondition(measured.height <= view.hintLabel.frame.height)
+                if samples.contains(code) {
+                    y -= size.height
+                    view.frame.origin = NSPoint(x: 36, y: y)
+                    canvas.addSubview(view)
+                    y -= 18
+                }
+                for (stopping, saved) in [(false, true), (true, false)] {
+                    let other = voiceFailureFeedback(code: code, wasStopping: stopping, audioPreserved: saved, copied: false)
+                    precondition(!other.hint.contains(L("录音已保留", "Recording saved")))
+                }
+            }
+            let unknown = voiceFailureFeedback(code: "transcription_failed", wasStopping: true, audioPreserved: false, copied: false)
+            precondition(!unknown.hint.contains(L("网络", "network")))
+            let paste = voiceFailureFeedback(code: "paste_failed", wasStopping: true, audioPreserved: false, copied: false)
+            precondition(!paste.hint.contains(L("已复制", "copied")))
+            canvas.layoutSubtreeIfNeeded()
+            let bitmap = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds)!
+            appearance.performAsCurrentDrawingAppearance { canvas.cacheDisplay(in: canvas.bounds, to: bitmap) }
+            try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[3]))
+            print("failure-feedback-ok \(codes.count) categories")
+            return
+        }
         if CommandLine.arguments[1] == "motion" {
             let view = VoiceOverlayContentView(frame: NSRect(x: 0, y: 0, width: 244, height: 48))
             let motion = VoiceOverlayMotion()
@@ -90,7 +147,7 @@ final class OffscreenVoicePanel: NSPanel {
                 }
                 precondition(predicate(), "Voice lifecycle did not settle")
             }
-            if CommandLine.arguments[1] == "lifecycle-error" {
+            if ["lifecycle-error", "lifecycle-network-error"].contains(CommandLine.arguments[1]) {
                 let noticePanel = OffscreenVoicePanel(contentRect: .zero,
                     styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
                 let notice = VoiceOverlayContentView(frame: .zero)
@@ -99,10 +156,21 @@ final class OffscreenVoicePanel: NSPanel {
                 notice.cancelButton.target = controller
                 notice.cancelButton.action = NSSelectorFromString("dismissVoiceFeedback")
                 controller.onVoiceChat()
+                if CommandLine.arguments[1] == "lifecycle-network-error" {
+                    waitUntil { controller.state == .recording }
+                    controller.onVoiceChat()
+                }
                 waitUntil { notice.mode == .failure }
                 waitUntil { controller.voiceOverlayMotion.phase == .hidden }
                 precondition(noticePanel !== panel && noticePanel.frame.width == 360)
                 precondition(!notice.statusLabel.isHidden && notice.copyButton.isHidden)
+                precondition(!notice.hintLabel.isHidden)
+                if CommandLine.arguments[1] == "lifecycle-network-error" {
+                    precondition(notice.statusLabel.stringValue == "网络连接失败，未能转写")
+                    precondition(notice.hintLabel.stringValue.contains("代理"))
+                    precondition(notice.hintLabel.stringValue.contains("录音已保留"))
+                    precondition(controller.feedbackVisibleUntil!.timeIntervalSinceNow > 8)
+                }
                 precondition(visual.statusLabel.isHidden && panel.frame.size == VoiceOverlayContentView.capsuleSize)
                 notice.cancelButton.performClick(nil)
                 waitUntil { controller.voiceFeedbackMotion.phase == .hidden }
@@ -295,6 +363,15 @@ def test_paste_confirmation_and_nonintrusive_feedback(voice_overlay_preview):
     assert result.stdout.strip() == "paste-feedback-ok"
 
 
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_failure_feedback_gives_readable_actions_and_truthful_preservation(voice_overlay_preview, tmp_path, language):
+    result = subprocess.run([
+        str(voice_overlay_preview), "failure-feedback", language, str(tmp_path / f"failures-{language}.png"),
+    ], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "failure-feedback-ok 13 categories"
+
+
 @pytest.mark.parametrize("appearance", ["light", "dark"])
 def test_native_voice_overlay_layout_and_text_recovery(voice_overlay_preview, tmp_path, appearance):
     result = subprocess.run([str(voice_overlay_preview), appearance, str(tmp_path / f"{appearance}.png")],
@@ -313,7 +390,7 @@ def test_voice_motion_can_reverse_and_respects_reduce_motion(voice_overlay_previ
     assert result.stdout.strip() == "motion-interruption-and-reduced-motion-ok"
 
 
-@pytest.mark.parametrize("scenario", ["lifecycle", "lifecycle-double-restart", "lifecycle-error"])
+@pytest.mark.parametrize("scenario", ["lifecycle", "lifecycle-double-restart", "lifecycle-error", "lifecycle-network-error"])
 def test_voice_start_early_stop_cancel_and_restart_use_isolated_helpers(voice_overlay_preview, tmp_path, scenario):
     for directory in ["data/dictation", "ipc", "logs", "media"]:
         (tmp_path / directory).mkdir(parents=True, exist_ok=True)
@@ -338,6 +415,9 @@ elif capture.exists():
     event("stop")
     capture.unlink()
     time.sleep(.25)
+    if (root / "fail-stop").exists():
+        print(json.dumps({"error_code":"transcription_network", "audio_preserved":True}), flush=True)
+        sys.exit(1)
     print(json.dumps({"action":"stop", "chat":{}}), flush=True)
 else:
     event("start")
@@ -347,6 +427,8 @@ else:
 ''')
     if scenario == "lifecycle-error":
         (tmp_path / "fail-start").touch()
+    if scenario == "lifecycle-network-error":
+        (tmp_path / "fail-stop").touch()
     (tmp_path / "environment.json").write_text(json.dumps({
         "HOME": str(tmp_path), "YULU_APPLICATION_SUPPORT_DIR": str(tmp_path / "data"),
         "YULU_IPC_DIR": str(tmp_path / "ipc"), "YULU_CACHE_DIR": str(tmp_path / "ipc"),

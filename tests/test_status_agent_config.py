@@ -303,7 +303,10 @@ def test_status_agent_dictation_feedback_is_result_driven_and_explicit():
     assert 'result?["pasted"] as? Bool == true' in src
     assert '"没有听到清晰语音"' in src
     assert '"已复制，请按 ⌘V"' in src
-    assert '"听写失败 · 录音已保留"' in src
+    assert "voiceFailureFeedback(code: code, wasStopping: wasStopping," in src
+    assert 'audioPreserved: result?["audio_preserved"] as? Bool == true' in src
+    assert "showTimedVoiceFeedback(feedback.title" in src
+    assert "hint: feedback.hint" in src
     # Verified insertion now dismisses the capsule silently. Native behavioral
     # coverage for result classification and recovery lives in test_voice_overlay.
     success = src[src.index("if presentation == .dismiss {") : src.index("} else if presentation == .unconfirmed {")]
@@ -322,7 +325,7 @@ def test_status_agent_dictation_feedback_is_result_driven_and_explicit():
     assert 'case "preview_sound"' in src
     assert "feedbackSoundsEnabled()" in src
     poll = src[src.index("private func applyPollResult") : src.index("@discardableResult\n    func activeLauncherPids")]
-    assert poll.index("!resultManagedLauncherPids.isEmpty") < poll.index("if recording")
+    assert poll.index("!resultManagedLauncherPids.isEmpty") < poll.index("if recording {")
 
 
 def test_audio_daemon_status_exposes_real_mic_level():

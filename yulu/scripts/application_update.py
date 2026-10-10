@@ -58,6 +58,10 @@ _CAPTURE_EXECUTABLE = (
 _RELEASE_IDENTITY_PATTERN = re.compile(
     r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-rc\.([1-9][0-9]*))?"
 )
+_LOCAL_SOURCE_IDENTITY_PATTERN = re.compile(
+    r"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"
+    r"-local\.([0-9]{8})\.([1-9][0-9]*)"
+)
 
 
 def _parse_release_identity(value: str) -> tuple[tuple[int, int, int], int | None] | None:
@@ -75,8 +79,23 @@ def _release_identity_is_forward(source: str, target: str) -> bool:
     # equality for a particular RC-to-stable artifact promotion at publication.
     source_identity = _parse_release_identity(source)
     target_identity = _parse_release_identity(target)
-    if source_identity is None or target_identity is None:
+    if target_identity is None:
         return False
+    if source_identity is None:
+        # Locally installed repairs can return to the stable release channel.
+        # Only the source may be local; the signed target and increasing build
+        # checks still apply, and local builds never opt into RC updates.
+        local_source = _LOCAL_SOURCE_IDENTITY_PATTERN.fullmatch(source)
+        if local_source is None:
+            return False
+        try:
+            datetime.strptime(local_source.group(2), "%Y%m%d")
+        except ValueError:
+            return False
+        source_identity = _parse_release_identity(local_source.group(1))
+        assert source_identity is not None
+        target_base, target_rc = target_identity
+        return target_rc is None and target_base >= source_identity[0]
     source_base, source_rc = source_identity
     target_base, target_rc = target_identity
     if target_base < source_base:

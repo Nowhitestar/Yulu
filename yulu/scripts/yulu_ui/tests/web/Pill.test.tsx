@@ -1,11 +1,12 @@
 // tests/web/Pill.test.tsx
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { Pill, type PillState } from "../../web/src/components/Pill.js";
 
 const toggleMock = vi.fn();
 let mutationError: Error | null = null;
-const stateQueryMock = vi.fn(() => ({ data: { state: "idle", hotkey: "⌘⇧V" }, dataUpdatedAt: 0 }));
+type StateData = { state: string; hotkey: string; recordingStartedAt?: number | null };
+const stateQueryMock = vi.fn((): { data: StateData; dataUpdatedAt: number } => ({ data: { state: "idle", hotkey: "⌘⇧V" }, dataUpdatedAt: 0 }));
 let queryOptions: { refetchInterval?: number; refetchIntervalInBackground?: boolean } | undefined;
 
 vi.mock("../../web/src/trpc.js", () => ({
@@ -28,12 +29,15 @@ vi.mock("../../web/src/ws.js", () => ({
 }));
 
 beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-10T04:00:00Z"));
   toggleMock.mockReset();
   mutationError = null;
   wsHandlers.clear();
   queryOptions = undefined;
   stateQueryMock.mockReturnValue({ data: { state: "idle", hotkey: "⌘⇧V" }, dataUpdatedAt: 0 });
 });
+afterEach(() => vi.useRealTimers());
 
 describe("Pill state machine", () => {
   const cases: { state: PillState; mustContain: RegExp }[] = [
@@ -46,7 +50,7 @@ describe("Pill state machine", () => {
   ];
 
   it.each(cases)("renders the right markup for state: $state", ({ state, mustContain }) => {
-    stateQueryMock.mockReturnValue({ data: { state, hotkey: "⌘⇧V" }, dataUpdatedAt: 0 });
+    stateQueryMock.mockReturnValue({ data: { state, hotkey: "⌘⇧V", recordingStartedAt: Date.now() }, dataUpdatedAt: 0 });
     render(<Pill />);
     expect(screen.getByText(mustContain)).toBeInTheDocument();
   });
@@ -55,7 +59,7 @@ describe("Pill state machine", () => {
     vi.useFakeTimers();
     try {
       const { rerender } = render(<Pill />);
-      stateQueryMock.mockReturnValue({ data: { state: "recording", hotkey: "⌘⇧V" }, dataUpdatedAt: 1 });
+      stateQueryMock.mockReturnValue({ data: { state: "recording", hotkey: "⌘⇧V", recordingStartedAt: Date.now() }, dataUpdatedAt: 1 });
       rerender(<Pill />);
       expect(screen.getByText("0:00")).toBeInTheDocument();
 
@@ -70,13 +74,61 @@ describe("Pill state machine", () => {
     }
   });
 
+  it("restores capture duration when the window closes and reopens", () => {
+    const data = { state: "recording", hotkey: "⌘⇧V", recordingStartedAt: Date.now() - 125_000 };
+    stateQueryMock.mockReturnValue({ data, dataUpdatedAt: 1 });
+    const firstWindow = render(<Pill />);
+    expect(screen.getByText("2:05")).toBeInTheDocument();
+    firstWindow.unmount();
+
+    act(() => vi.advanceTimersByTime(35_000));
+    render(<Pill />);
+    expect(screen.getByText("2:40")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(screen.getByText("2:41")).toBeInTheDocument();
+  });
+
+  it("catches up after background callbacks are suspended", () => {
+    stateQueryMock.mockReturnValue({ data: {
+      state: "recording", hotkey: "⌘⇧V", recordingStartedAt: Date.now() - 30_000,
+    }, dataUpdatedAt: 1 });
+    render(<Pill />);
+    expect(screen.getByText("0:30")).toBeInTheDocument();
+    vi.setSystemTime(Date.now() + 90_000); // Time passes with no interval callbacks.
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(screen.getByText("2:01")).toBeInTheDocument();
+  });
+
+  it("keeps the clock across polls and uses a new capture's start time", () => {
+    const data = { state: "recording", hotkey: "⌘⇧V", recordingStartedAt: Date.now() - 61_000 };
+    stateQueryMock.mockReturnValue({ data, dataUpdatedAt: 1 });
+    const { rerender } = render(<Pill />);
+    act(() => vi.advanceTimersByTime(1_000));
+    stateQueryMock.mockReturnValue({ data, dataUpdatedAt: 2 });
+    rerender(<Pill />);
+    expect(screen.getByText("1:02")).toBeInTheDocument();
+
+    // The window may have missed the idle transition between two captures.
+    stateQueryMock.mockReturnValue({ data: { ...data, recordingStartedAt: Date.now() - 2_000 }, dataUpdatedAt: 3 });
+    rerender(<Pill />);
+    expect(screen.getByText("0:02")).toBeInTheDocument();
+  });
+
+  it.each([undefined, null, 0, -1, NaN, Infinity])("does not invent a timer for unavailable capture time: %s", (recordingStartedAt) => {
+    stateQueryMock.mockReturnValue({ data: { state: "recording", hotkey: "⌘⇧V", recordingStartedAt }, dataUpdatedAt: 1 });
+    render(<Pill />);
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(screen.getByText("--:--")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /停止/ })).toBeInTheDocument();
+  });
+
   it("reconciles a stale WS state after an unchanged confirmed poll", () => {
     const confirmedIdle = { state: "idle", hotkey: "⌘⇧V" };
     stateQueryMock.mockReturnValue({ data: confirmedIdle, dataUpdatedAt: 1 });
     const { rerender } = render(<Pill />);
 
     act(() => wsHandlers.get("recording")?.({ state: "recording" }));
-    expect(screen.getByText("0:00")).toBeInTheDocument();
+    expect(screen.getByText("--:--")).toBeInTheDocument();
 
     stateQueryMock.mockReturnValue({ data: confirmedIdle, dataUpdatedAt: 2 });
     rerender(<Pill />);
@@ -86,7 +138,7 @@ describe("Pill state machine", () => {
   it("shows unavailable controls instead of offering a toggle against stale state", () => {
     const { rerender } = render(<Pill />);
     act(() => wsHandlers.get("recording")?.({ state: "recording" }));
-    expect(screen.getByText("0:00")).toBeInTheDocument();
+    expect(screen.getByText("--:--")).toBeInTheDocument();
 
     stateQueryMock.mockReturnValue({ data: { state: "unknown", hotkey: "?" }, dataUpdatedAt: 1 });
     rerender(<Pill />);
@@ -127,7 +179,7 @@ describe("Pill state machine", () => {
   it("transitions to recording when WS publishes recording state", () => {
     render(<Pill />);
     act(() => wsHandlers.get("recording")?.({ state: "recording" }));
-    expect(screen.getByText(/:[0-9]{2}/)).toBeInTheDocument();
+    expect(screen.getByText("--:--")).toBeInTheDocument();
   });
 
   it("flips to daemonDown when audiodaemon WS event reports non-running", () => {
@@ -150,6 +202,6 @@ describe("Pill state machine", () => {
     expect(screen.queryByRole("log")).not.toBeInTheDocument();
     expect(screen.queryByText(/实时转写|这是中文/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /停止/ })).toBeInTheDocument();
-    expect(screen.getByText("0:00")).toBeInTheDocument();
+    expect(screen.getByText("--:--")).toBeInTheDocument();
   });
 });

@@ -8,6 +8,7 @@ import { TRPCError } from "@trpc/server";
 interface StatusReply {
   ok: boolean;
   state?: string;
+  recording_started_at?: number;
   hotkey?: string;
   launcher_pid?: number;
   dictation_active?: boolean;
@@ -223,6 +224,10 @@ export const recordingRouter = router({
       const r = await ipcSend<StatusReply>(ctx.paths.statusAgentSock, { action: "status" });
       return {
         state: r.state ?? "unknown",
+        recordingStartedAt: r.state === "recording"
+          && typeof r.recording_started_at === "number"
+          && Number.isFinite(r.recording_started_at) && r.recording_started_at > 0
+          ? r.recording_started_at : null,
         hotkey: r.hotkey ?? "?",
         launcherPid: r.launcher_pid,
         dictationActive: Boolean(r.dictation_active),
@@ -233,6 +238,7 @@ export const recordingRouter = router({
     } catch {
       return {
         state: "unknown",
+        recordingStartedAt: null,
         hotkey: "?",
         launcherPid: undefined,
         dictationActive: false,
