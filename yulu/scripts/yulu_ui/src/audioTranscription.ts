@@ -185,7 +185,7 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
         const realtime = trustedRealtimeTranscript(audioPath);
         if (realtime?.provider.startsWith("xai")) return { ...realtime, language };
         if (error instanceof AgentUnavailableError) throw error;
-        throw new AgentUnavailableError((error as Error).message);
+        throw new AgentUnavailableError((error as Error).message, { cause: error });
       }
     }
     const status = this.local.status();

@@ -11,6 +11,7 @@ import { appRouter } from "./routers/_app.js";
 import { ConfigManager } from "./config.js";
 import { DictationCleanupSchema, DictationTranslationSchema, DictationTextService } from "./dictationText.js";
 import { DictationPreview } from "./dictationPreview.js";
+import { transcriptionFailureReason } from "./transcriptionErrors.js";
 import { hasCurrentXaiConversationDisclosure } from "./conversationDataDisclosure.js";
 import { LaunchctlClient } from "./launchctl.js";
 import { openDb } from "./db.js";
@@ -602,7 +603,8 @@ async function startLockedServer(
       await realtimeTranscription.start(parsed);
       return c.json({ ok: true });
     } catch (error) {
-      return c.json({ ok: false, error: "realtime_start_failed", detail: (error as Error).message }, 400);
+      return c.json({ ok: false, error: "realtime_start_failed", detail: (error as Error).message,
+        failureReason: transcriptionFailureReason(error) }, 400);
     }
   });
   app.post("/api/recordings/realtime/stop", async (c) => {
@@ -613,7 +615,8 @@ async function startLockedServer(
       const parsed = RealtimeStopSchema.parse(await c.req.json());
       return c.json({ ok: true, result: await realtimeTranscription.stop(parsed.audioPath, parsed.timeoutMs) });
     } catch (error) {
-      return c.json({ ok: false, error: "realtime_stop_failed", detail: (error as Error).message }, 400);
+      return c.json({ ok: false, error: "realtime_stop_failed", detail: (error as Error).message,
+        failureReason: transcriptionFailureReason(error) }, 400);
     }
   });
   app.post("/api/recordings/realtime/cancel", async (c) => {
@@ -655,10 +658,11 @@ async function startLockedServer(
       const result = await recordingPipeline.warmTranscription();
       return c.json({ ok: true, ...result });
     } catch (error) {
+      const failureReason = transcriptionFailureReason(error);
       if (error instanceof AgentUnavailableError) {
-        return c.json({ ok: false, error: "audio_engine_unavailable", detail: error.message }, 503);
+        return c.json({ ok: false, error: "audio_engine_unavailable", detail: error.message, failureReason }, 503);
       }
-      return c.json({ ok: false, error: "audio_transcription_warm_failed", detail: (error as Error).message }, 502);
+      return c.json({ ok: false, error: "audio_transcription_warm_failed", detail: (error as Error).message, failureReason }, 502);
     }
   });
 
@@ -679,10 +683,11 @@ async function startLockedServer(
       if (error instanceof InvalidTranscriptionInputError) {
         return c.json({ ok: false, error: "invalid_audio_transcription", detail: error.message }, 400);
       }
+      const failureReason = transcriptionFailureReason(error);
       if (error instanceof AgentUnavailableError) {
-        return c.json({ ok: false, error: "audio_engine_unavailable", detail: error.message }, 503);
+        return c.json({ ok: false, error: "audio_engine_unavailable", detail: error.message, failureReason }, 503);
       }
-      return c.json({ ok: false, error: "audio_transcription_failed", detail: (error as Error).message }, 502);
+      return c.json({ ok: false, error: "audio_transcription_failed", detail: (error as Error).message, failureReason }, 502);
     }
   });
 

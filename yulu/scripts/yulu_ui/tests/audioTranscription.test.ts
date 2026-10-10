@@ -81,6 +81,16 @@ describe("AudioTranscriptionService", () => {
     expect(local.start).not.toHaveBeenCalled();
   });
 
+  it("preserves the transport cause for actionable dictation errors", async () => {
+    const { service, xai } = setup("xai");
+    const cause = Object.assign(new Error("TLS connection reset"), { code: "ECONNRESET" });
+    const failure = new TypeError("fetch failed", { cause });
+    xai.transcribeFile.mockRejectedValueOnce(failure);
+    await expect(service.transcribeFile("/tmp/not-opened.wav", "zh")).rejects.toMatchObject({
+      name: "AgentUnavailableError", message: "fetch failed", cause: failure,
+    });
+  });
+
   it("uses a finished trusted realtime transcript when final xAI transcription fails", async () => {
     const dir = mkdtempSync(join(tmpdir(), "yulu-audio-transcription-"));
     const audioPath = join(dir, "Demo_20260805_140009.wav");

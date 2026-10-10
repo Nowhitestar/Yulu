@@ -566,6 +566,49 @@ def test_host_empty_transcript_is_a_no_speech_error(monkeypatch, tmp_path):
         dictate._host_agent_request("/api/agent/transcribe", {}, timeout_sec=1)
 
 
+@pytest.mark.parametrize("reason,code", [
+    (reason, f"transcription_{reason}") for reason in (
+        "network", "secure_connection", "timeout", "credentials", "permission",
+        "rate_limit", "service", "configuration",
+    )
+] + [(None, "transcription_failed"), ("unexpected-provider-text", "transcription_failed")])
+def test_host_failure_category_reaches_native_payload(monkeypatch, tmp_path, reason, code):
+    monkeypatch.setattr(dictate, "_host_token_document", lambda: {"token": "test"})
+    body = json.dumps({"error": "audio_engine_unavailable", "detail": "fetch failed", "failureReason": reason}).encode()
+
+    def fail_request(*_args, **_kwargs):
+        raise dictate.urllib.error.HTTPError("http://127.0.0.1:7777", 503, "unavailable", {}, io.BytesIO(body))
+
+    monkeypatch.setattr(dictate.urllib.request, "urlopen", fail_request)
+    with pytest.raises(dictate.DictationError) as captured:
+        dictate._host_agent_request("/api/agent/transcribe", {}, timeout_sec=1)
+    audio = tmp_path / "saved.wav"
+    audio.write_bytes(b"RIFF")
+    result = dictate.dictation_error_payload(captured.value, audio_path=str(audio))
+    assert result["error_code"] == code
+    assert result["audio_preserved"] is True
+    assert "fetch failed" in result["message"]
+    assert dictate.dictation_error_payload(captured.value, audio_path=str(tmp_path / "missing.wav"))["audio_preserved"] is False
+
+
+@pytest.mark.parametrize("error,code", [
+    (ConnectionRefusedError("local Host is down"), "host_unavailable"),
+    (TimeoutError("local Host timed out"), "host_timeout"),
+    (dictate.urllib.error.URLError(TimeoutError("local Host timed out")), "host_timeout"),
+    (dictate.urllib.error.HTTPError("http://127.0.0.1:7777", 401, "unauthorized", {}, io.BytesIO(b'{}')), "host_unavailable"),
+])
+def test_local_host_failures_are_not_reported_as_external_network_or_provider_auth(monkeypatch, error, code):
+    monkeypatch.setattr(dictate, "_host_token_document", lambda: {"token": "test"})
+
+    def fail_request(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(dictate.urllib.request, "urlopen", fail_request)
+    with pytest.raises(dictate.DictationError) as captured:
+        dictate._host_agent_request("/api/agent/transcribe", {}, timeout_sec=1)
+    assert dictate.dictation_error_payload(captured.value)["error_code"] == code
+
+
 def test_host_request_reads_legacy_token_during_rollback_window(monkeypatch, tmp_path):
     standard = tmp_path / "Library" / "Application Support" / "Yulu" / "mcp-token.json"
     legacy_root = tmp_path / ".config" / "yulu"

@@ -50,6 +50,7 @@ describe("recordingRouter", () => {
     const r = await caller.state();
     expect(r).toEqual({
       state: "unknown",
+      recordingStartedAt: null,
       hotkey: "?",
       launcherPid: undefined,
       dictationActive: false,
@@ -57,6 +58,26 @@ describe("recordingRouter", () => {
       voiceChatWindowVisible: false,
       voiceChatWindowUrl: undefined,
     });
+  });
+
+  it("state() forwards the capture start time without exposing the recording path", async () => {
+    const startedAt = Date.now() - 125_000;
+    fake = await startFakeSocket(() => ({
+      ok: true, state: "recording", recording_started_at: startedAt, file: "/private/meeting.wav",
+    }));
+    const caller = createCaller(recordingRouter, { paths: { statusAgentSock: fake.path } } as unknown as AppContext);
+    const result = await caller.state();
+    expect(result.recordingStartedAt).toBe(startedAt);
+    expect(result).not.toHaveProperty("file");
+  });
+
+  it.each([
+    ["recording", undefined], ["recording", null], ["recording", "123"],
+    ["recording", 0], ["recording", -1], ["idle", Date.now()], ["processing", Date.now()],
+  ])("state() omits unavailable or inactive capture time (%s, %s)", async (state, recording_started_at) => {
+    fake = await startFakeSocket(() => ({ ok: true, state, recording_started_at }));
+    const caller = createCaller(recordingRouter, { paths: { statusAgentSock: fake.path } } as unknown as AppContext);
+    expect((await caller.state()).recordingStartedAt).toBeNull();
   });
 
   it("toggle() returns state_before/state_after", async () => {

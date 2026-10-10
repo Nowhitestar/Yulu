@@ -10,7 +10,6 @@ export type PillState = "idle" | "recording" | "processing" | "meetingBusy" | "d
 
 interface RecordingMsg {
   state: PillState;
-  elapsedSec?: number;
   level?: number;
   file?: string;
 }
@@ -22,7 +21,8 @@ export function Pill() {
     refetchIntervalInBackground: true,
   });
   const [state, setState] = useState<PillState>("unknown");
-  const [elapsed, setElapsed] = useState(0);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState<number | null>(null);
   const [level, setLevel] = useState(0);
   const hotkey = (initial.data as { hotkey?: string } | undefined)?.hotkey ?? "⌘⇧V";
   const toggle = trpc.recording.toggle.useMutation();
@@ -33,26 +33,39 @@ export function Pill() {
     const confirmedState = (initial.data as { state?: PillState } | undefined)?.state;
     if (confirmedState) {
       setState(confirmedState);
+      const timestamp = initial.data?.recordingStartedAt;
+      const confirmedStart = confirmedState === "recording" && typeof timestamp === "number"
+        && Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
+      setStartedAt(confirmedStart);
+      if (confirmedState === "recording") {
+        setElapsed(confirmedStart === null ? null : elapsedSince(confirmedStart));
+      }
       if (confirmedState === "idle") {
-        setElapsed(0);
+        setElapsed(null);
         setLevel(0);
       }
     }
   }, [initial.data, initial.dataUpdatedAt]);
 
   useEffect(() => {
-    if (state !== "recording") return;
-    const timer = window.setInterval(() => setElapsed((value) => value + 1), 1_000);
+    if (state !== "recording" || startedAt === null) return;
+    // Recompute from capture time so remounts and delayed background callbacks
+    // never restart or slow down the recording clock.
+    const timer = window.setInterval(() => setElapsed(elapsedSince(startedAt)), 1_000);
     return () => window.clearInterval(timer);
-  }, [state]);
+  }, [state, startedAt]);
 
   useWsChannel("recording", (msg: RecordingMsg) => {
     setState(msg.state);
     if (msg.state === "idle") {
-      setElapsed(0);
+      setStartedAt(null);
+      setElapsed(null);
       setLevel(0);
     }
-    if (typeof msg.elapsedSec === "number") setElapsed(msg.elapsedSec);
+    if (msg.state === "recording" && state !== "recording") {
+      setStartedAt(null);
+      setElapsed(null);
+    }
     if (typeof msg.level === "number")      setLevel(msg.level);
   });
 
@@ -123,7 +136,12 @@ export function Pill() {
   }
 }
 
-function formatElapsed(sec: number): string {
+function elapsedSince(startedAt: number): number {
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 1_000));
+}
+
+function formatElapsed(sec: number | null): string {
+  if (sec === null) return "--:--";
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${String(s).padStart(2, "0")}`;

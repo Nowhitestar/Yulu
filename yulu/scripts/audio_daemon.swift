@@ -719,6 +719,21 @@ class AudioRecorder {
         syncState { writer?.url.path ?? "" }
     }
 
+    // Read the clock and capture state atomically so they always describe the
+    // same recording, including when a start/stop command arrives concurrently.
+    var recordingStatus: [String: Any] {
+        syncState {
+            var status: [String: Any] = [
+                "recording": isRecordingState,
+                "file": writer?.url.path ?? "",
+            ]
+            if isRecordingState, let startTime {
+                status["recordingStartedAt"] = startTime.timeIntervalSince1970 * 1_000
+            }
+            return status
+        }
+    }
+
     var micGain: Float {
         syncState { micGainState }
     }
@@ -2368,7 +2383,8 @@ class SocketServer {
             if wasRecording { onRecordingStop?() }
             resp = ["status":"stopped", "file": p ?? "", "duration": d]
         case "status":
-            resp = ["recording": recorder.isRecording, "file": recorder.currentFilePath, "micLevel": recorder.micLevel, "systemLevel": recorder.systemLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue, "serviceOwner": SERVICE_OWNER, "pid": ProcessInfo.processInfo.processIdentifier, "productVersion": PRODUCT_VERSION, "bundleVersion": BUNDLE_VERSION, "captureIPCVersion": CAPTURE_IPC_VERSION]
+            resp = recorder.recordingStatus
+            resp.merge(["micLevel": recorder.micLevel, "systemLevel": recorder.systemLevel, "sysReady": SYS_READY, "sysError": SYS_ERROR, "micReady": MIC_READY, "micError": MIC_ERROR, "meetingMicState": recorder.meetingMicState.rawValue, "serviceOwner": SERVICE_OWNER, "pid": ProcessInfo.processInfo.processIdentifier, "productVersion": PRODUCT_VERSION, "bundleVersion": BUNDLE_VERSION, "captureIPCVersion": CAPTURE_IPC_VERSION]) { _, new in new }
             resp["sysPermission"] = SYS_ACCESS.status
             resp["sysDisabled"] = SYS_DISABLED
         case "audio_devices":

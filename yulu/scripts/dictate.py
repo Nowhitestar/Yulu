@@ -85,6 +85,12 @@ class DictationError(RuntimeError):
     pass
 
 
+class DictationServiceError(DictationError):
+    def __init__(self, message: str, *, code: str):
+        super().__init__(message)
+        self.code = code
+
+
 class DictationNoSpeechError(DictationError):
     pass
 
@@ -108,6 +114,8 @@ def dictation_error_payload(exc: Exception, *, audio_path: str = "") -> dict[str
         code = "paste_failed"
     elif isinstance(exc, DictationPostprocessError):
         code = "postprocess_failed"
+    elif isinstance(exc, DictationServiceError):
+        code = exc.code
     else:
         code = "transcription_failed"
     payload: dict[str, Any] = {
@@ -626,7 +634,7 @@ def _host_agent_request(path: str, payload: dict[str, Any], *, timeout_sec: floa
     token_doc = _host_token_document()
     token = str(token_doc.get("token") or "").strip()
     if not token:
-        raise DictationError("Yulu Host token is unavailable")
+        raise DictationServiceError("Yulu Host token is unavailable", code="host_unavailable")
     base_url = os.environ.get("YULU_UI_BASE_URL", "").strip()
     if not base_url:
         base_url = f"http://127.0.0.1:{os.environ.get('YULU_UI_PORT', '7777')}"
@@ -645,14 +653,27 @@ def _host_agent_request(path: str, payload: dict[str, Any], *, timeout_sec: floa
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         try:
-            detail = str(json.loads(body).get("detail") or "")
+            failure = json.loads(body)
+            detail = str(failure.get("detail") or "")
+            reason = failure.get("failureReason")
         except (json.JSONDecodeError, AttributeError):
             detail = ""
+            reason = None
         if "empty transcript" in detail.lower():
             raise DictationNoSpeechError(detail) from exc
+        if reason in ("network", "secure_connection", "timeout", "credentials", "permission",
+                      "rate_limit", "service", "configuration"):
+            raise DictationServiceError(
+                f"Yulu transcription failed: HTTP {exc.code} {body}",
+                code=f"transcription_{reason}",
+            ) from exc
+        if exc.code == 401:
+            raise DictationServiceError("Yulu Host authorization failed", code="host_unavailable") from exc
         raise DictationError(f"Yulu transcription failed: HTTP {exc.code} {body}") from exc
     except OSError as exc:
-        raise DictationError(f"Yulu transcription unavailable: {exc}") from exc
+        reason = getattr(exc, "reason", exc)
+        code = "host_timeout" if isinstance(reason, TimeoutError) else "host_unavailable"
+        raise DictationServiceError(f"Yulu transcription unavailable: {exc}", code=code) from exc
     if not isinstance(result, dict) or result.get("ok") is not True:
         detail = result.get("detail") if isinstance(result, dict) else "invalid Host response"
         raise DictationError(f"Yulu transcription failed: {detail}")
