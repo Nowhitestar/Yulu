@@ -38,6 +38,7 @@ Yulu 是 macOS 上的会议记录与语音输入工具。录制系统声音和�
 正式版支持 **macOS 13+、Apple Silicon**。
 
 1. 从 [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases/latest) 下载 `.dmg`，将 **Yulu.app** 拖入「应用程序」后打开。
+   从 v0.27.2 起，安装包保留开发者签名，但不再经过 Apple 公证。若首次打开被 macOS 拦截，确认来自官方发布页后，到「系统设置 → 隐私与安全性」点「仍要打开」。
 2. 按引导授予麦克风与系统音频权限；全局快捷键和自动输入还需要输入控制权限。
 3. 安装本地语音模型，或明确连接 xAI 使用云端转写；需要 AI 纪要时，再选择纪要服务。
 4. 从 App 或菜单栏开始录音；按 **Fn** 听写、**Fn+Shift** 翻译、**Fn+Space** 语音提问。

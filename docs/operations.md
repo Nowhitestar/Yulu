@@ -526,9 +526,13 @@ migration journal to get past that error.
 Stable releases publish `yulu-macos-arm64-<tag>.dmg`, `appcast.xml`, and
 `checksums.txt`. The local-caption Runtime Pack remains a separate optional ZIP;
 it is not an installation path and is never inside the DMG. Release CI verifies
-the Developer ID Application signature for Team ID `WMU9678ZQL`, App and DMG
-notarization tickets, Gatekeeper acceptance, the exact two-item mounted layout,
-and the self-contained Application Runtime before publishing.
+the Developer ID Application signature for Team ID `WMU9678ZQL`, Gatekeeper
+assessment, the exact two-item mounted layout, and the self-contained
+Application Runtime before publishing. Starting with v0.27.2, releases are
+signed but not Apple-notarized: a Gatekeeper result of `Unnotarized Developer ID`
+is expected, while invalid signatures, revoked identities, and other rejection
+reasons still block publication. Older notarized releases must also have valid
+App and DMG notarization tickets.
 
 Sparkle and manual recovery use the same DMG. Sparkle verifies both the signed
 feed and the DMG enclosure signature before installation. For manual recovery,
@@ -536,6 +540,9 @@ quit Yulu, download the matching DMG from GitHub Releases, open it, drag
 `Yulu.app` onto `/Applications`, and relaunch. Do not use a repository ZIP,
 `install.sh`, or pkg as a release bridge. Replacing the immutable App leaves
 configuration, credentials, and recordings outside the bundle unchanged.
+If macOS blocks a first launch of a release marked as not notarized, verify its
+official download and signature, then use **System Settings → Privacy & Security
+→ Open Anyway**. See [Apple's instructions](https://support.apple.com/102445).
 
 After a whole-App upgrade, open **Components → Background Services**. The two
 active owners are `com.yulu.app.host` and `com.yulu.app.capture`; signing and TCC

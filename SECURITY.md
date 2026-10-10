@@ -45,26 +45,36 @@ These are not vulnerabilities in Yulu, but they are the failure modes I see most
 
 ## Verifying releases
 
-Official releases contain one checksum-verified DMG with a signed, notarized,
-and stapled immutable `Yulu.app`. After downloading the DMG and `checksums.txt`,
-verify the actual release asset before installing:
+Official releases contain one checksum-verified, Developer ID-signed DMG with
+an immutable signed `Yulu.app`. Starting with v0.27.2, releases do not undergo
+Apple notarization. Checksums, GitHub build provenance, code signatures, and
+Sparkle's signed update archives and feeds remain required; they do not replace
+Apple's malware checks or make a release notarized. After downloading the DMG
+and `checksums.txt`, verify the actual release asset before installing:
 
 ```bash
 (cd <download-directory> && \
   grep '  yulu-macos-arm64-vX.Y.Z.dmg$' checksums.txt | shasum -a 256 -c -)
 gh attestation verify yulu-macos-arm64-vX.Y.Z.dmg --repo Nowhitestar/Yulu
 codesign --verify --strict yulu-macos-arm64-vX.Y.Z.dmg
-xcrun stapler validate yulu-macos-arm64-vX.Y.Z.dmg
 spctl -a -vv -t open --context context:primary-signature yulu-macos-arm64-vX.Y.Z.dmg
 hdiutil attach -readonly -nobrowse yulu-macos-arm64-vX.Y.Z.dmg
 codesign --verify --deep --strict /Volumes/Yulu/Yulu.app
 codesign -dv --verbose=4 /Volumes/Yulu/Yulu.app
-xcrun stapler validate /Volumes/Yulu/Yulu.app
 spctl -a -vv -t exec /Volumes/Yulu/Yulu.app
 hdiutil detach /Volumes/Yulu
 ```
 
 The signature must be a Developer ID Application identity with Team ID
 `WMU9678ZQL`. The mounted volume must contain only `Yulu.app` and an
-`Applications` alias resolving to `/Applications`. If verification fails, do
-not run the asset; report it through the security channel above.
+`Applications` alias resolving to `/Applications`. For a release explicitly
+marked as not notarized, Gatekeeper can report `source=Unnotarized Developer ID`.
+If the signatures, provenance, and checksums pass and you trust the download,
+follow [Apple's per-app Open Anyway instructions](https://support.apple.com/102445)
+in System Settings → Privacy & Security after the first blocked launch.
+The installation instructions do not disable Gatekeeper or remove quarantine.
+
+For older releases marked as notarized, also require `xcrun stapler validate`
+to pass for both the DMG and mounted App. A broken signature, wrong Team ID,
+checksum mismatch, revoked identity, or any other Gatekeeper rejection is not
+an expected first-launch notice: do not run the asset and report the failure.

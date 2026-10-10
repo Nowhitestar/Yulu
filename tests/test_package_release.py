@@ -566,7 +566,7 @@ def test_release_validates_the_complete_locked_native_addon_contract():
         encoding="utf-8"
     )
     validation = workflow.split("Validate locked Application Runtime inputs", 1)[1].split(
-        "Sign, package, and notarize release DMG", 1
+        "Sign and package release DMG", 1
     )[0]
 
     assert 'native = lock["betterSqlite3"]' in validation
