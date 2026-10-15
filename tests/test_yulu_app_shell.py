@@ -553,6 +553,10 @@ def test_sparkle_adapter_routes_every_install_handler_through_update_authority()
     assert "item.deltaUpdates?[currentBuild] == nil" in source
     assert "applicationShouldTerminate(_ sender: NSApplication)" in source
     assert "UpdateTerminationGate.allowTermination" in source
+    assert "func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem)" in source
+    assert "coordinator.announceInstall(" in source
+    termination_callback = source.split("func applicationShouldTerminate(_ sender:", 1)[1].split("private func finishNativeWorkBeforeTermination", 1)[0]
+    assert termination_callback.index("prepareInstallBeforeTermination") < termination_callback.index("UpdateTerminationGate.allowTermination")
     assert 'forInfoDictionaryKey: "YuluReleaseVersion"' in source
     assert 'info["YuluReleaseVersion"]' in source
     assert 'forInfoDictionaryKey: "YuluReleaseVersion"' in capture_source
@@ -576,6 +580,15 @@ def test_sparkle_adapter_routes_every_install_handler_through_update_authority()
     assert termination.index("self.process = nil") < termination.index(
         "self.onCanStartMigration?()"
     )
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native update termination gate")
+def test_announced_update_cannot_quit_when_preparation_is_unavailable(tmp_path: Path):
+    binary = compile_yulu_app_inspector(tmp_path)
+    result = subprocess.run([str(binary), "--inspect-announced-update", str(tmp_path / "home")],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"pending": True, "blocked": True, "installed": False, "allowTermination": False}
 
 
 def test_update_quiescence_is_tri_state_and_only_kernel_absence_passes(

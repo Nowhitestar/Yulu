@@ -34,6 +34,14 @@ class MigrationBlocked(RuntimeError):
     """Raised when migration cannot safely change legacy ownership."""
 
 
+class ReplacedApplicationImage(MigrationBlocked):
+    """The executable was moved or unlinked by whole-App replacement."""
+
+    def __init__(self, message: str, generation: tuple[int, int]):
+        super().__init__(message)
+        self.generation = generation
+
+
 @dataclass(frozen=True)
 class CaptureJobSnapshot:
     loaded: bool
@@ -1547,7 +1555,18 @@ def _bundled_owner_image_is_current(
     )
     try:
         generation = _process_generation(pid)
-        if _process_executable(pid) != executable.resolve():
+        try:
+            loaded_path = _process_executable(pid)
+        except FileNotFoundError as exc:
+            if _process_generation(pid) != generation:
+                raise MigrationBlocked("application service startup identity changed") from exc
+            raise ReplacedApplicationImage("application service executable was removed", generation) from exc
+        if loaded_path != executable.resolve():
+            sparkle_root = Path.home() / "Library/Caches/com.yulu.app.sparkle/org.sparkle-project.Sparkle/Installation"
+            if loaded_path.is_relative_to(sparkle_root) and str(loaded_path).endswith(
+                "/Yulu.app/" + str(executable.relative_to(app_bundle))
+            ):
+                raise ReplacedApplicationImage("application service executable was moved by the updater", generation)
             raise MigrationBlocked("application service executable does not match its job")
         result = run(
             ["/usr/sbin/lsof", "-a", "-p", str(pid), "-d", "txt", "-F0pfnDi"],
@@ -1585,6 +1604,51 @@ def _current_bundled_services_present(launchctl: Callable[[list[str]], object]) 
     return False
 
 
+def _replacement_job_generation(output: str, label: str, pid: int) -> tuple[int, int]:
+    """Bind recovery to launchd's signed SMAppService job, never a process name.
+
+    proc_pidpath can return ENOENT after Sparkle removes the old bundle. launchd
+    retains the job's signing constraint and PID independently of that pathname.
+    Only this narrower signed installed-App case may use the recovery branch.
+    """
+    identifier = "com.yulu.audiodaemon" if label.endswith("capture") else "com.yulu.app"
+    match = re.search(r'"reqs" => \{([^{}]*)\}', output)
+    # XPC's printed dictionary is not JSON (=> separators and no commas).
+    # Accept only the three primitive requirements emitted for this signed job.
+    requirements = {}
+    for line in match[1].strip().splitlines() if match else []:
+        field = re.fullmatch(r'\s*"([a-z-]+)" => ("[^"\n]*"|[0-9]+)\s*', line)
+        if field is None or field[1] in requirements:
+            raise MigrationBlocked("replaced application signing constraint is invalid")
+        requirements[field[1]] = json.loads(field[2])
+    if (
+        not re.search(r"^\s*parent bundle identifier = com\.yulu\.app\s*$", output, re.MULTILINE)
+        or requirements != {"signing-identifier": identifier,
+                            "team-identifier": _PRODUCT_TEAM_IDENTIFIER,
+                            "validation-category": 6}
+    ):
+        raise MigrationBlocked("cannot verify replaced application service ownership")
+    return _process_generation(pid)
+
+
+def _assert_replaced_capture_idle(socket_path: Path, pid: int, generation: tuple[int, int]) -> None:
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        client.settimeout(2)
+        client.connect(str(socket_path))
+        if _peer_identity(client) != (pid, os.geteuid()) or _process_generation(pid) != generation:
+            raise MigrationBlocked("replaced Capture socket owner changed")
+        status = _read_status(client)
+        if _process_generation(pid) != generation:
+            raise MigrationBlocked("replaced Capture identity changed during status check")
+        if status["recording"]:
+            raise MigrationBlocked("legacy Capture recording is active")
+    except OSError as exc:
+        raise MigrationBlocked("cannot prove replaced Capture is idle") from exc
+    finally:
+        client.close()
+
+
 def retire_previous_bundled_owners(
     app_bundle: Path,
     socket_path: Path,
@@ -1601,6 +1665,7 @@ def retire_previous_bundled_owners(
     }
     previous: list[tuple[str, str, str]] = []
     current: list[tuple[str, str, str]] = []
+    replacement_generations: dict[str, tuple[int, int]] = {}
     repository_job = False
     for label, (plist, program) in expected.items():
         observed = launchctl(["print", f"gui/{os.geteuid()}/{label}"])
@@ -1621,7 +1686,15 @@ def retire_previous_bundled_owners(
         for label, _, output in current:
             identity = _bundled_job_identity(output, app_bundle, expected[label][1])
             assert identity is not None
-            if not _bundled_owner_image_is_current(app_bundle, label, int(identity[1])):
+            try:
+                image_current = _bundled_owner_image_is_current(app_bundle, label, int(identity[1]))
+            except ReplacedApplicationImage as replaced:
+                observed_generation = _replacement_job_generation(output, label, int(identity[1]))
+                if observed_generation != replaced.generation:
+                    raise MigrationBlocked("replaced application service generation changed")
+                replacement_generations[label] = observed_generation
+                image_current = False
+            if not image_current:
                 needs_refresh = True
         if needs_refresh:
             # Treat Host and Capture as one installed version, even if only one
@@ -1636,15 +1709,27 @@ def retire_previous_bundled_owners(
         # Recheck immediately before each removal. A Host-only replacement can
         # still have a recording on the current Capture's standard socket.
         capture_loaded = any(name in {"com.yulu.audiodaemon", "com.yulu.app.capture"} for name, _, _ in previous + current)
-        assert_legacy_capture_idle(
-            CaptureJobSnapshot(loaded=capture_loaded or socket_path.exists(), executable=capture),
-            socket_path,
-        )
+        capture_generation = replacement_generations.get("com.yulu.app.capture")
+        if capture_generation is not None:
+            capture_job = next(item for item in previous if item[0] == "com.yulu.app.capture")
+            capture_identity = _bundled_job_identity(capture_job[2], app_bundle, capture)
+            assert capture_identity is not None
+            _assert_replaced_capture_idle(socket_path, int(capture_identity[1]), capture_generation)
+        else:
+            assert_legacy_capture_idle(
+                CaptureJobSnapshot(loaded=capture_loaded or socket_path.exists(), executable=capture),
+                socket_path,
+            )
         rechecked = launchctl(["print", f"gui/{os.geteuid()}/{label}"])
         if getattr(rechecked, "returncode", 1) != 0 or _bundled_job_identity(
             str(getattr(rechecked, "stdout", "")), app_bundle, expected[label][1]
         ) != _bundled_job_identity(output, app_bundle, expected[label][1]):
             raise MigrationBlocked("previous application service identity changed")
+        if label in replacement_generations:
+            identity = _bundled_job_identity(output, app_bundle, expected[label][1])
+            assert identity is not None
+            if _replacement_job_generation(str(rechecked.stdout), label, int(identity[1])) != replacement_generations[label]:
+                raise MigrationBlocked("replaced application service generation changed")
         result = run(
             [str(app_bundle / "Contents/MacOS/yulu_app"), "--retire-bundled-service", plist],
             text=True, capture_output=True, check=False, timeout=15,

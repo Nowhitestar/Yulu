@@ -2893,7 +2893,7 @@ def test_app_without_legacy_data_does_not_start_migration_when_services_already_
     assert not paths.durable_root.exists()
 
 
-@pytest.mark.parametrize("scenario", ["current", "replaced", "pid", "missing", "executable", "generation", "malformed", "timeout"])
+@pytest.mark.parametrize("scenario", ["current", "replaced", "pid", "missing", "executable", "generation", "malformed", "timeout", "unlinked", "moved", "permission"])
 def test_loaded_image_check_is_bound_to_the_observed_host(scenario, tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(SCRIPTS))
     import application_migration as migration
@@ -2911,18 +2911,100 @@ def test_loaded_image_check_is_bound_to_the_observed_host(scenario, tmp_path, mo
         fields[3] = "inot-an-inode"
     generations = iter([(10, 20), (10, 21) if scenario == "generation" else (10, 20)])
     monkeypatch.setattr(migration, "_process_generation", lambda pid: next(generations))
-    monkeypatch.setattr(migration, "_process_executable", lambda pid: tmp_path / "foreign" if scenario == "executable" else executable)
+    def process_executable(pid):
+        if scenario == "unlinked":
+            raise FileNotFoundError(2, "proc_pidpath failed")
+        if scenario == "permission":
+            raise PermissionError(1, "proc_pidpath failed")
+        if scenario == "moved":
+            return Path.home() / "Library/Caches/com.yulu.app.sparkle/org.sparkle-project.Sparkle/Installation/random/Yulu.app/Contents/Resources/runtime/bin/node"
+        return tmp_path / "foreign" if scenario == "executable" else executable
+    monkeypatch.setattr(migration, "_process_executable", process_executable)
     def inspect(arguments, **options):
         assert arguments == ["/usr/sbin/lsof", "-a", "-p", "100", "-d", "txt", "-F0pfnDi"]
         assert options["timeout"] == 5
         if scenario == "timeout":
             raise subprocess.TimeoutExpired(arguments, 5)
         return SimpleNamespace(returncode=0, stdout="\0".join(fields))
-    if scenario not in {"current", "replaced"}:
+    if scenario in {"unlinked", "moved"}:
+        with pytest.raises(migration.ReplacedApplicationImage):
+            migration._bundled_owner_image_is_current(app, "com.yulu.app.host", 100, run=inspect)
+    elif scenario not in {"current", "replaced"}:
         with pytest.raises(migration.MigrationBlocked):
             migration._bundled_owner_image_is_current(app, "com.yulu.app.host", 100, run=inspect)
     else:
         assert migration._bundled_owner_image_is_current(app, "com.yulu.app.host", 100, run=inspect) is (scenario == "current")
+
+
+@pytest.mark.parametrize("scenario", ["idle", "recording", "foreign-team", "foreign-parent", "missing-constraint", "changed-generation"])
+def test_unlinked_signed_app_services_recover_only_after_bound_idle_check(scenario, tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import application_migration as migration
+    app = tmp_path / "Yulu.app"
+    jobs = {}
+    for label, program, pid, identifier in [
+        ("com.yulu.app.host", "Contents/MacOS/yulu_app", 100, "com.yulu.app"),
+        ("com.yulu.app.capture", "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon", 200, "com.yulu.audiodaemon"),
+    ]:
+        constraint = {"reqs": {"signing-identifier": identifier, "team-identifier": migration._PRODUCT_TEAM_IDENTIFIER,
+                               "validation-category": 6}, "vers": 1}
+        if scenario == "foreign-team":
+            constraint["reqs"]["team-identifier"] = "FOREIGN"
+        parent = "foreign.app" if scenario == "foreign-parent" else "com.yulu.app"
+        jobs[label] = f"program identifier = {program} (mode: 2)\npid = {pid}\nmanaged_by = com.apple.xpc.ServiceManagement\nparent bundle identifier = {parent}\n"
+        if scenario != "missing-constraint":
+            jobs[label] += "LWCR = " + json.dumps(constraint, indent=2).replace(": ", " => ").replace(",", "") + "\n"
+    calls = []
+    def launchctl(arguments):
+        output = jobs.get(arguments[1].rsplit("/", 1)[-1])
+        return SimpleNamespace(returncode=0 if output else 113, stdout=output or "")
+    def image(*args):
+        raise migration.ReplacedApplicationImage("unlinked", (1, 1))
+    generation_reads = {}
+    def generation(pid):
+        generation_reads[pid] = generation_reads.get(pid, 0) + 1
+        return (1, 2 if scenario == "changed-generation" and generation_reads[pid] > 1 else 1)
+    def idle(path, pid, generation):
+        assert pid == 200 and generation == (1, 1)
+        calls.append("idle")
+        if scenario == "recording":
+            raise migration.MigrationBlocked("recording")
+    def retire(arguments, **kwargs):
+        calls.append(arguments[-1])
+        label = "com.yulu.app.host" if arguments[-1] == "com.yulu.ui.plist" else "com.yulu.app.capture"
+        jobs.pop(label)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(migration, "_bundled_owner_image_is_current", image)
+    monkeypatch.setattr(migration, "_process_generation", generation)
+    monkeypatch.setattr(migration, "_assert_replaced_capture_idle", idle)
+    if scenario == "idle":
+        assert migration.retire_previous_bundled_owners(app, tmp_path / "capture.sock", launchctl=launchctl, run=retire)
+        assert calls == ["idle", "com.yulu.ui.plist", "idle", "com.yulu.audiodaemon.plist"]
+    else:
+        with pytest.raises(migration.MigrationBlocked):
+            migration.retire_previous_bundled_owners(app, tmp_path / "capture.sock", launchctl=launchctl, run=retire)
+        assert not any(call.endswith(".plist") for call in calls)
+
+
+@pytest.mark.parametrize("scenario", ["idle", "recording", "foreign-pid", "foreign-uid", "reused-pid", "unreachable"])
+def test_replaced_capture_status_is_bound_to_kernel_peer(scenario, tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import application_migration as migration
+    class Client:
+        def settimeout(self, seconds): pass
+        def connect(self, path):
+            if scenario == "unreachable": raise ConnectionRefusedError()
+        def close(self): pass
+    monkeypatch.setattr(migration.socket, "socket", lambda *args: Client())
+    monkeypatch.setattr(migration, "_peer_identity", lambda client: (201 if scenario == "foreign-pid" else 200, os.geteuid() + (scenario == "foreign-uid")))
+    values = iter([(1, 1), (1, 2) if scenario == "reused-pid" else (1, 1)])
+    monkeypatch.setattr(migration, "_process_generation", lambda pid: next(values))
+    monkeypatch.setattr(migration, "_read_status", lambda client: {"recording": scenario == "recording"})
+    if scenario == "idle":
+        migration._assert_replaced_capture_idle(tmp_path / "socket", 200, (1, 1))
+    else:
+        with pytest.raises(migration.MigrationBlocked):
+            migration._assert_replaced_capture_idle(tmp_path / "socket", 200, (1, 1))
 
 
 @pytest.mark.parametrize("unsafe", ["root_symlink", "queue_symlink"])

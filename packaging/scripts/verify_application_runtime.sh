@@ -311,6 +311,10 @@ if [[ "${YULU_SKIP_RUNTIME_EXECUTION:-0}" != "1" ]]; then
     fail "could not inspect bundled native recording controls"
   python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("nativeRecordingControls") is True else 1)' \
     "$NATIVE_CONTROLS" || fail "native recording controls are missing from the Application Runtime"
+  UPDATE_DELEGATE="$("$APP/Contents/MacOS/yulu_app" --inspect-sparkle-delegate)" || \
+    fail "could not inspect Sparkle installation guards"
+  python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]) == {"willInstall": True, "postponeRelaunch": True} else 1)' \
+    "$UPDATE_DELEGATE" || fail "Sparkle installation guards are missing from the Application Runtime"
   NODE="$RUNTIME/bin/node"
   PYTHON="$RUNTIME/python/bin/python3"
   FFMPEG="$RUNTIME/bin/ffmpeg"
