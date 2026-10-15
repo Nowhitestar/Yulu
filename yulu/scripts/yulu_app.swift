@@ -2175,6 +2175,7 @@ final class ApplicationUpdateCoordinator {
     private var binding: (transactionId: String, nonce: String)?
     private var retainedInstallHandler: (() -> Void)?
     private var deferredTarget: (version: String, build: String)?
+    private var announcedTarget: (version: String, build: String)?
     private var sessionGeneration = 0
     private var startMigrationAfterTermination = false
 
@@ -2226,6 +2227,20 @@ final class ApplicationUpdateCoordinator {
             targetBuild: targetBuild,
             requestRollback: false
         )
+    }
+
+    // Sparkle does not call shouldPostponeRelaunchForUpdate on every path.
+    // Mark the install before termination so those paths cannot skip quiescence.
+    func announceInstall(targetVersion: String, targetBuild: String) {
+        announcedTarget = (targetVersion, targetBuild)
+        updatePending = true
+    }
+
+    func prepareInstallBeforeTermination(installHandler: @escaping () -> Void) {
+        guard updatePending, !installAuthorized, !rollbackHelperLaunched,
+              let target = announcedTarget else { return }
+        prepareInstall(targetVersion: target.version, targetBuild: target.build,
+                       installHandler: installHandler)
     }
 
     func requestRollback() {
@@ -2378,6 +2393,7 @@ final class ApplicationUpdateCoordinator {
             updatePending = false
             retainedInstallHandler = nil
             deferredTarget = nil
+            announcedTarget = nil
             onStateChange?(action.action, action.failure)
             startMigrationAfterTermination = true
         case "observe_recording":
@@ -3015,6 +3031,33 @@ if CommandLine.arguments.count == 3,
         exit(64)
     }
     try writeJSON(ApplicationUpdateConfiguration.evaluate(info: info))
+    exit(0)
+}
+
+if CommandLine.arguments.count == 3,
+   CommandLine.arguments[1] == "--inspect-announced-update" {
+    let home = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    let coordinator = ApplicationUpdateCoordinator(
+        policy: LaunchPolicy.evaluate(bundlePath: "/Volumes/Yulu.app"),
+        layout: BundleLayout(bundleURL: URL(fileURLWithPath: "/Volumes/Yulu.app")),
+        applicationPaths: ApplicationDataPaths.resolve(homeDirectory: home, environment: [:]),
+        services: BackgroundServiceRegistry()
+    )
+    var blocked = false
+    var installed = false
+    coordinator.onStateChange = { state, _ in blocked = state == "blocked" }
+    coordinator.announceInstall(targetVersion: "99.0.0", targetBuild: "9999")
+    coordinator.prepareInstallBeforeTermination { installed = true }
+    try writeJSON([
+        "pending": coordinator.updatePending,
+        "blocked": blocked,
+        "installed": installed,
+        "allowTermination": UpdateTerminationGate.allowTermination(
+            updatePending: coordinator.updatePending,
+            installAuthorized: coordinator.installAuthorized,
+            rollbackHelperLaunched: coordinator.rollbackHelperLaunched
+        ),
+    ])
     exit(0)
 }
 
@@ -3986,6 +4029,11 @@ final class SparkleUpdateAdapter: NSObject, SPUUpdaterDelegate {
         controller.checkForUpdates(nil)
     }
 
+    func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        coordinator.announceInstall(targetVersion: item.displayVersionString,
+                                    targetBuild: item.versionString)
+    }
+
     func updater(
         _ updater: SPUUpdater,
         shouldProceedWithUpdate item: SUAppcastItem,
@@ -4024,6 +4072,21 @@ final class SparkleUpdateAdapter: NSObject, SPUUpdaterDelegate {
 
 }
 #endif
+
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--inspect-sparkle-delegate" {
+    #if canImport(Sparkle)
+    try writeJSON([
+        "willInstall": SparkleUpdateAdapter.instancesRespond(to:
+            #selector(SPUUpdaterDelegate.updater(_:willInstallUpdate:))),
+        "postponeRelaunch": SparkleUpdateAdapter.instancesRespond(to:
+            #selector(SPUUpdaterDelegate.updater(_:shouldPostponeRelaunchForUpdate:untilInvokingBlock:))),
+    ])
+    exit(0)
+    #else
+    fputs("Sparkle is not linked\n", stderr)
+    exit(78)
+    #endif
+}
 
 private final class WindowChromeMessages: NSObject, WKScriptMessageHandler {
     weak var window: NSWindow?
@@ -4567,6 +4630,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let updateCoordinator else { return .terminateNow }
+        updateCoordinator.prepareInstallBeforeTermination { NSApp.terminate(nil) }
         let allowTermination = UpdateTerminationGate.allowTermination(
             updatePending: updateCoordinator.updatePending,
             installAuthorized: updateCoordinator.installAuthorized,

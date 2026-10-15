@@ -1458,6 +1458,12 @@ def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(
     write(
         app / "Contents/MacOS/yulu_app",
         b"#!/usr/bin/env bash\n"
+        b"if [[ ${1:-} == --inspect-sparkle-delegate ]]; then\n"
+        b"  if [[ ${YULU_FIXTURE_UPDATE_GUARD_MISSING:-0} == 1 ]]; then\n"
+        b"    echo '{\"willInstall\":false,\"postponeRelaunch\":true}'\n"
+        b"  else echo '{\"willInstall\":true,\"postponeRelaunch\":true}'; fi\n"
+        b"  exit 0\n"
+        b"fi\n"
         b"[[ ${1:-} == --inspect-build ]] || exit 75\n"
         b"if [[ ${YULU_FIXTURE_NATIVE_CONTROLS_MISSING:-0} == 1 ]]; then\n"
         b"  echo '{\"nativeRecordingControls\":false}'\n"
@@ -1474,6 +1480,14 @@ def test_application_runtime_exec_probes_exact_versions_and_native_addon_abi(
         check=False,
     )
     assert inventoried.returncode == 0, inventoried.stderr + inventoried.stdout
+
+    guard_missing = subprocess.run(
+        ["bash", str(VERIFY), str(app)],
+        env={**os.environ, **tools, "YULU_FIXTURE_UPDATE_GUARD_MISSING": "1"},
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert guard_missing.returncode != 0
+    assert "Sparkle installation guards are missing" in guard_missing.stderr
 
     abi_failure = subprocess.run(
         ["bash", str(VERIFY), str(app)],
