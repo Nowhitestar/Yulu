@@ -1068,6 +1068,10 @@ def test_terminal_transaction_is_archived_before_a_later_update_begins(
     paths.journal_dir.mkdir(parents=True, mode=0o700)
     paths.rollback_dir.mkdir(mode=0o700)
     (paths.rollback_dir / "old-snapshot").write_text("old", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.write_text("must survive")
+    (paths.rollback_dir / "Current").symlink_to("old-snapshot")
+    (paths.rollback_dir / "external").symlink_to(outside)
     paths.checkpoint_dir.mkdir(mode=0o700)
     (paths.checkpoint_dir / "host.sqlite").write_bytes(b"old-checkpoint")
     transaction_id = "a" * 32
@@ -1099,6 +1103,54 @@ def test_terminal_transaction_is_archived_before_a_later_update_begins(
     ).is_file()
     assert not paths.rollback_dir.exists()
     assert not paths.checkpoint_dir.exists()
+    archive = paths.journal_dir / f"rollback.{transaction_id}"
+    assert (archive / "Current").is_symlink()
+    assert (archive / "old-snapshot").read_text() == "old"
+    assert outside.read_text() == "must survive"
+
+
+def test_orphan_snapshots_do_not_block_the_next_update(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    from application_update import ApplicationUpdate, ApplicationUpdatePaths
+
+    paths = ApplicationUpdatePaths(tmp_path / "data", tmp_path / "cache")
+    paths.rollback_dir.mkdir(parents=True, mode=0o700)
+    paths.journal_dir.chmod(0o700)
+    (paths.rollback_dir / "Current").symlink_to("missing-old-framework")
+    with ApplicationUpdate(paths) as authority:
+        begin_idle_update(authority)
+    assert not paths.rollback_dir.exists()
+    assert len(list(paths.journal_dir.glob("rollback.orphan.*"))) == 1
+    assert paths.journal_path.exists()
+
+
+def test_snapshot_retirement_can_resume_after_interruption(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    import application_update as module
+
+    paths = module.ApplicationUpdatePaths(tmp_path / "data", tmp_path / "cache")
+    with module.ApplicationUpdate(paths) as authority:
+        transaction = begin_idle_update(authority)
+        authority._journal["phase"] = "update_aborted"
+        authority._write_journal()
+        paths.rollback_dir.mkdir(mode=0o700)
+        paths.checkpoint_dir.mkdir(mode=0o700)
+        original = module._rename_exclusive_at
+        def interrupt(source_fd, source, target_fd, target):
+            if source == "checkpoint":
+                raise OSError("interrupted")
+            return original(source_fd, source, target_fd, target)
+        monkeypatch.setattr(module, "_rename_exclusive_at", interrupt)
+        with pytest.raises(OSError, match="interrupted"):
+            authority.retire_terminal_transaction()
+        assert paths.journal_path.exists()
+        assert not paths.rollback_dir.exists()
+        assert paths.checkpoint_dir.exists()
+        monkeypatch.setattr(module, "_rename_exclusive_at", original)
+    with module.ApplicationUpdate(paths) as authority:
+        authority.retire_terminal_transaction()
+        begin_idle_update(authority)
+    assert (paths.journal_dir / f"checkpoint.{transaction['transactionId']}").is_dir()
 
 
 def test_rollback_ready_resume_reverifies_helper_and_completed_swap_is_idempotent(
