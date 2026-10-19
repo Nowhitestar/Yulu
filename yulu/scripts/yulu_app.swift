@@ -2221,6 +2221,7 @@ final class ApplicationUpdateCoordinator {
         installHandler: @escaping () -> Void
     ) {
         guard process == nil, retainedInstallHandler == nil else { return }
+        installPreparationFailed = false
         retainedInstallHandler = installHandler
         deferredTarget = (targetVersion, targetBuild)
         updatePending = true
