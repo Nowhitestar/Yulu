@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.27.4](https://github.com/Nowhitestar/Yulu/compare/v0.27.3...v0.27.4) (2026-10-19)
+
+
+### Bug Fixes
+
+* recover update snapshots and retry installation without redownloading ([#243](https://github.com/Nowhitestar/Yulu/issues/243)) ([fb33fd4](https://github.com/Nowhitestar/Yulu/commit/fb33fd41c9f1c3235fe32c217c6ba795961f404a))
+
 ## [0.27.3](https://github.com/Nowhitestar/Yulu/compare/v0.27.2...v0.27.3) (2026-10-15)
 
 
