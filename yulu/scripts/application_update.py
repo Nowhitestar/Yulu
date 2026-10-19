@@ -27,7 +27,6 @@ from application_migration import (
     _open_existing_private_directory,
     _process_generation,
     _read_journal_at,
-    _remove_owned_tree_at,
     _rename_exclusive_at,
     checkpoint_sqlite_database,
     open_existing_trusted_install_directory,
@@ -613,6 +612,21 @@ class ApplicationUpdate:
             self._journal,
         )
 
+    def _archive_outputs(self, identity: str) -> None:
+        # Rename whole snapshots: signed frameworks contain legitimate symlinks.
+        # Never traverse those links or partially delete a rollback application.
+        for path in (self.paths.rollback_dir, self.paths.checkpoint_dir):
+            directory_fd = _open_existing_private_directory(path)
+            if directory_fd < 0:
+                continue
+            os.close(directory_fd)
+            if not _rename_exclusive_at(
+                self._journal_dir_fd, path.name,
+                self._journal_dir_fd, f"{path.name}.{identity}",
+            ):
+                raise MigrationBlocked("application update snapshot archive is occupied")
+            os.fsync(self._journal_dir_fd)
+
     def retire_terminal_transaction(self) -> None:
         if self._journal_dir_fd < 0 or self._journal is None:
             raise RuntimeError("application update authority is not active")
@@ -623,6 +637,9 @@ class ApplicationUpdate:
         if re.fullmatch(r"[0-9a-f]{32}", transaction_id) is None:
             raise MigrationBlocked("terminal application update identity is invalid")
         archive_name = f"journal.{transaction_id}.{phase}.json"
+        # Keep the journal authoritative until all outputs have moved. If the
+        # process exits between renames, retry skips the already moved outputs.
+        self._archive_outputs(transaction_id)
         if not _rename_exclusive_at(
             self._journal_dir_fd,
             self.paths.journal_path.name,
@@ -630,16 +647,6 @@ class ApplicationUpdate:
             archive_name,
         ):
             raise MigrationBlocked("application update journal archive is occupied")
-        for path in (self.paths.rollback_dir, self.paths.checkpoint_dir):
-            directory_fd = _open_existing_private_directory(path)
-            if directory_fd < 0:
-                continue
-            try:
-                _remove_owned_tree_at(directory_fd)
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-            os.rmdir(path.name, dir_fd=self._journal_dir_fd)
         os.fsync(self._journal_dir_fd)
         self._journal = None
 
@@ -663,6 +670,9 @@ class ApplicationUpdate:
             or int(to_build) <= int(from_build)
         ):
             raise MigrationBlocked("application update build is not monotonic")
+        # Older versions archived the journal before deleting snapshots and
+        # could leave an orphan framework tree. Preserve it outside active paths.
+        self._archive_outputs(f"orphan.{uuid.uuid4().hex}")
         self._journal = {
             "schemaVersion": 1,
             "transactionId": uuid.uuid4().hex,

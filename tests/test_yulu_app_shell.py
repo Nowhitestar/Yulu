@@ -580,6 +580,13 @@ def test_sparkle_adapter_routes_every_install_handler_through_update_authority()
     assert termination.index("self.process = nil") < termination.index(
         "self.onCanStartMigration?()"
     )
+    aborted = coordinator.split('case "aborted":', 1)[1].split('case "idle"', 1)[0]
+    assert "retainedInstallHandler = nil" not in aborted
+    assert "updatePending = canRetryInstall" in aborted
+    retry = coordinator.split("func retryInstall()", 1)[1].split("func submitHealth", 1)[0]
+    assert "startSession(targetVersion: target.version" in retry
+    assert "installAuthorized = true" not in retry
+    assert "retryInstallAfterTermination = true" in retry
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Native update termination gate")

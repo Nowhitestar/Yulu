@@ -211,7 +211,9 @@ fi
 
 hdiutil create -quiet -ov -format UDRW -fs HFS+ -volname Yulu \
     -srcfolder "$STAGE" "$RW_DMG"
-hdiutil convert "$RW_DMG" -quiet -ov -format UDZO -imagekey zlib-level=9 \
+# bzip2 reduces the complete signed bundle's download size without changing
+# its contents. UDBZ is supported by every macOS version supported by Yulu.
+hdiutil convert "$RW_DMG" -quiet -ov -format UDBZ \
     -o "$DMG_TMP"
 [[ -s "$DMG_TMP" ]] || {
     echo "DMG conversion did not produce an artifact: $DMG_TMP" >&2

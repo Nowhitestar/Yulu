@@ -2178,6 +2178,7 @@ final class ApplicationUpdateCoordinator {
     private var announcedTarget: (version: String, build: String)?
     private var sessionGeneration = 0
     private var startMigrationAfterTermination = false
+    private var retryInstallAfterTermination = false
 
     private var awaitingHealth = false
 
@@ -2249,6 +2250,22 @@ final class ApplicationUpdateCoordinator {
         startSession(targetVersion: nil, targetBuild: nil, requestRollback: true)
     }
 
+    var canRetryInstall: Bool {
+        retainedInstallHandler != nil && deferredTarget != nil
+    }
+
+    func retryInstall() {
+        guard canRetryInstall, let target = deferredTarget else { return }
+        if process != nil {
+            retryInstallAfterTermination = true
+            return
+        }
+        startMigrationAfterTermination = false
+        updatePending = true
+        startSession(targetVersion: target.version, targetBuild: target.build,
+                     requestRollback: false)
+    }
+
     func submitHealth() {
         guard awaitingHealth, let health = healthPayload() else { return }
         awaitingHealth = false
@@ -2314,6 +2331,11 @@ final class ApplicationUpdateCoordinator {
                 self.process = nil
                 self.input = nil
                 self.binding = nil
+                if self.retryInstallAfterTermination {
+                    self.retryInstallAfterTermination = false
+                    self.retryInstall()
+                    return
+                }
                 if !self.terminalSeen {
                     self.onStateChange?(
                         "blocked",
@@ -2388,7 +2410,14 @@ final class ApplicationUpdateCoordinator {
 
     private func handle(_ action: ApplicationUpdateAction) {
         switch action.action {
-        case "idle", "committed", "aborted", "rolled_back":
+        case "aborted":
+            terminalSeen = true
+            updatePending = canRetryInstall
+            // Sparkle only supplies this callback once. Keep the downloaded
+            // candidate and rerun the full safety checks when the user retries.
+            onStateChange?(action.action, action.failure)
+            startMigrationAfterTermination = true
+        case "idle", "committed", "rolled_back":
             terminalSeen = true
             updatePending = false
             retainedInstallHandler = nil
@@ -4851,7 +4880,29 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
 
     private func updateStateChanged(_ state: String, detail: String?) {
         switch state {
-        case "idle", "committed", "aborted", "rolled_back":
+        case "aborted":
+            if migrationCommitted { _ = activateNativeRecording() }
+            guard let window else { return }
+            let alert = NSAlert()
+            alert.messageText = "Yulu could not prepare the update"
+            alert.informativeText = detail == "previous-application-preservation-failed"
+                ? "The previous application could not be backed up. Your current application and recordings are still available."
+                : "The update stopped before installation. Your current application and recordings are still available."
+            let canRetry = updateCoordinator?.canRetryInstall == true
+            if canRetry {
+                alert.informativeText += " Retry installation using the downloaded update."
+                alert.addButton(withTitle: "Retry Installation")
+                alert.addButton(withTitle: "Later")
+            } else {
+                alert.informativeText += " Choose Check for Updates to try again."
+                alert.addButton(withTitle: "OK")
+            }
+            alert.beginSheetModal(for: window) { [weak self] response in
+                if canRetry && response == .alertFirstButtonReturn {
+                    self?.updateCoordinator?.retryInstall()
+                }
+            }
+        case "idle", "committed", "rolled_back":
             if migrationCommitted { _ = activateNativeRecording() }
         case "deferred":
             window?.contentView = centeredMessage(

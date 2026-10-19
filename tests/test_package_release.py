@@ -202,8 +202,7 @@ def test_package_writes_only_yulu_app_and_applications_alias_to_dmg(tmp_path):
     assert "-fs HFS+" in invocations
     assert "-volname Yulu" in invocations
     assert "convert" in invocations
-    assert "-format UDZO" in invocations
-    assert "-imagekey zlib-level=9" in invocations
+    assert "-format UDBZ" in invocations
 
 
 def test_package_requires_hdiutil_instead_of_falling_back_to_repository_zip(tmp_path):
