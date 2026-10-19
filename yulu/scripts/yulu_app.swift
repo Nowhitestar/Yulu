@@ -2179,6 +2179,7 @@ final class ApplicationUpdateCoordinator {
     private var sessionGeneration = 0
     private var startMigrationAfterTermination = false
     private var retryInstallAfterTermination = false
+    private var installPreparationFailed = false
 
     private var awaitingHealth = false
 
@@ -2240,6 +2241,10 @@ final class ApplicationUpdateCoordinator {
     func prepareInstallBeforeTermination(installHandler: @escaping () -> Void) {
         guard updatePending, !installAuthorized, !rollbackHelperLaunched,
               let target = announcedTarget else { return }
+        if canRetryInstall {
+            retryInstall()
+            return
+        }
         prepareInstall(targetVersion: target.version, targetBuild: target.build,
                        installHandler: installHandler)
     }
@@ -2251,7 +2256,7 @@ final class ApplicationUpdateCoordinator {
     }
 
     var canRetryInstall: Bool {
-        retainedInstallHandler != nil && deferredTarget != nil
+        installPreparationFailed && retainedInstallHandler != nil && deferredTarget != nil
     }
 
     func retryInstall() {
@@ -2261,6 +2266,7 @@ final class ApplicationUpdateCoordinator {
             return
         }
         startMigrationAfterTermination = false
+        installPreparationFailed = false
         updatePending = true
         startSession(targetVersion: target.version, targetBuild: target.build,
                      requestRollback: false)
@@ -2412,6 +2418,7 @@ final class ApplicationUpdateCoordinator {
         switch action.action {
         case "aborted":
             terminalSeen = true
+            installPreparationFailed = true
             updatePending = canRetryInstall
             // Sparkle only supplies this callback once. Keep the downloaded
             // candidate and rerun the full safety checks when the user retries.
