@@ -60,9 +60,7 @@ swift-build:
 
 web-navigation-smoke:
 	@if command -v swiftc >/dev/null 2>&1; then \
-		mkdir -p "$(SWIFT_BUILD_DIR)"; \
-		bash yulu/scripts/build_yulu_shell.sh "$(SWIFT_BUILD_DIR)/yulu-web-navigation-smoke" -D YULU_DEVELOPMENT_SMOKE && \
-		"$(SWIFT_BUILD_DIR)/yulu-web-navigation-smoke" --web-navigation-smoke; \
+		python3 -m pytest -q tests/test_yulu_app_shell.py::test_native_webview_confirmation_and_prompt_callbacks; \
 	else \
 		echo "swiftc missing; skipping native WebView smoke"; \
 	fi

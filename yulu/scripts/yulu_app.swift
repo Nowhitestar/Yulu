@@ -5473,8 +5473,17 @@ func runIconVisibilitySmoke() throws {
     try writeJSON(["dockHideRestore": true, "closedWindowReopen": true, "minimizedWindowReopen": true])
 }
 
+func finishNativeWindowSmoke() -> Never {
+    // Let AppKit process the activation-policy change before normal termination.
+    // Direct exit from a command-line GUI test can leave a running tile in Dock.
+    let app = NSApplication.shared
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { app.terminate(nil) }
+    app.run()
+    exit(0)
+}
+
 if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--icon-visibility-smoke" {
-    do { try runIconVisibilitySmoke(); NSApplication.shared.terminate(nil); exit(0) }
+    do { try runIconVisibilitySmoke(); finishNativeWindowSmoke() }
     catch {
         fputs("development icon visibility smoke failed: \(error.localizedDescription)\n", stderr)
         exit(1)
@@ -5484,8 +5493,7 @@ let port = Int(ProcessInfo.processInfo.environment["YULU_UI_PORT"] ?? "7777") ??
 if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--web-navigation-smoke" {
     do {
         try writeJSON(runWebNavigationSmoke())
-        NSApplication.shared.terminate(nil)
-        exit(0)
+        finishNativeWindowSmoke()
     } catch {
         fputs("development web navigation smoke failed: \(error.localizedDescription)\n", stderr)
         exit(1)
