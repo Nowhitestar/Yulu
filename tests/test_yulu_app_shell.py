@@ -18,6 +18,10 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+NATIVE_UI_TESTS_ENABLED = (
+    os.environ.get("CI") == "true"
+    or os.environ.get("YULU_RUN_NATIVE_UI_TESTS") == "1"
+)
 SCRIPTS = ROOT / "yulu" / "scripts"
 OUTER_INFO = SCRIPTS / "Yulu.app" / "Contents" / "Info.plist"
 CAPTURE_INFO = (
@@ -55,8 +59,20 @@ def test_shell_late_startup_health_recovers_without_resetting_services():
     assert "retry(" not in slow_poll
 
 
-def compile_yulu_app_inspector(tmp_path: Path, *flags: str) -> Path:
+def compile_yulu_app_inspector(tmp_path: Path, *flags: str, app_bundle: bool = False) -> Path:
     binary = tmp_path / "yulu_app"
+    if app_bundle:
+        contents = tmp_path / "Yulu Native Test.app" / "Contents"
+        binary = contents / "MacOS" / "yulu_app"
+        binary.parent.mkdir(parents=True)
+        with (contents / "Info.plist").open("wb") as stream:
+            plistlib.dump({
+                "CFBundleIdentifier": "com.yulu.native-smoke",
+                "CFBundleName": "Yulu Native Test",
+                "CFBundleExecutable": "yulu_app",
+                "CFBundlePackageType": "APPL",
+                "LSUIElement": True,
+            }, stream)
     result = subprocess.run(
         [
             "bash",
@@ -73,8 +89,12 @@ def compile_yulu_app_inspector(tmp_path: Path, *flags: str) -> Path:
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Native macOS window behavior")
+@pytest.mark.skipif(
+    not NATIVE_UI_TESTS_ENABLED,
+    reason="Desktop GUI tests require CI or YULU_RUN_NATIVE_UI_TESTS=1",
+)
 def test_dock_icon_toggle_preserves_window_and_reopen(tmp_path: Path):
-    binary = compile_yulu_app_inspector(tmp_path, "-D", "YULU_DEVELOPMENT_SMOKE")
+    binary = compile_yulu_app_inspector(tmp_path, "-D", "YULU_DEVELOPMENT_SMOKE", app_bundle=True)
     result = subprocess.run(
         [str(binary), "--icon-visibility-smoke"], capture_output=True, text=True, timeout=20
     )
@@ -94,6 +114,22 @@ def test_shell_edit_shortcuts_use_the_webview_first_responder():
         assert f'#selector(NSText.{action}(_:)), keyEquivalent: "{key}"' in edit
     assert "target =" not in edit
     assert "NSPasteboard" not in edit
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native macOS WebKit dialogs")
+@pytest.mark.skipif(
+    not NATIVE_UI_TESTS_ENABLED,
+    reason="Desktop GUI tests require CI or YULU_RUN_NATIVE_UI_TESTS=1",
+)
+def test_native_webview_confirmation_and_prompt_callbacks(tmp_path: Path):
+    binary = compile_yulu_app_inspector(tmp_path, "-D", "YULU_DEVELOPMENT_SMOKE", app_bundle=True)
+    result = subprocess.run(
+        [str(binary), "--web-navigation-smoke"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["javaScriptDialogs"] is True
 
 
 def test_shell_webview_has_initial_layout_and_explicit_loading_outcomes():

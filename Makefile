@@ -58,11 +58,11 @@ swift-build:
 	fi
 
 
+# Native GUI checks run on CI. Local opt-in: YULU_RUN_NATIVE_UI_TESTS=1 make web-navigation-smoke
+# macOS may retain terminated test applications in Dock until Dock is refreshed.
 web-navigation-smoke:
 	@if command -v swiftc >/dev/null 2>&1; then \
-		mkdir -p "$(SWIFT_BUILD_DIR)"; \
-		bash yulu/scripts/build_yulu_shell.sh "$(SWIFT_BUILD_DIR)/yulu-web-navigation-smoke" -D YULU_DEVELOPMENT_SMOKE && \
-		"$(SWIFT_BUILD_DIR)/yulu-web-navigation-smoke" --web-navigation-smoke; \
+		$(PYTHON) -m pytest -q tests/test_yulu_app_shell.py::test_native_webview_confirmation_and_prompt_callbacks; \
 	else \
 		echo "swiftc missing; skipping native WebView smoke"; \
 	fi
