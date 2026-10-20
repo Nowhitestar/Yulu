@@ -4424,7 +4424,11 @@ struct WebNavigationSmokeReport: Encodable {
 }
 
 func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
-    _ = NSApplication.shared
+    let app = NSApplication.shared
+    defer {
+        app.windows.forEach { $0.orderOut(nil) }
+        app.setActivationPolicy(.prohibited)
+    }
     var opened: [String] = []
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = .nonPersistent()
@@ -5442,6 +5446,7 @@ func runIconVisibilitySmoke() throws {
     defer {
         shell.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
         app.windows.forEach { $0.orderOut(nil) }
+        app.setActivationPolicy(.prohibited)
         previousApp?.activate(options: [.activateIgnoringOtherApps])
     }
     guard let window = app.windows.first(where: { $0.title == "Yulu" }) else {
