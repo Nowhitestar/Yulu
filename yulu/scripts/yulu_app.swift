@@ -4343,6 +4343,57 @@ final class ApplicationWebContent: NSObject, WKUIDelegate, WKNavigationDelegate 
         showLoadFailure("The web content process stopped.")
     }
 
+    private func dialogWindow(_ webView: WKWebView, frame: WKFrameInfo) -> NSWindow? {
+        let origin = frame.securityOrigin
+        guard webView === self.webView, frame.isMainFrame,
+              origin.protocol == "http", origin.host == "127.0.0.1", origin.port == port else { return nil }
+        return webView.window
+    }
+
+    private func javaScriptAlert(_ message: String, cancellable: Bool) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = "Yulu"
+        alert.informativeText = message
+        let chinese = Locale.preferredLanguages.first?.hasPrefix("zh") == true
+        alert.addButton(withTitle: chinese ? "确定" : "OK")
+        if cancellable {
+            alert.addButton(withTitle: chinese ? "取消" : "Cancel")
+        }
+        return alert
+    }
+
+    // WKWebView otherwise silently dismisses window.confirm/window.prompt.
+    // Keep these dialogs attached to the originating, trusted application window.
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        guard let window = dialogWindow(webView, frame: frame) else { completionHandler(false); return }
+        javaScriptAlert(message, cancellable: true).beginSheetModal(for: window) { response in
+            completionHandler(response == .alertFirstButtonReturn)
+        }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        guard let window = dialogWindow(webView, frame: frame) else { completionHandler(); return }
+        javaScriptAlert(message, cancellable: false).beginSheetModal(for: window) { _ in
+            completionHandler()
+        }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (String?) -> Void) {
+        guard let window = dialogWindow(webView, frame: frame) else { completionHandler(nil); return }
+        let alert = javaScriptAlert(prompt, cancellable: true)
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        input.stringValue = defaultText ?? ""
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        alert.beginSheetModal(for: window) { response in
+            completionHandler(response == .alertFirstButtonReturn ? input.stringValue : nil)
+        }
+    }
+
     func webView(
         _ webView: WKWebView,
         createWebViewWith configuration: WKWebViewConfiguration,
@@ -4368,6 +4419,7 @@ struct WebNavigationSmokeReport: Encodable {
     let browserOpenCount: Int
     let delayedApplicationReady = true
     let webProcessFailureRecovery = true
+    let javaScriptDialogs = true
     let formalAcceptance = false
 }
 
@@ -4438,6 +4490,45 @@ func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
         throw NSError(domain: "WebNavigationSmoke", code: 7,
                       userInfo: [NSLocalizedDescriptionKey: "reused WebView did not reattach"])
     }
+    func assertDialog(_ script: String, response: NSApplication.ModalResponse?, expected: String,
+                      inputText: String? = nil) throws {
+        var completed = false
+        var result: String?
+        var failure: Error?
+        var sheetSeen = false
+        content.webView.evaluateJavaScript(script) { value, error in
+            result = value as? String
+            failure = error
+            completed = true
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while !completed && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            if !sheetSeen, let sheet = window.attachedSheet {
+                sheetSeen = true
+                if let inputText, let input = sheet.initialFirstResponder as? NSTextField {
+                    guard input.stringValue == "Original title" else {
+                        throw NSError(domain: "WebNavigationSmoke", code: 11,
+                                      userInfo: [NSLocalizedDescriptionKey: "prompt lost its default text"])
+                    }
+                    input.stringValue = inputText
+                }
+                window.endSheet(sheet, returnCode: response ?? .alertSecondButtonReturn)
+            }
+        }
+        if let failure { throw failure }
+        guard completed, result == expected, sheetSeen == (response != nil) else {
+            throw NSError(domain: "WebNavigationSmoke", code: 12,
+                          userInfo: [NSLocalizedDescriptionKey: "JavaScript dialog result or sheet mismatch"])
+        }
+    }
+    try assertDialog("String(window.confirm('Delete test recording?'))", response: .alertFirstButtonReturn, expected: "true")
+    try assertDialog("String(window.confirm('Delete test recording?'))", response: .alertSecondButtonReturn, expected: "false")
+    try assertDialog("String(window.prompt('Rename recording', 'Original title'))", response: .alertFirstButtonReturn,
+                     expected: "Renamed title", inputText: "Renamed title")
+    try assertDialog("String(window.prompt('Rename recording', 'Original title'))", response: .alertSecondButtonReturn, expected: "null")
+    try assertDialog("window.alert('Test message'); 'acknowledged'", response: .alertFirstButtonReturn, expected: "acknowledged")
+
     let authorizationURL = "https://accounts.x.ai/oauth2/device?user_code=YULU-TEST"
     let manualURL = "https://accounts.x.ai/oauth2/device?user_code=MANUAL-TEST"
     var scriptCompleted = false
@@ -4513,6 +4604,8 @@ func runWebNavigationSmoke() throws -> WebNavigationSmokeReport {
                           userInfo: [NSLocalizedDescriptionKey: "untrusted source fixture did not load"])
         }
         try assertNoBrowserOpen("window.open('https://accounts.x.ai/oauth2/device', '_blank'); true")
+        try assertDialog("String(window.confirm('Untrusted dialog'))", response: nil, expected: "false")
+        try assertDialog("String(window.prompt('Untrusted prompt'))", response: nil, expected: "null")
     }
     window.orderOut(nil)
     return WebNavigationSmokeReport(browserOpenCount: opened.count)

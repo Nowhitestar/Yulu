@@ -96,6 +96,18 @@ def test_shell_edit_shortcuts_use_the_webview_first_responder():
     assert "NSPasteboard" not in edit
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native macOS WebKit dialogs")
+def test_native_webview_confirmation_and_prompt_callbacks(tmp_path: Path):
+    binary = compile_yulu_app_inspector(tmp_path, "-D", "YULU_DEVELOPMENT_SMOKE")
+    result = subprocess.run(
+        [str(binary), "--web-navigation-smoke"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["javaScriptDialogs"] is True
+
+
 def test_shell_webview_has_initial_layout_and_explicit_loading_outcomes():
     source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
     web = source.split("final class ApplicationWebContent:", 1)[1].split(
