@@ -18,6 +18,10 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+NATIVE_UI_TESTS_ENABLED = (
+    os.environ.get("CI") == "true"
+    or os.environ.get("YULU_RUN_NATIVE_UI_TESTS") == "1"
+)
 SCRIPTS = ROOT / "yulu" / "scripts"
 OUTER_INFO = SCRIPTS / "Yulu.app" / "Contents" / "Info.plist"
 CAPTURE_INFO = (
@@ -85,6 +89,10 @@ def compile_yulu_app_inspector(tmp_path: Path, *flags: str, app_bundle: bool = F
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Native macOS window behavior")
+@pytest.mark.skipif(
+    not NATIVE_UI_TESTS_ENABLED,
+    reason="Desktop GUI tests require CI or YULU_RUN_NATIVE_UI_TESTS=1",
+)
 def test_dock_icon_toggle_preserves_window_and_reopen(tmp_path: Path):
     binary = compile_yulu_app_inspector(tmp_path, "-D", "YULU_DEVELOPMENT_SMOKE", app_bundle=True)
     result = subprocess.run(
@@ -109,6 +117,10 @@ def test_shell_edit_shortcuts_use_the_webview_first_responder():
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Native macOS WebKit dialogs")
+@pytest.mark.skipif(
+    not NATIVE_UI_TESTS_ENABLED,
+    reason="Desktop GUI tests require CI or YULU_RUN_NATIVE_UI_TESTS=1",
+)
 def test_native_webview_confirmation_and_prompt_callbacks(tmp_path: Path):
     binary = compile_yulu_app_inspector(tmp_path, "-D", "YULU_DEVELOPMENT_SMOKE", app_bundle=True)
     result = subprocess.run(
