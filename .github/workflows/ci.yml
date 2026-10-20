@@ -161,7 +161,7 @@ jobs:
             .ci-build/meeting_prompt
 
       - name: Native WebView navigation regression (not formal acceptance)
-        run: make web-navigation-smoke
+        run: make PYTHON=.venv-ci/bin/python web-navigation-smoke
 
       - name: Skill manifest sanity (skills/yulu/SKILL.md)
         run: |

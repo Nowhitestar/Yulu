@@ -62,7 +62,7 @@ swift-build:
 # macOS may retain terminated test applications in Dock until Dock is refreshed.
 web-navigation-smoke:
 	@if command -v swiftc >/dev/null 2>&1; then \
-		python3 -m pytest -q tests/test_yulu_app_shell.py::test_native_webview_confirmation_and_prompt_callbacks; \
+		$(PYTHON) -m pytest -q tests/test_yulu_app_shell.py::test_native_webview_confirmation_and_prompt_callbacks; \
 	else \
 		echo "swiftc missing; skipping native WebView smoke"; \
 	fi
