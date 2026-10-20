@@ -5474,7 +5474,7 @@ func runIconVisibilitySmoke() throws {
 }
 
 if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--icon-visibility-smoke" {
-    do { try runIconVisibilitySmoke(); exit(0) }
+    do { try runIconVisibilitySmoke(); NSApplication.shared.terminate(nil); exit(0) }
     catch {
         fputs("development icon visibility smoke failed: \(error.localizedDescription)\n", stderr)
         exit(1)
@@ -5484,6 +5484,7 @@ let port = Int(ProcessInfo.processInfo.environment["YULU_UI_PORT"] ?? "7777") ??
 if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--web-navigation-smoke" {
     do {
         try writeJSON(runWebNavigationSmoke())
+        NSApplication.shared.terminate(nil)
         exit(0)
     } catch {
         fputs("development web navigation smoke failed: \(error.localizedDescription)\n", stderr)
