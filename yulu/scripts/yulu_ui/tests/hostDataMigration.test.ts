@@ -18,7 +18,6 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { HostStore } from "../src/hostStore.js";
-import { createAgentSession } from "../src/agentSessionStore.js";
 import { prepareHostDurableData } from "../src/hostDataMigration.js";
 import { isAuthorizedToken } from "../src/mcp.js";
 import { resolveHostPaths } from "../src/paths.js";
@@ -65,10 +64,10 @@ describe("Host durable-data migration", () => {
           output_dir: "~/Movies/Yulu",
           half_duplex: true,
         },
-        transcription: { engine: "local", language: "zh" },
-        intelligence: {
-          summary: { provider: "agent", model: "runtime-managed" },
-          conversation: { provider: "agent", model: "runtime-managed" },
+        transcription: {
+          engine: "local",
+          language: "zh",
+          dictation: { text_provider: "none", text_model: "grok-4.6" },
         },
         agent_pipeline: { auto_process_recordings: true },
         llm: { enabled: false, command: null, agent: { provider: "auto" } },
@@ -80,6 +79,13 @@ describe("Host durable-data migration", () => {
           prompt_cooldown_sec: 1800,
         },
       });
+
+      // A fresh config carries no setting of the retired conversation (ADR-010).
+      expect(persisted.intelligence).toEqual({ summary: { provider: "agent", model: "runtime-managed" } });
+      expect(persisted).not.toHaveProperty("agent_console");
+      expect(persisted.transcription.dictation).not.toHaveProperty("voice_chat_scope");
+      expect(persisted.transcription.dictation).not.toHaveProperty("cleanup_model");
+      expect(persisted.status_agent.hotkeys).not.toHaveProperty("voice_chat");
 
       const response = await fetch(`http://127.0.0.1:${server.address.port}/healthz`);
       expect(response.status).toBe(200);
@@ -518,13 +524,13 @@ describe("Host durable-data migration", () => {
     legacyHost.deferActivationJourney();
     legacyHost.close();
 
-    const legacySession = createAgentSession(legacy, {
-      provider: "codex",
-      model: "gpt-5.6-sol",
-      title: "Legacy conversation",
-      purpose: "ask",
-    });
-    const legacySessionsBefore = readFileSync(join(legacy, "agent-sessions.json"), "utf8");
+    // The session store of the retired Yulu-owned conversation (ADR-010): still
+    // carried over as user data, then archived unread when the Host starts.
+    const legacySessionsBefore = `${JSON.stringify({
+      version: 9,
+      sessions: [{ id: "legacy-session", agent: "codex", title: "Legacy conversation", messages: [] }],
+    }, null, 2)}\n`;
+    writeFileSync(join(legacy, "agent-sessions.json"), legacySessionsBefore, { mode: 0o644 });
     const legacyTaskId = "11111111-1111-4111-8111-111111111111";
     const legacyTaskFile = join(legacy, "agent-tasks", legacyTaskId, "transcript.txt");
     mkdirSync(dirname(legacyTaskFile), { recursive: true });
@@ -625,21 +631,15 @@ describe("Host durable-data migration", () => {
 
       const uiTokenResponse = await fetch(`${baseUrl}/api/ui-token`);
       const uiToken = (await uiTokenResponse.json() as { token: string }).token;
-      const rename = await fetch(`${baseUrl}/trpc/agentSessions.rename`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${uiToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ id: legacySession.id, title: "Standard conversation" }),
-      });
-      const renameBody = await rename.text();
-      expect(rename.status, renameBody).toBe(200);
-      const standardSessions = JSON.parse(
-        readFileSync(join(paths.durableDataDir, "agent-sessions.json"), "utf8"),
-      ) as { sessions: { id: string; title: string }[] };
-      expect(standardSessions.sessions.find(({ id }) => id === legacySession.id)?.title)
-        .toBe("Standard conversation");
+      expect(existsSync(join(paths.durableDataDir, "agent-sessions.json"))).toBe(false);
+      const sessionArchives = readdirSync(paths.durableDataDir)
+        .filter((name) => name.startsWith("agent-sessions.retired."));
+      expect(sessionArchives).toHaveLength(1);
+      const sessionArchive = join(paths.durableDataDir, sessionArchives[0]!);
+      expect(readFileSync(sessionArchive, "utf8")).toBe(legacySessionsBefore);
+      expect(statSync(sessionArchive).mode & 0o777).toBe(0o600);
+      const retiredRoute = await fetch(`${baseUrl}/trpc/agentSessions.list`);
+      expect(retiredRoute.status).toBe(404);
       expect(readFileSync(join(legacy, "agent-sessions.json"), "utf8"))
         .toBe(legacySessionsBefore);
       expect(readFileSync(legacyTaskFile, "utf8")).toBe("legacy task workspace\n");

@@ -55,8 +55,6 @@ describe("recordingRouter", () => {
       launcherPid: undefined,
       dictationActive: false,
       dictationIntent: undefined,
-      voiceChatWindowVisible: false,
-      voiceChatWindowUrl: undefined,
     });
   });
 
@@ -145,20 +143,6 @@ describe("recordingRouter", () => {
     } as unknown as AppContext;
     const caller = createCaller(recordingRouter, ctx);
     const r = await caller.translate({ targetLanguage: "Japanese" });
-    expect(r).toEqual({ stateBefore: "idle", stateAfter: "recording" });
-  });
-
-  it("voiceChat() is the only new UI action that dispatches voice_chat", async () => {
-    fake = await startFakeSocket((req) => {
-      expect(req).toEqual({ action: "voice_chat" });
-      return { ok: true, state_before: "idle", state_after: "recording" };
-    });
-    const ctx = {
-      paths: { statusAgentSock: fake.path },
-      pubsub: { publish: () => {} },
-    } as unknown as AppContext;
-    const caller = createCaller(recordingRouter, ctx);
-    const r = await caller.voiceChat();
     expect(r).toEqual({ stateBefore: "idle", stateAfter: "recording" });
   });
 

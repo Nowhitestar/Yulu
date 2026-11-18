@@ -5,8 +5,6 @@ describe("native Agent authorization launcher", () => {
   it.each([
     ["codex", "/fake/bin/codex", "'/fake/bin/codex' 'login'"],
     ["claude-code", "/fake/bin/claude", "'/fake/bin/claude' 'auth' 'login'"],
-    ["hermes", "/fake/bin/hermes", "'/fake/bin/hermes' 'model'"],
-    ["openclaw", "/fake/bin/openclaw", "'/fake/bin/openclaw' 'configure'"],
   ] as const)("opens the fixed %s runtime-owned login command in Terminal", async (
     adapter,
     executable,

@@ -89,10 +89,10 @@ describe("Codex Agent adapter conformance", () => {
       authorizationClass: "api-key",
       remediation: "Codex API-key authorization cannot be used as Runtime-owned OAuth; run /fake/codex login without --with-api-key to complete ChatGPT OAuth, then refresh this connection",
     });
-    await expect(adapter.probe({ model: "gpt-5.6-sol" })).resolves.toEqual({
+    await expect(adapter.probeSummary({ model: "gpt-5.6-sol" })).resolves.toEqual({
       status: "failed",
       reason: "authorization_required",
-      remediation: "Codex API-key authorization cannot be used as Runtime-owned OAuth; run /fake/codex login without --with-api-key to complete ChatGPT OAuth, then test Conversation again",
+      remediation: "Codex API-key authorization cannot be used as Runtime-owned OAuth; run /fake/codex login without --with-api-key to complete ChatGPT OAuth, then test Summary again",
     });
     expect(runtime.runTurn).not.toHaveBeenCalled();
   });
@@ -108,19 +108,19 @@ describe("Codex Agent adapter conformance", () => {
     });
     const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
 
-    await expect(adapter.probe({ model: "gpt-5.6-sol" })).resolves.toMatchObject({
+    await expect(adapter.probeSummary({ model: "gpt-5.6-sol" })).resolves.toMatchObject({
       status: "failed",
       reason: "unsupported_runtime",
-      remediation: `Upgrade Codex to ${CODEX_MINIMUM_VERSION} or newer, then test Conversation again`,
+      remediation: `Upgrade Codex to ${CODEX_MINIMUM_VERSION} or newer, then test Summary again`,
     });
     expect(runtime.runTurn).not.toHaveBeenCalled();
   });
 
-  it("runs a bounded tool-free Conversation probe and returns redacted exact Runtime Evidence", async () => {
+  it("runs a bounded tool-free Summary probe and returns redacted exact Runtime Evidence", async () => {
     const runtime = client();
     const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
 
-    await expect(adapter.probe({ model: "gpt-5.6-sol" })).resolves.toEqual({
+    await expect(adapter.probeSummary({ model: "gpt-5.6-sol" })).resolves.toEqual({
       status: "ready",
       reason: null,
       remediation: null,
@@ -145,29 +145,6 @@ describe("Codex Agent adapter conformance", () => {
       model: "gpt-5.6-sol",
       prompt: "Reply with exactly YULU_CODEX_PROBE_OK and do not use tools.",
       probe: true,
-      timeoutMs: 30_000,
-    });
-  });
-
-  it("uses the same exact-model tool-free adapter for Summary probes", async () => {
-    const runtime = client();
-    const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
-
-    await expect(adapter.probeSummary({ model: "gpt-5.6-sol" })).resolves.toMatchObject({
-      status: "ready",
-      evidence: {
-        requestedProvider: "openai",
-        requestedModel: "gpt-5.6-sol",
-        actualProvider: "openai",
-        actualModel: "gpt-5.6-sol",
-        fallbackOccurred: false,
-        terminalStatus: "ready",
-      },
-    });
-    expect(runtime.runTurn).toHaveBeenCalledWith({
-      model: "gpt-5.6-sol",
-      prompt: "Reply with exactly YULU_CODEX_PROBE_OK and do not use tools.",
-      probe: true,
       toolFree: true,
       timeoutMs: 30_000,
     });
@@ -184,7 +161,7 @@ describe("Codex Agent adapter conformance", () => {
     });
     const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
 
-    await expect(adapter.probe({ model: "gpt-5.6-sol" })).resolves.toEqual({
+    await expect(adapter.probeSummary({ model: "gpt-5.6-sol" })).resolves.toEqual({
       status: "failed",
       reason: "readiness_failed",
       remediation: "Codex tool-free isolation failed before turn/start; no model request was sent",
@@ -199,7 +176,7 @@ describe("Codex Agent adapter conformance", () => {
     });
     const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
 
-    await expect(adapter.probe({ model: "gpt-5.6-sol" })).resolves.toMatchObject({
+    await expect(adapter.probeSummary({ model: "gpt-5.6-sol" })).resolves.toMatchObject({
       status: "failed",
       reason: "unknown_outcome",
       remediation: "Codex probe dispatch could not be classified; inspect the runtime before creating a new attempt and do not retry automatically",
@@ -357,47 +334,15 @@ describe("Codex Agent adapter conformance", () => {
     });
     const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
 
-    await expect(adapter.probe({ model: "gpt-5.6-sol" })).resolves.toMatchObject({
+    await expect(adapter.probeSummary({ model: "gpt-5.6-sol" })).resolves.toMatchObject({
       status: "failed",
       reason: "identity_mismatch",
-      remediation: "Codex did not prove the exact requested Conversation identity; restore this connection and model, then test again",
+      remediation: "Codex did not prove the exact requested Summary identity; restore this connection and model, then test again",
     });
     expect(runtime.runTurn).toHaveBeenCalledTimes(1);
   });
 
-  it("starts or resumes only the exact requested thread through the same production adapter", async () => {
-    const runtime = client();
-    const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
-
-    const started = await adapter.converse({ model: "gpt-5.6-sol", prompt: "first" });
-    const resumed = await adapter.converse({
-      model: "gpt-5.6-sol",
-      prompt: "second",
-      nativeSessionId: started.nativeSessionId,
-    });
-
-    expect(started).toMatchObject({
-      answer: "Pinned answer",
-      nativeSessionId: "019f0000-0000-7000-8000-000000000135",
-      usedFallback: false,
-    });
-    expect(resumed.nativeSessionId).toBe(started.nativeSessionId);
-    expect(runtime.runTurn).toHaveBeenNthCalledWith(1, {
-      model: "gpt-5.6-sol",
-      prompt: "first",
-      probe: false,
-      timeoutMs: 300_000,
-    });
-    expect(runtime.runTurn).toHaveBeenNthCalledWith(2, {
-      model: "gpt-5.6-sol",
-      prompt: "second",
-      probe: false,
-      timeoutMs: 300_000,
-      nativeSessionId: started.nativeSessionId,
-    });
-  });
-
-  it("preserves the exact native thread and unknown Runtime Evidence when a sent turn is not terminal", async () => {
+  it("preserves the exact native thread and unknown Runtime Evidence when a sent Summary turn is not terminal", async () => {
     const runtime = client({
       runTurn: vi.fn(async () => ({
         answer: "",
@@ -414,8 +359,13 @@ describe("Codex Agent adapter conformance", () => {
     });
     const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
 
-    await expect(adapter.converse({ model: "gpt-5.6-sol", prompt: "first" })).rejects.toMatchObject({
+    await expect(adapter.summarize({
+      model: "gpt-5.6-sol",
+      instructions: "Summarize decisions.",
+      transcript: "Committed transcript.",
+    })).rejects.toMatchObject({
       name: "CodexRunError",
+      message: "Codex Summary outcome is unknown; do not retry automatically or commit staged output",
       nativeSessionId: "019f0000-0000-7000-8000-000000000777",
       unknownOutcome: true,
       evidence: expect.objectContaining({

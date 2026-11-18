@@ -32,7 +32,20 @@ interface ConfigUpdateResult {
 
 // Shared spy so tests can assert config.update was called on a field edit.
 // vi.hoisted keeps it available inside the hoisted vi.mock factory below.
-const { configUpdateSpy, promptsListSpy, previewSoundSpy, restartSpy, recording, statusAgent, mcp } = vi.hoisted(() => ({
+const { configUpdateSpy, promptsListSpy, previewSoundSpy, restartSpy, recording, statusAgent, mcp, dictationText } = vi.hoisted(() => ({
+  // What the Host reports for the explicit dictation text selection (ADR-010).
+  dictationText: {
+    status: {
+      provider: "none" as "none" | "xai",
+      model: "grok-4.6",
+      audioEngine: "local" as "local" | "xai",
+      credentialSource: null as "oauth" | "api-key" | null,
+      disclosure: { accepted: false, disclosureVersion: "xai-dictation-text-v1" },
+      active: false,
+    },
+    acceptDisclosure: vi.fn(async () => ({ accepted: true, disclosureVersion: "xai-dictation-text-v1" })),
+    invalidate: vi.fn(async () => undefined),
+  },
   mcp: {
     status: {
       available: true,
@@ -72,7 +85,6 @@ vi.mock("../../../web/src/trpc.js", () => {
     },
     intelligence: {
       summary: { provider: "agent", model: "runtime-managed" },
-      conversation: { provider: "xai", model: "grok-4.6" },
     },
     llm: { enabled: false, command: [] },
     status_agent: {
@@ -101,7 +113,7 @@ vi.mock("../../../web/src/trpc.js", () => {
     xaiAudio: { status: { invalidate: () => {} } },
     agentConnections: { view: { invalidate: () => Promise.resolve() } },
     integrations: { calendarSources: { invalidate: () => Promise.resolve() } },
-    agentCalendarConnector: { view: { invalidate: () => Promise.resolve() } },
+    dictationText: { status: { invalidate: dictationText.invalidate } },
     onboarding: { status: { invalidate: () => Promise.resolve() } },
   };
   return {
@@ -189,47 +201,16 @@ vi.mock("../../../web/src/trpc.js", () => {
           { id: "agent-calendar-connector", outcome: null },
         ] } }) },
         adoptCalendarSource: { useMutation: noopMutation },
-        adoptAgentCalendarConnector: { useMutation: noopMutation },
         deferOptionalCapability: { useMutation: noopMutation },
       },
-      agentCalendarConnector: {
-        view: { useQuery: () => ({
-          data: {
-            connections: [],
-            selection: null,
-            readiness: {
-              status: "untested",
-              failure: null,
-              detail: "Not tested",
-              remediation: "Run the read-only test",
-              evidence: null,
-            },
-          },
-          isPending: false,
-          isError: false,
-        }) },
-        select: { useMutation: noopMutation },
-        probe: { useMutation: noopMutation },
+      dictationText: {
+        status: { useQuery: () => ({ data: dictationText.status, isPending: false }) },
+        acceptDisclosure: { useMutation: () => ({ mutateAsync: dictationText.acceptDisclosure, isPending: false }) },
       },
       mcpAgents: {
         status: { useQuery: () => ({ data: mcp.status, isPending: false }) },
         install: { useMutation: () => ({ mutate: mcp.install, isPending: false, variables: undefined }) },
         test: { useMutation: () => ({ mutate: mcp.test, isPending: false, data: undefined }) },
-      },
-      agentConsole: {
-        overview: {
-          useQuery: () => ({
-            data: {
-              agents: [{ name: "Codex CLI", connected: true }],
-              plugins: {
-                current: [
-                  { id: "calendar", label: "日历", added: true, status: "configured", statusLabel: "已配置", detail: "/agent/plugins/calendar", resolvedPath: "/agent/plugins/calendar" },
-                ],
-              },
-            },
-            isPending: false,
-          }),
-        },
       },
       agentConnections: {
         view: { useQuery: () => ({
@@ -240,7 +221,6 @@ vi.mock("../../../web/src/trpc.js", () => {
             selections: {
               transcription: { connectionId: null, model: "local" },
               summary: { connectionId: null, model: "grok-4.6" },
-              conversation: { connectionId: null, model: "grok-4.6" },
             },
           },
           isPending: false,
@@ -255,7 +235,6 @@ vi.mock("../../../web/src/trpc.js", () => {
         select: { useMutation: noopMutation },
         selectCredentialSource: { useMutation: noopMutation },
         probe: { useMutation: noopMutation },
-        createConversationProbeAttempt: { useMutation: noopMutation },
         acceptDisclosure: { useMutation: noopMutation },
         restoreDirectXai: { useMutation: noopMutation },
         authorize: { useMutation: noopMutation },
@@ -334,7 +313,6 @@ vi.mock("../../../web/src/trpc.js", () => {
           readiness: {
             transcription: { capability: "transcription", status: "untested", model: "speech-to-text", testedAt: null, detail: "尚未测试", credentialSource: null },
             summary: { capability: "summary", status: "untested", model: "grok-4.6", testedAt: null, detail: "尚未测试", credentialSource: null },
-            conversation: { capability: "conversation", status: "untested", model: "grok-4.6", testedAt: null, detail: "尚未测试", credentialSource: null },
           },
         }, error: null }) },
         authorize: { useMutation: noopMutation },
@@ -642,6 +620,32 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(voice.queryByText("听写模板")).not.toBeInTheDocument();
     expect(voice.queryByText("Dictation Cleanup")).not.toBeInTheDocument();
     expect(voice.getByRole("switch", { name: translate("zh", "settings.voice.cleanupEnabled") })).toBeInTheDocument();
+  });
+
+  it("voice: sends dictated text to xAI only after its disclosure is accepted on this page", async () => {
+    configUpdateSpy.mockClear();
+    dictationText.acceptDisclosure.mockClear();
+    dictationText.invalidate.mockClear();
+    const { container } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    const cleanup = voice.getByRole("switch", { name: translate("zh", "settings.voice.textProvider") });
+    expect(cleanup).not.toBeChecked();
+    expect(voice.getByText(translate("zh", "settings.voice.textOff"))).toBeInTheDocument();
+
+    fireEvent.click(cleanup);
+    expect(voice.getByText(translate("zh", "settings.voice.textDisclosure.body"))).toBeInTheDocument();
+    expect(dictationText.acceptDisclosure).not.toHaveBeenCalled();
+    expect(configUpdateSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(voice.getByRole("button", { name: translate("zh", "settings.voice.textDisclosure.accept") }));
+    await waitFor(() => expect(configUpdateSpy).toHaveBeenCalledWith({
+      key: "transcription.dictation.text_provider",
+      value: "xai",
+    }));
+    expect(dictationText.acceptDisclosure).toHaveBeenCalledOnce();
+    expect(dictationText.acceptDisclosure.mock.invocationCallOrder[0]!)
+      .toBeLessThan(configUpdateSpy.mock.invocationCallOrder[0]!);
+    await waitFor(() => expect(dictationText.invalidate).toHaveBeenCalled());
   });
 
   it("voice: translation only requires a target language and does not load templates", () => {

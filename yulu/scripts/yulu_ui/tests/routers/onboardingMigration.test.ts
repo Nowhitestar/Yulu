@@ -429,6 +429,14 @@ exit 0
         body: JSON.stringify({ question: "What did we decide?" }),
       });
       expect(voiceChat.status).toBe(404);
+      // So are the conversation, Agent Console and Agent Calendar Connector APIs.
+      for (const procedure of [
+        "agentSessions.list", "agentConsole.overview", "agentCalendarConnector.view", "ask.ask",
+        "agentConnections.createConversationProbeAttempt", "onboarding.adoptConversation",
+      ]) {
+        const retired = await fetch(`http://127.0.0.1:${server.address.port}/trpc/${procedure}`);
+        expect(retired.status, procedure).toBe(404);
+      }
     } finally {
       await server.close();
       if (previousPort === undefined) delete process.env.YULU_UI_PORT;

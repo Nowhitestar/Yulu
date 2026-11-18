@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { formatConversationSources, normalizeConversationSources, searchRouter } from "../../src/routers/search.js";
+import { searchRouter } from "../../src/routers/search.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -24,76 +24,6 @@ function lastCb(args: unknown[]) {
 }
 
 describe("searchRouter", () => {
-  it("keeps cross-meeting decision and owner evidence within conversation caps", () => {
-    const sources = normalizeConversationSources([
-      {
-        kind: "meeting_transcript",
-        stem: "PhoenixLaunch_20260825_010300",
-        meetingTitle: "Phoenix Launch",
-        recordedAt: "2026-08-25T01:03:00",
-        sourcePath: "/private/PhoenixLaunch.transcript.txt",
-        score: 2,
-        snippet: "Phoenix launch decision: release beta on Oct14. Mei owns the rollout checklist.",
-      },
-      {
-        kind: "meeting_transcript",
-        stem: "PhoenixReview_20260825_010400",
-        meetingTitle: "Phoenix Review",
-        recordedAt: "2026-08-25T01:04:00",
-        sourcePath: "/private/PhoenixReview.transcript.txt",
-        score: 1,
-        snippet: "Phoenix review decision: readiness review on Oct18. Arun owns reviewer feedback.",
-      },
-    ]);
-
-    const formatted = formatConversationSources(sources);
-    expect(sources).toHaveLength(2);
-    expect(formatted).toContain("release beta on Oct14");
-    expect(formatted).toContain("Mei owns the rollout checklist");
-    expect(formatted).toContain("readiness review on Oct18");
-    expect(formatted).toContain("Arun owns reviewer feedback");
-    expect(sources.every((source) => source.snippet.length <= 1_200)).toBe(true);
-    expect(formatted.length).toBeLessThanOrEqual(6_000);
-  });
-
-  it("normalizes only bounded local meeting sources for conversation", () => {
-    const hits = Array.from({ length: 10 }, (_, index) => ({
-      kind: "meeting_summary",
-      stem: `Meeting_${index}`,
-      meetingTitle: index === 0 ? `Title ${"界".repeat(10_000)}` : `Meeting ${index}`,
-      recordedAt: index === 0 ? `2026-${"1".repeat(10_000)}` : "2026-08-24T10:00:00",
-      sourcePath: `/private/meeting-${index}.summary.md`,
-      score: 10 - index,
-      snippet: index === 0
-        ? `[hit]项目[/hit]\u0000 ${"😀".repeat(700)}`
-        : `excerpt ${index}`,
-    }));
-    hits.splice(2, 0, { ...hits[1]!, snippet: "duplicate" });
-    hits.splice(3, 0, { ...hits[1]!, kind: "calendar_event" });
-    hits.splice(4, 0, { ...hits[1]!, stem: "", snippet: "malformed" });
-
-    const sources = normalizeConversationSources(hits);
-
-    expect(sources).toHaveLength(8);
-    expect(sources.map((source) => source.ref)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    expect(sources[0]).toMatchObject({
-      kind: "meeting_summary",
-      stem: "Meeting_0",
-      sourcePath: "/private/meeting-0.summary.md",
-      url: "/inbox/Meeting_0",
-    });
-    expect(sources[0]!.title).toHaveLength(200);
-    expect(sources[0]!.recordedAt).toHaveLength(64);
-    expect(sources[0]!.snippet).not.toMatch(/\[\/?hit\]|\u0000|[\uD800-\uDFFF]$/u);
-    expect(sources.every((source) => source.snippet.length <= 1_200)).toBe(true);
-    expect(sources.reduce((total, source) => total + source.snippet.length, 0)).toBeLessThanOrEqual(6_000);
-    expect(sources.reduce((total, source) =>
-      total + source.title.length + source.recordedAt.length + source.kind.length + source.snippet.length, 0)
-    ).toBeLessThanOrEqual(6_000);
-    expect(formatConversationSources(sources).length).toBeLessThanOrEqual(6_000);
-    expect(sources.filter((source) => source.stem === "Meeting_1")).toHaveLength(1);
-  });
-
   it("run() spawns python search.cli with --json and returns parsed hits", async () => {
     execFileMock.mockImplementation((...args: unknown[]) => {
       lastCb(args)?.(null, { stdout: JSON.stringify(FAKE_HITS), stderr: "" });

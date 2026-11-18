@@ -38,8 +38,9 @@ describe("settingsRegistry", () => {
   it("llm.command 改完无需动作(读取即生效)", () => {
     expect(reloadFor("llm.command")).toEqual({ kind: "none" });
   });
-  it("registers independent summary and conversation provider/model selections", () => {
-    for (const path of ["intelligence.summary", "intelligence.conversation"]) {
+  it("registers the summary provider/model selection and no conversation selection", () => {
+    expect(defFor("intelligence.conversation")).toBeUndefined();
+    for (const path of ["intelligence.summary"]) {
       const def = defFor(path);
       expect(def?.category).toBe("llm");
       expect(def?.type).toBe("select");

@@ -115,7 +115,7 @@ test("all settings categories fit a compact window", async ({ page }) => {
 });
 
 async function mockConnectionSettings(page: import("@playwright/test").Page) {
-  const capability = (capability: "summary" | "conversation", model: string, selected: boolean) => ({
+  const capability = (capability: "summary", model: string, selected: boolean) => ({
     capability, declared: true, selected,
     currentReadiness: { status: "ready", model, testedAt: "2026-09-17T00:00:00.000Z" },
     readinessHistory: [], disclosure: { required: false }, remediation: null,
@@ -124,15 +124,15 @@ async function mockConnectionSettings(page: import("@playwright/test").Page) {
     connections: [{
       id: "direct-xai", kind: "direct-provider", adapter: "direct-xai", label: "xAI",
       authorization: { connected: true, credentialSource: "oauth", oauthConnected: true, apiKeyConfigured: false, oauthReadSucceeded: true, apiKeyReadSucceeded: true, status: "idle" },
-      settings: { credentialSource: "oauth", summaryModel: "grok-summary", conversationModel: "grok-conversation" },
-      capabilities: [capability("summary", "grok-summary", true), capability("conversation", "grok-conversation", false)],
+      settings: { credentialSource: "oauth", summaryModel: "grok-summary" },
+      capabilities: [capability("summary", "grok-summary", true)],
     }, {
       id: "codex", kind: "supported-agent", adapter: "codex", label: "Codex",
       authorization: { connected: true, runtimeVersion: "test", minimumVersion: "test", features: [], loginCommand: "codex login", statusCommand: "codex login status", remediation: null },
-      settings: { summaryModel: "selected-model", conversationModel: "selected-model" },
-      capabilities: [capability("summary", "selected-model", false), capability("conversation", "selected-model", true)],
+      settings: { summaryModel: "selected-model" },
+      capabilities: [capability("summary", "selected-model", false)],
     }], candidates: [], legacyConnections: [],
-    selections: { transcription: { connectionId: null, model: "local" }, summary: { connectionId: "direct-xai", model: "grok-summary" }, conversation: { connectionId: "codex", model: "selected-model" } },
+    selections: { transcription: { connectionId: null, model: "local" }, summary: { connectionId: "direct-xai", model: "grok-summary" } },
   } } } }));
   await page.route("**/trpc/prompts.list*", (route) => route.fulfill({ json: { result: { data: [
     { slug: "dictation-cleanup", name: "整理听写文字" }, { slug: "dictation-translate", name: "翻译听写文字" },
