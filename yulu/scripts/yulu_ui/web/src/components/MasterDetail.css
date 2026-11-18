@@ -1,33 +1,146 @@
-/* List on the left, the selected thing on the right. Both scroll on their own. */
-.masterdetail { display: flex; height: 100%; min-width: 0; }
-.masterdetail-list { height: 100%; overflow-y: auto; }
-.masterdetail > .rs-root { border-right: 1px solid var(--line); }
-.masterdetail-detail { flex: 1; min-width: 0; height: 100%; overflow-y: auto; }
-.masterdetail-detail:empty::before {
-  content: attr(data-empty);
+/* web/src/components/MasterDetail.css */
+.masterdetail {
   display: flex;
-  align-items: center;
-  justify-content: center;
   height: 100%;
-  color: var(--fg-3);
+  gap: 0;
+  min-width: 0;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-panel);
+  background: var(--glass);
+  backdrop-filter: var(--blur-glass);
+  -webkit-backdrop-filter: var(--blur-glass);
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
-.masterdetail-skeleton { height: 58px; margin: 6px 10px; border-radius: var(--r-md); background: var(--fill); }
+.masterdetail-list,
+.masterdetail-detail {
+  height: 100%;
+  overflow-y: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+.masterdetail-detail {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+}
+.masterdetail-skeleton {
+  height: 48px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-inner);
+  background: var(--row-hover);
+}
 
-/* The recordings list keeps one calm width instead of a drag handle. */
-.masterdetail--inbox > .rs-root { flex: 0 0 304px; width: 304px; }
-.masterdetail--inbox > .rs-root > .rs-pane { width: 304px !important; flex: 0 0 304px !important; }
-.masterdetail--inbox > .rs-root > .rs-handle { display: none; }
+.masterdetail--inbox {
+  gap: 0;
+}
+.masterdetail--inbox > .rs-root {
+  flex: 0 0 288px;
+  width: 288px;
+}
+.masterdetail--inbox > .rs-root > .rs-pane {
+  width: 288px !important;
+  flex: 0 0 288px !important;
+}
+.masterdetail--inbox > .rs-root > .rs-handle {
+  display: none;
+}
+.masterdetail--inbox .masterdetail-list {
+  padding: 0;
+  border-right: 1px solid color-mix(in oklch, var(--edge) 50%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.masterdetail--inbox .masterdetail-detail {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: hidden;
+}
 
-/* Narrow: one column. Stacked by default; "detail focus" shows only the open item. */
-@container (max-width: 760px) {
-  .masterdetail { flex-direction: column; }
-  .masterdetail > .rs-root { flex: 0 0 auto; width: 100%; height: auto; max-height: 38%; border-right: 0; border-bottom: 1px solid var(--line); }
-  .masterdetail > .rs-root > .rs-pane { width: 100% !important; flex: 1 1 auto !important; height: auto; }
-  .masterdetail > .rs-root > .rs-handle { display: none; }
-  .masterdetail-list { height: auto; max-height: 100%; }
-  .masterdetail-detail { flex: 1; min-height: 0; height: auto; }
-  .masterdetail-detail:empty { display: none; }
-  .masterdetail--mobile-detail-focus > .rs-root { flex: 1; max-height: none; min-height: 0; border-bottom: 0; }
-  .masterdetail--mobile-detail-focus > .rs-root > .rs-pane, .masterdetail--mobile-detail-focus .masterdetail-list { height: 100%; }
+@media (max-width: 760px) {
+  .masterdetail {
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: 18px;
+  }
+
+  .masterdetail > .rs-root {
+    width: 100%;
+    height: auto;
+    max-height: 38vh;
+    flex: 0 0 auto;
+  }
+
+  .masterdetail > .rs-root > .rs-pane {
+    width: 100% !important;
+    height: auto;
+    overflow: visible;
+    flex: none !important;
+  }
+
+  .masterdetail > .rs-root > .rs-handle {
+    display: none;
+  }
+
+  .masterdetail-list {
+    height: auto;
+    max-height: 38vh;
+    overflow-y: auto;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  .masterdetail-detail {
+    height: auto;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  .masterdetail-detail:empty {
+    display: none;
+  }
+
+  .masterdetail--mobile-detail-focus:has(.masterdetail-detail:not(:empty)) > .rs-root {
+    display: none;
+  }
+
+  .masterdetail--mobile-detail-focus:has(.masterdetail-detail:not(:empty)) .masterdetail-detail {
+    min-height: 100%;
+  }
+
+  .masterdetail--settings-mobile-tabs > .rs-root {
+    max-height: none;
+  }
+
+  .masterdetail--settings-mobile-tabs .masterdetail-list {
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 2px 8px;
+  }
+}
+
+/* Use available content width, including the user's sidebar choice. */
+@container (max-width: 800px) {
+  .masterdetail--inbox { flex-direction: column; }
+  .masterdetail--inbox > .rs-root { width: 100%; flex: 1; min-height: 0; }
+  .masterdetail--inbox > .rs-root > .rs-pane { width: 100% !important; flex: 1 !important; }
+  .masterdetail--inbox .masterdetail-list { height: 100%; max-height: none; border: 0; }
   .masterdetail--mobile-detail-focus:has(.masterdetail-detail:not(:empty)) > .rs-root { display: none; }
+  .masterdetail--inbox .masterdetail-detail:empty { display: none; }
+  .masterdetail--inbox .masterdetail-detail:not(:empty) { height: 100%; min-height: 0; overflow-y: auto; }
+  .reader-mobile-back { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; margin-bottom: 12px; color: var(--fg-2); }
+  .reader-header, .reader-body { padding-inline: 20px; }
 }

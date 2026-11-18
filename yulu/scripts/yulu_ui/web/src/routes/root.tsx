@@ -5,22 +5,15 @@ import { TopBar } from "../components/TopBar.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import { OnboardingEntry } from "./entry.js";
 
-/** Everything you configure rather than use lives behind Settings. */
-const SETTINGS_AREAS = ["/settings", "/knowledge", "/health"];
-
-export function isSettingsArea(pathname: string): boolean {
-  return SETTINGS_AREAS.some((area) => pathname === area || pathname.startsWith(`${area}/`));
-}
-
 export function RootLayout() {
   const location = useLocation();
   const t = useT();
-  const settings = isSettingsArea(location.pathname);
-  // Where "Back" in the settings sidebar returns to: the last place you were working.
+  const isSettings = location.pathname === "/settings" || location.pathname.startsWith("/settings/");
   const returnTo = useRef("/agent-console");
   useEffect(() => {
-    if (!settings) returnTo.current = location.pathname + location.search + location.hash;
-  }, [settings, location.pathname, location.search, location.hash]);
+    if (!isSettings) returnTo.current = location.pathname + location.search + location.hash;
+  }, [isSettings, location.pathname, location.search, location.hash]);
+  const isAgentConsole = location.pathname.startsWith("/agent-console");
   const isGuidedFlow = location.pathname === "/activate" || location.pathname === "/onboarding";
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1100);
   useEffect(() => {
@@ -40,11 +33,11 @@ export function RootLayout() {
     if (window.innerWidth < 760) setSidebarOpen(false);
   }, [location.pathname]);
   return (
-    <div data-yulu-ready className={`root-shell${sidebarOpen ? " sidebar-open" : " sidebar-collapsed"}`}>
-      <TopBar sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
-      {sidebarOpen && <button className="sidebar-scrim" aria-label={t("nav.closeSidebar")} onClick={() => setSidebarOpen(false)} />}
-      <div className="root-sidebar-pane" id="app-sidebar" hidden={!sidebarOpen}>
-        <Sidebar mode={settings ? "settings" : "main"} returnTo={returnTo.current} />
+    <div data-yulu-ready className={`root-shell${isAgentConsole ? " agent-console-shell" : ""}${sidebarOpen && !isSettings ? " sidebar-open" : " sidebar-collapsed"}${isSettings ? " settings-shell" : ""}`}>
+      <TopBar settingsReturnTo={isSettings ? returnTo.current : undefined} sidebarOpen={sidebarOpen && !isSettings} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
+      {sidebarOpen && !isSettings && <button className="sidebar-scrim" aria-label={t("nav.closeSidebar")} onClick={() => setSidebarOpen(false)} />}
+      <div className="root-sidebar-pane" id="app-sidebar" hidden={!sidebarOpen || isSettings}>
+        <Sidebar />
       </div>
       <main className="root-main">
         <div className="root-body">

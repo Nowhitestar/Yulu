@@ -21,16 +21,17 @@ export function RestartBanner({ daemons, onRestartAll, onDismiss }: RestartBanne
   const names = daemons.map((d) => d.name);
   return (
     <div className="restart-banner" role="status">
+      <div className="restart-banner-dot">●</div>
       <div className="restart-banner-body">
         <div className="restart-banner-title">{t("restartBanner.title")}</div>
         <div className="restart-banner-daemons">{names.join(", ")}</div>
       </div>
-      <button type="button" className="btn btn-primary" onClick={onRestartAll}>
+      <button type="button" className="restart-banner-btn primary" onClick={onRestartAll}>
         {t("restartBanner.restartNow")}
       </button>
       <button
         type="button"
-        className="btn btn-quiet"
+        className="restart-banner-btn restart-banner-dismiss"
         onClick={onDismiss}
         aria-label={t("restartBanner.dismiss")}
       >

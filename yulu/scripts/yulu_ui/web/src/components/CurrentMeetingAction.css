@@ -1,36 +1,86 @@
-/* Shown in place of the record capsule while a calendar meeting is on:
- * the one moment the primary action deserves the accent. */
 .current-meeting-action {
   position: relative;
   display: inline-flex;
-  align-items: stretch;
-  height: 28px;
-  border-radius: var(--r-pill);
-  background: var(--accent);
-  color: var(--on-accent);
+  align-items: center;
+  height: 34px;
+  min-width: 0;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-control);
+  background: var(--surface-solid, var(--glass));
+  isolation: isolate;
 }
-.current-meeting-button, .current-meeting-menu-button {
+
+.current-meeting-button,
+.current-meeting-menu-button {
+  height: 32px;
+  border: 0;
+  border-radius: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  color: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
+  padding: 0 11px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
   white-space: nowrap;
-  transition: background 0.12s;
+  cursor: pointer;
 }
-.current-meeting-button { padding: 0 12px; border-radius: var(--r-pill) 0 0 var(--r-pill); }
-.current-meeting-button:only-child { border-radius: var(--r-pill); }
+
+.current-meeting-button {
+  min-width: 112px;
+}
+
 .current-meeting-menu-button {
-  width: 26px;
-  border-left: 1px solid color-mix(in srgb, var(--on-accent) 28%, transparent);
-  border-radius: 0 var(--r-pill) var(--r-pill) 0;
+  width: 34px;
+  padding: 0;
+  border-left: 1px solid var(--edge-card);
 }
-.current-meeting-button:hover:not(:disabled), .current-meeting-menu-button:hover:not(:disabled) { background: rgba(0, 0, 0, 0.12); }
-.current-meeting-button:disabled, .current-meeting-menu-button:disabled { opacity: 0.6; }
-.current-meeting-menu { position: absolute; top: calc(100% + 6px); right: 0; }
-@media (max-width: 479px) {
-  .current-meeting-button { max-width: 150px; padding: 0 9px; }
-  .current-meeting-button span { overflow: hidden; text-overflow: ellipsis; }
+
+.current-meeting-button:disabled,
+.current-meeting-menu-button:disabled {
+  opacity: 0.62;
+  cursor: default;
+}
+
+.current-meeting-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 132px;
+  padding: 4px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-control);
+  background: var(--surface-solid, var(--glass));
+  box-shadow: var(--shadow), var(--edge-shadow);
+}
+
+.current-meeting-menu button {
+  width: 100%;
+  min-height: 30px;
+  border-radius: 12px;
+  padding: 0 10px;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 680;
+  text-align: left;
+}
+
+.current-meeting-menu button:hover {
+  background: var(--row-hover);
+}
+
+@media (max-width: 760px) {
+  .current-meeting-button {
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+  }
+
+  .current-meeting-button span {
+    display: none;
+  }
 }

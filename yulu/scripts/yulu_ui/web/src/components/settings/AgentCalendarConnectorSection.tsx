@@ -95,7 +95,7 @@ export function AgentCalendarConnectorSection() {
       <div className="agent-calendar-connector-fields">
         <label>
           <span>{t("settings.agentCalendarConnector.connection")}</span>
-          <select className="field" disabled={busy} value={connectionId} onChange={(event) => setConnectionIdOverride(event.currentTarget.value)}>
+          <select disabled={busy} value={connectionId} onChange={(event) => setConnectionIdOverride(event.currentTarget.value)}>
             <option value="">{t("settings.agentCalendarConnector.connection.choose")}</option>
             {state.data.connections.map((connection) => (
               <option key={connection.id} value={connection.id}>{connection.label}</option>
@@ -105,7 +105,6 @@ export function AgentCalendarConnectorSection() {
         <label>
           <span>{t("settings.agentCalendarConnector.connector")}</span>
           <input
-            className="field"
             disabled={busy}
             maxLength={100}
             value={connectorName}
@@ -117,8 +116,8 @@ export function AgentCalendarConnectorSection() {
 
       <div className="agent-calendar-connector-readiness" data-status={status}>
         <div className="settings-inline-actions">
-          <span className={`badge sharing-badge ${status}`}>{t(`sharing.status.${status}`)}</span>
-          <button className="btn" type="button"
+          <span className={`sharing-badge ${status}`}>{t(`sharing.status.${status}`)}</span>
+          <button className="settings-action" type="button"
             disabled={!connectionId || !connectorName.trim() || busy}
             onClick={() => void connect()}>
             {busy ? t("sharing.checking") : t("settings.agentCalendarConnector.connect")}

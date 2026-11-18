@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Copy, Languages, MessageCircle, Mic } from "lucide-react";
+import { Bot, Circle, Copy, Keyboard, Languages, Mic } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useLang, useT } from "../i18n/LanguageProvider.js";
 import { DEFAULT_HOTKEYS, formatHotkey } from "../../../src/hotkeys.js";
 import { usePermissions } from "../hooks/usePermissions.js";
 import "./voice-input.css";
 
+export const handle = { breadcrumb: "breadcrumb.voiceInput", filters: null };
 
 type VoiceAction = "dictate" | "translate" | "voice_chat";
 
@@ -14,6 +15,7 @@ interface HistoryItem {
   createdAt: string;
   action: "dictate" | "translate";
   text: string;
+  promptSlug: string;
   targetLanguage: string;
   rawText?: string;
   cleanupStatus?: string;
@@ -23,7 +25,7 @@ interface HistoryItem {
 const ACTIONS: Array<{ id: VoiceAction; icon: typeof Mic }> = [
   { id: "dictate", icon: Mic },
   { id: "translate", icon: Languages },
-  { id: "voice_chat", icon: MessageCircle },
+  { id: "voice_chat", icon: Bot },
 ];
 
 function formatHistoryTime(value: string) {
@@ -50,6 +52,7 @@ export function VoiceInput() {
   const recording = trpc.recording.state.useQuery(undefined, { refetchInterval: 1_000 });
   const history = trpc.recording.history.useQuery(undefined, { refetchInterval: 5_000 });
   const hotkeys = config.data?.status_agent.hotkeys;
+  const dictation = config.data?.transcription.dictation;
   const translateLanguage = config.data?.transcription.dictation.target_language || "English";
   const agent = health.data?.find((d) => d.name === "com.yulu.statusagent");
   const enabled = config.data?.status_agent.enabled ?? true;
@@ -76,35 +79,53 @@ export function VoiceInput() {
 
   const historyItems = (history.data ?? []) as HistoryItem[];
 
-  const status = isProcessing ? "processing" : isRecording ? "recording" : ready ? "ready" : "check";
-  const tone = { processing: "accent", recording: "bad", ready: "ok", check: "warn" }[status];
-
   return (
-    <div className="voice-input-page page">
-      <header className="page-head">
+    <div className="voice-input-page">
+      <div className="voice-input-head">
         <div>
-          <h1 className="page-title">{t("voiceInput.title")}</h1>
-          <p className="page-sub">{t("voiceInput.sub")}</p>
+          <h1>{t("voiceInput.title")}</h1>
+          <p>{t("voiceInput.sub")}</p>
         </div>
-        <span className="voice-input-status badge" data-ready={ready} data-tone={tone}>
-          <i aria-hidden="true" />
-          {t(`voiceInput.status.${status}`)}
+        <span className="voice-input-status" data-ready={ready}>
+          <Circle size={9} fill="currentColor" strokeWidth={0} />
+          {isProcessing
+            ? t("voiceInput.status.processing")
+            : isRecording
+              ? t("voiceInput.status.recording")
+              : ready ? t("voiceInput.status.ready") : t("voiceInput.status.check")}
         </span>
-      </header>
+      </div>
 
-      <div className="voice-input-grid group">
-        {ACTIONS.map(({ id, icon: Icon }) => (
-          <section key={id} className="voice-action">
-            <Icon size={16} strokeWidth={1.7} aria-hidden="true" />
-            <span className="voice-action-title">{t(`voiceInput.action.${id}`)}</span>
-            {id === "translate" && <span className="voice-action-note">{String(translateLanguage)}</span>}
-            <kbd className="kbd">{formatHotkey(hotkeys?.[id] ?? DEFAULT_HOTKEYS[id], lang === "en")}</kbd>
-          </section>
-        ))}
+      <div className="voice-input-grid">
+        {ACTIONS.map(({ id, icon: Icon }) => {
+          const spec = hotkeys?.[id];
+          const language = id === "translate" ? String(translateLanguage) : "";
+          const prompt = id === "dictate"
+            ? dictation?.prompt_slug || "dictation-cleanup"
+            : id === "translate"
+              ? dictation?.translate_prompt_slug || "dictation-translate"
+              : t("nav.agentConsole");
+          return (
+            <section key={id} className="voice-action">
+              <div className="voice-action-icon"><Icon size={18} strokeWidth={1.9} /></div>
+              <div className="voice-action-main">
+                <div className="voice-action-title">{t(`voiceInput.action.${id}`)}</div>
+                <div className="voice-action-meta">
+                  <Keyboard size={13} strokeWidth={1.8} />
+                  <kbd>{formatHotkey(spec ?? DEFAULT_HOTKEYS[id], lang === "en")}</kbd>
+                  {language && <span>{language}</span>}
+                </div>
+              </div>
+              <div className="voice-action-prompt">{prompt}</div>
+            </section>
+          );
+        })}
       </div>
 
       <section className="voice-history">
-        <h2>{t("voiceInput.history.title")}</h2>
+        <div className="voice-history-head">
+          <h2>{t("voiceInput.history.title")}</h2>
+        </div>
         {historyItems.length === 0 ? (
           <div className="voice-history-empty">{t("voiceInput.history.empty")}</div>
         ) : (
@@ -112,30 +133,31 @@ export function VoiceInput() {
             {historyItems.map((item) => (
               <article key={item.id} className="voice-history-row">
                 <div className="voice-history-main">
-                  <p>{item.text}</p>
                   <div className="voice-history-meta">
                     <span>{t(`voiceInput.history.${item.action}`)}</span>
                     {formatHistoryTime(item.createdAt) && <span>{formatHistoryTime(item.createdAt)}</span>}
                     {item.targetLanguage && <span>{item.targetLanguage}</span>}
+                    {item.promptSlug && <span>{item.promptSlug}</span>}
                   </div>
+                  <p>{item.text}</p>
                   {item.cleanupWarning && <p className="voice-history-warning">{t("voiceInput.history.cleanupFailed")}</p>}
                   {item.rawText && item.rawText !== item.text && <details className="voice-history-original">
                     <summary>{t("voiceInput.history.original")}</summary>
                     <p>{item.rawText}</p>
-                    <button type="button" className="btn" onClick={() => { void copyHistory(item, true); }}>
-                      <Copy size={13} strokeWidth={1.8} aria-hidden="true" />
+                    <button type="button" className="voice-history-copy" onClick={() => { void copyHistory(item, true); }}>
+                      <Copy size={14} strokeWidth={2} />
                       {t(copiedId === `${item.id}:original` ? "voiceInput.history.copied" : "voiceInput.history.copyOriginal")}
                     </button>
                   </details>}
                 </div>
                 <button
                   type="button"
-                  className="voice-history-copy btn btn-quiet"
+                  className="voice-history-copy"
                   aria-label={t("voiceInput.history.copy")}
                   title={t("voiceInput.history.copy")}
                   onClick={() => { void copyHistory(item); }}
                 >
-                  <Copy size={13} strokeWidth={1.8} aria-hidden="true" />
+                  <Copy size={14} strokeWidth={2} />
                   <span>{copiedId === item.id ? t("voiceInput.history.copied") : t("voiceInput.history.copy")}</span>
                 </button>
               </article>

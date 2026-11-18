@@ -35,7 +35,6 @@ export function DictationSettings({ preferences, available, onCommit }: {
     <h3 className="settings-subsection-h">{t("settings.voice.cleanup")}</h3>
     <p className="dictation-settings-help">{t("settings.voice.cleanupHelp")}</p>
     {!available && <p className="dictation-settings-note">{t("settings.voice.cleanupUnavailable")}</p>}
-    <div className="group settings-group">
     <InlineEditRow label={t("settings.voice.cleanupEnabled")} type="toggle" value={enabled}
       disabled={saving} onCommit={toggleCleanup} />
     <InlineEditRow label={t("settings.voice.cleanupModel")} help={t("settings.voice.cleanupModelHelp")}
@@ -45,7 +44,6 @@ export function DictationSettings({ preferences, available, onCommit }: {
         { value: "conversation", label: t("settings.voice.cleanupModelConversation") },
       ]} disabled={saving} disabledNote=""
       onCommit={(value) => { void save("transcription.dictation.cleanup_model", value); }} />
-    </div>
     <fieldset className="dictation-choices" disabled={saving || !enabled}>
       <legend>{t("settings.voice.cleanupLevel")}</legend>
       <div className="dictation-choice-grid">

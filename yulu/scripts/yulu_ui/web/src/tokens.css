@@ -1,10 +1,3 @@
-/* Yulu design tokens.
- *
- * One palette, two modes. Surfaces are flat paper separated by hairlines;
- * depth is reserved for things that float (menus, the command palette, toasts).
- * The only chromatic colour is the brand blue; red, green and amber carry
- * state and nothing else. */
-
 @font-face {
   font-family: "Fraunces";
   font-style: normal;
@@ -29,84 +22,198 @@
 
 :root {
   color-scheme: light;
-
-  /* Type */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
-  --font-serif: "Fraunces", "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", ui-serif, Georgia, serif;
+  --font-heading: "Fraunces", "Noto Serif SC", ui-serif, Georgia, serif;
+  --font-han: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   --font-mono: "Geist Mono", "SF Mono", ui-monospace, monospace;
+  --radius-panel: 28.8px;
+  --radius-pill: 999px;
+  --radius-inner: 22.4px;
+  --radius-control: 16px;
+  --blur-glass: blur(40px) saturate(150%);
+  --blur-card: blur(24px) saturate(150%);
+  --blur-pill: blur(16px) saturate(150%);
+  --edge-shadow: inset 0 1px 0 var(--edge-top), 0 0 0 1px var(--edge);
 
-  /* Shape */
-  --r-sm: 6px;
-  --r-md: 9px;
-  --r-lg: 14px;
-  --r-pill: 999px;
-
-  /* Layout */
-  --toolbar-h: 48px;
-  --sidebar-w: 216px;
-  --read-w: 720px;
-
-  /* Surfaces */
-  --bg: #f5f4f1;
-  --paper: #ffffff;
-  --raised: #ffffff;
-  --fill: rgba(28, 26, 20, 0.045);
-  --fill-2: rgba(28, 26, 20, 0.085);
-  --line: rgba(28, 26, 20, 0.09);
-  --line-2: rgba(28, 26, 20, 0.17);
-
-  /* Ink */
-  --fg: #1d1d1f;
-  --fg-2: #63625e;
-  --fg-3: #94928c;
-
-  /* Accent and state */
-  --accent: #2c6bd6;
-  --accent-soft: rgba(44, 107, 214, 0.1);
-  --on-accent: #ffffff;
-  --red: #d3382c;
-  --red-soft: rgba(211, 56, 44, 0.1);
-  --green: #2a8f52;
-  --green-soft: rgba(42, 143, 82, 0.11);
-  --amber: #b76e0c;
-  --amber-soft: rgba(183, 110, 12, 0.12);
-  --purple: #7d5bd0;
-  --teal: #1f8a99;
-
-  /* Depth: only for floating layers */
-  --shadow-pop: 0 0 0 0.5px rgba(0, 0, 0, 0.14), 0 14px 44px -8px rgba(0, 0, 0, 0.22);
-  --shadow-sm: 0 0 0 0.5px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.08);
-  --scrim: rgba(20, 19, 16, 0.26);
+  /* Default: Apple-inspired Liquid Glass */
+  --wp-1: oklch(0.98 0.005 250);
+  --wp-2: #f7fbff;
+  --wp-3: #e7f1ff;
+  --glass: rgba(255, 255, 255, 0.5);
+  --glass-2: rgba(255, 255, 255, 0.6);
+  --glass-3: rgba(255, 255, 255, 0.7);
+  --glass-paper: rgba(255, 255, 255, 0.8);
+  --edge: oklch(0.9 0.005 250 / 0.3);
+  --edge-top: rgba(255, 255, 255, 0.6);
+  --edge-card: rgba(255, 255, 255, 0.8);
+  --fg: oklch(0.15 0.01 250);
+  --fg-2: oklch(0.45 0.01 250);
+  --fg-3: oklch(0.62 0.01 250 / 0.7);
+  --accent: oklch(0.55 0.15 250);
+  --accent-soft: oklch(0.55 0.15 250 / 0.1);
+  --accent-on: oklch(0.55 0.15 250);
+  --blue: oklch(0.55 0.15 250);
+  --green: #248a3d;
+  --red: #d70015;
+  --purple: #8e5cf7;
+  --shadow: 0 4px 24px -8px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --shadow-card: 0 2px 12px -4px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --shadow-paper: 0 4px 24px -8px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --shadow-button: 0 1px 4px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --row-hover: rgba(0, 0, 0, 0.05);
+  --field-bg: rgba(255, 255, 255, 0.6);
+  --surface-solid: rgba(255, 255, 255, 0.82);
+  --bg: var(--wp-2);
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
+  --wp-1: oklch(0.15 0.005 250);
+  --wp-2: oklch(0.15 0.005 250);
+  --wp-3: oklch(0.2 0.005 250);
+  --glass: oklch(0.2 0.005 250 / 0.4);
+  --glass-2: oklch(0.2 0.005 250 / 0.5);
+  --glass-3: oklch(0.25 0.005 250 / 0.5);
+  --glass-paper: oklch(0.2 0.005 250 / 0.6);
+  --edge: oklch(0.3 0.005 250 / 0.3);
+  --edge-top: rgba(255, 255, 255, 0.12);
+  --edge-card: rgba(255, 255, 255, 0.1);
+  --fg: oklch(0.95 0.005 250);
+  --fg-2: oklch(0.65 0.005 250);
+  --fg-3: oklch(0.65 0.005 250 / 0.58);
+  --accent: oklch(0.65 0.15 250);
+  --accent-soft: oklch(0.65 0.15 250 / 0.15);
+  --accent-on: oklch(0.65 0.15 250);
+  --blue: oklch(0.65 0.15 250);
+  --green: #6bd17a;
+  --red: #ff6961;
+  --purple: #b794ff;
+  --shadow: 0 4px 28px -8px rgba(0, 0, 0, 0.48), inset 0 1px 0 var(--edge-top);
+  --shadow-card: 0 2px 18px -6px rgba(0, 0, 0, 0.42), inset 0 1px 0 var(--edge-top);
+  --row-hover: rgba(255, 255, 255, 0.065);
+  --field-bg: oklch(0.25 0.005 250 / 0.78);
+  --surface-solid: oklch(0.15 0.005 250);
+  --bg: var(--wp-2);
+}
 
-  --bg: #1b1b1a;
-  --paper: #232322;
-  --raised: #2d2d2b;
-  --fill: rgba(255, 252, 245, 0.06);
-  --fill-2: rgba(255, 252, 245, 0.11);
-  --line: rgba(255, 252, 245, 0.09);
-  --line-2: rgba(255, 252, 245, 0.18);
+/* Ayu values verified from dempfi/ayu. Ayu is one family; mode picks light/dark. */
+[data-theme-family="ayu"][data-theme="light"] {
+  color-scheme: light;
+  --wp-1: #f8f9fa;
+  --wp-2: #fcfcfc;
+  --wp-3: #ebeef0;
+  --glass: rgba(252, 252, 252, 0.72);
+  --glass-2: rgba(252, 252, 252, 0.86);
+  --glass-3: rgba(252, 252, 252, 0.96);
+  --glass-paper: rgba(252, 252, 252, 0.9);
+  --edge: rgba(107, 125, 143, 0.14);
+  --edge-top: rgba(255, 255, 255, 0.95);
+  --edge-card: rgba(255, 255, 255, 0.78);
+  --fg: #5c6166;
+  --fg-2: #828e9f;
+  --fg-3: rgba(130, 142, 159, 0.55);
+  --accent: #f29718;
+  --accent-soft: rgba(242, 151, 24, 0.14);
+  --accent-on: #b76000;
+  --blue: #21a1e2;
+  --green: #6cbf43;
+  --red: #e65050;
+  --purple: #a176cb;
+  --shadow: 0 4px 24px -8px rgba(60, 80, 110, 0.12), inset 0 1px 0 var(--edge-top);
+  --shadow-card: 0 2px 14px -6px rgba(60, 80, 110, 0.12), inset 0 1px 0 var(--edge-top);
+  --row-hover: rgba(107, 125, 143, 0.14);
+  --field-bg: #fcfcfc;
+  --surface-solid: #fcfcfc;
+  --bg: var(--wp-2);
+}
 
-  --fg: #ededea;
-  --fg-2: #a9a8a2;
-  --fg-3: #77766f;
+[data-theme-family="ayu"][data-theme="dark"] {
+  color-scheme: dark;
+  --wp-1: #0d1017;
+  --wp-2: #10141c;
+  --wp-3: #070a11;
+  --glass: rgba(255, 255, 255, 0.045);
+  --glass-2: rgba(255, 255, 255, 0.08);
+  --glass-3: rgba(255, 255, 255, 0.12);
+  --glass-paper: rgba(255, 255, 255, 0.11);
+  --edge: rgba(255, 255, 255, 0.06);
+  --edge-top: rgba(255, 255, 255, 0.1);
+  --edge-card: rgba(255, 255, 255, 0.1);
+  --fg: #bfbdb6;
+  --fg-2: #5a6378;
+  --fg-3: rgba(90, 99, 120, 0.58);
+  --accent: #e6b450;
+  --accent-soft: rgba(230, 180, 80, 0.18);
+  --accent-on: #f7d894;
+  --blue: #4fbfff;
+  --green: #70bf56;
+  --red: #d95757;
+  --purple: #d0a1ff;
+  --shadow: 0 4px 26px -8px rgba(0, 0, 0, 0.48), inset 0 1px 0 var(--edge-top);
+  --shadow-card: 0 2px 18px -6px rgba(0, 0, 0, 0.42), inset 0 1px 0 var(--edge-top);
+  --row-hover: rgba(71, 82, 102, 0.25);
+  --field-bg: #10141c;
+  --surface-solid: #10141c;
+  --bg: var(--wp-2);
+}
 
-  --accent: #74a6f5;
-  --accent-soft: rgba(116, 166, 245, 0.16);
-  --on-accent: #10203a;
-  --red: #f0685c;
-  --red-soft: rgba(240, 104, 92, 0.16);
-  --green: #5cc487;
-  --green-soft: rgba(92, 196, 135, 0.15);
-  --amber: #e0a13c;
-  --amber-soft: rgba(224, 161, 60, 0.16);
-  --purple: #ab92ee;
-  --teal: #5cc2cf;
+/* Paper values verified from NLKNguyen/papercolor-theme default palettes. */
+[data-theme-family="paper"][data-theme="light"] {
+  color-scheme: light;
+  --wp-1: #eeeeee;
+  --wp-2: #f7f7f7;
+  --wp-3: #e4e4e4;
+  --glass: rgba(247, 247, 247, 0.74);
+  --glass-2: rgba(247, 247, 247, 0.88);
+  --glass-3: rgba(247, 247, 247, 0.97);
+  --glass-paper: rgba(247, 247, 247, 0.92);
+  --edge: rgba(68, 68, 68, 0.14);
+  --edge-top: rgba(255, 255, 255, 0.88);
+  --edge-card: rgba(255, 255, 255, 0.72);
+  --fg: #444444;
+  --fg-2: #6e6e6e;
+  --fg-3: rgba(68, 68, 68, 0.5);
+  --accent: #005f87;
+  --accent-soft: rgba(0, 95, 135, 0.13);
+  --accent-on: #005f87;
+  --blue: #0087af;
+  --green: #008700;
+  --red: #af0000;
+  --purple: #8700af;
+  --shadow: 0 4px 22px -8px rgba(50, 50, 50, 0.14), inset 0 1px 0 var(--edge-top);
+  --shadow-card: 0 2px 12px -6px rgba(50, 50, 50, 0.12), inset 0 1px 0 var(--edge-top);
+  --row-hover: rgba(0, 0, 0, 0.045);
+  --field-bg: #eeeeee;
+  --surface-solid: #f7f7f7;
+  --bg: var(--wp-2);
+}
 
-  --shadow-pop: 0 0 0 0.5px rgba(255, 255, 255, 0.14), 0 18px 50px -10px rgba(0, 0, 0, 0.7);
-  --shadow-sm: 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 1px 3px rgba(0, 0, 0, 0.4);
-  --scrim: rgba(0, 0, 0, 0.5);
+[data-theme-family="paper"][data-theme="dark"] {
+  color-scheme: dark;
+  --wp-1: #1c1c1c;
+  --wp-2: #262626;
+  --wp-3: #303030;
+  --glass: rgba(38, 38, 38, 0.62);
+  --glass-2: rgba(48, 48, 48, 0.76);
+  --glass-3: rgba(64, 64, 64, 0.9);
+  --glass-paper: rgba(64, 64, 64, 0.78);
+  --edge: rgba(208, 208, 208, 0.12);
+  --edge-top: rgba(255, 255, 255, 0.08);
+  --edge-card: rgba(255, 255, 255, 0.1);
+  --fg: #d0d0d0;
+  --fg-2: #a8a8a8;
+  --fg-3: rgba(208, 208, 208, 0.48);
+  --accent: #5f8787;
+  --accent-soft: rgba(95, 135, 135, 0.2);
+  --accent-on: #a8d0d0;
+  --blue: #5fafd7;
+  --green: #5faf00;
+  --red: #af005f;
+  --purple: #af87d7;
+  --shadow: 0 4px 26px -8px rgba(0, 0, 0, 0.45), inset 0 1px 0 var(--edge-top);
+  --shadow-card: 0 2px 18px -6px rgba(0, 0, 0, 0.36), inset 0 1px 0 var(--edge-top);
+  --row-hover: rgba(255, 255, 255, 0.06);
+  --field-bg: #303030;
+  --surface-solid: #262626;
+  --bg: var(--wp-2);
 }

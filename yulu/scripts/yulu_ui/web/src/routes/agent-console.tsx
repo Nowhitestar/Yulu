@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { Archive, ArrowUp, FileText, History, Loader2, MoreHorizontal, Pencil, Pin, SquarePen, Trash2, X } from "lucide-react";
+import { Archive, ArrowUp, Bot, FileText, History, Loader2, MessageSquare, MoreHorizontal, Pencil, Pin, Plus, Settings2, Trash2, X } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useWsChannel } from "../ws.js";
 import { MarkdownView } from "../components/MarkdownView.js";
@@ -10,6 +10,7 @@ import { taskActivity } from "../components/health/taskStatus.js";
 import type { AppChannels } from "../../../src/pubsub.js";
 import "./agent-console.css";
 
+export const handle = { breadcrumb: "breadcrumb.agentConsole", filters: null };
 
 interface AskSource {
   ref?: number;
@@ -448,33 +449,30 @@ function AskMeetings({ initialSessionId, floating, activity }: {
     refreshSessions(session.id);
   };
 
-  const empty = displayedMessages.length === 0;
-  const busy = awaitingRemote || ask.isPending || createSession.isPending || appendSession.isPending;
-  const scopeNote = scope === "general" ? "assistant.generalScope" : provider === "xai" ? "assistant.localScope" : "assistant.agentScope";
-  const scopeDetail = scope === "general" ? t("assistant.generalIntro") : provider === "xai" ? t("agentConsole.xai.localBoundary") : t("assistant.agentScope.detail");
-
   return <section className="agent-chat-workspace">
     <header className="assistant-toolbar">
-      <button ref={historyToggle} type="button" className="icon-btn" aria-label={t("assistant.history")} title={t("assistant.history")} aria-expanded={historyOpen} aria-controls="assistant-history" onClick={() => setHistoryOpen(!historyOpen)}><History size={17} strokeWidth={1.7} /></button>
-      <strong className="assistant-heading">{sessionTitle}</strong>
-      {!floating && activity && (activity.active > 0 || activity.attention > 0) && <Link className={`assistant-activity badge`} data-tone={activity.attention > 0 ? "warn" : undefined} to="/health#queue">{activity.attention > 0 ? t("assistant.activity.attention", { n: activity.attention }) : t("assistant.activity.active", { n: activity.active })}</Link>}
-      <button type="button" className="icon-btn" onClick={startNewSession} aria-label={t("assistant.new")} title={t("assistant.new")}><SquarePen size={17} strokeWidth={1.7} /></button>
+      <button ref={historyToggle} type="button" className="assistant-tool" aria-label={t("assistant.history")} aria-expanded={historyOpen} aria-controls="assistant-history" onClick={() => setHistoryOpen(!historyOpen)}><History size={17} /></button>
+      <div className="assistant-heading"><strong>{sessionTitle}</strong><Link to={defaultRepairPath} title={providerHeader + " · " + t("agentConsole.provider.newSessionNote")}>{identity ?? conversationName}<Settings2 size={12} /></Link></div>
+      {!floating && activity && (activity.active > 0 || activity.attention > 0) && <Link className="assistant-activity" to="/health#queue">{activity.attention > 0 ? t("assistant.activity.attention", { n: activity.attention }) : t("assistant.activity.active", { n: activity.active })}</Link>}
+      <button type="button" className="assistant-tool" onClick={startNewSession} aria-label={t("assistant.new")} title={t("assistant.new")}><Plus size={18} /></button>
     </header>
     <div className={`agent-chat${historyOpen ? " history-open" : ""}`}>
       {historyOpen && <AgentSessionPanel sessions={sessions} selectedSessionId={selectedSessionId} loading={sessionsQuery.isPending}
-        onSelect={selectSession} onRename={renameSelectedSession} onDelete={deleteSelectedSession}
+        onSelect={selectSession} onNew={startNewSession} onRename={renameSelectedSession} onDelete={deleteSelectedSession}
         onArchive={archiveSelectedSession} onPin={pinSelectedSession} onClose={closeHistory} />}
-      <div className={`agent-chat-main${empty ? " empty" : ""}`}>
+      <div className="agent-chat-main">
         <div ref={scrollRef} className={`agent-chat-thread${messages.length === 0 ? " empty" : ""}`}>
-          {empty ? <div className="agent-chat-start">
-            <Logo size={44} />
-            <h1 className="agent-chat-title">{t(scope === "general" ? "assistant.generalTitle" : "assistant.title")}</h1>
-            <p className="agent-chat-sub">{t(scope === "general" ? "assistant.generalIntro" : "assistant.intro")}</p>
+          {displayedMessages.length === 0 ? <div className="agent-chat-start">
+            <Logo size={48} />
+            <div className="agent-chat-title">{t(scope === "general" ? "assistant.generalTitle" : "assistant.title")}</div>
+            <div className="agent-chat-sub">{t(scope === "general" ? "assistant.generalIntro" : "assistant.intro")}</div>
+            <div className="agent-chat-starters">{(scope === "general" ? [t("assistant.generalStarter1"), t("assistant.generalStarter2")] : ASK_STARTERS).map((starter) => <button key={starter} type="button" onClick={() => setInput(starter)}>{starter}</button>)}</div>
           </div> : <div className="agent-chat-thread-inner">
             {displayedMessages.map((message, index) => {
               const localSources = displayedLocalSources(message, provider);
               return (
                 <div key={index} className={`agent-chat-row ${message.role}`}>
+                  {message.role === "assistant" && <span className="agent-avatar"><Bot size={15} strokeWidth={2} /></span>}
                   <div className="agent-message">
                     {message.pending && !message.text ? (
                       <span className="agent-message-pending"><Loader2 className="spin" size={14} strokeWidth={2} />正在询问 {conversationName}...</span>
@@ -494,26 +492,24 @@ function AskMeetings({ initialSessionId, floating, activity }: {
                 </div>
               );
             })}
+
           </div>}
         </div>
         <div className="agent-chat-composer">
           {draftSession && createError && <NewConversationFailure identity={identity ?? conversationName} reason={createError} repairPath={defaultRepairPath} retrying={createSession.isPending} onRetry={() => void submit()} />}
           {sessionStatus === "paused" && <PausedConversation identity={identity ?? conversationName} repairPath={conversationRecovery?.settingsPath ?? defaultRepairPath} reason={pausedReason} retryAvailable={conversationRecovery?.retry === "same_snapshot"} retrying={ask.isPending} onRetry={() => void retrySameProvider()} onNew={startNewSession} />}
-          <Composer value={input} onChange={setInput} onSubmit={submit} pending={busy} disabled={sessionStatus === "paused"}
-            placeholder={messages.length ? "继续提问..." : scope === "general" ? t("assistant.generalPlaceholder") : "问会议记录、决策、行动项..."}
-            tools={<>
-              <select className="assistant-scope" aria-label={t("assistant.scope")} value={scope}
-                disabled={!draftSession || ask.isPending || createSession.isPending}
-                title={!draftSession ? t("assistant.scopePinned") : undefined}
-                onChange={(event) => setDraftScope(event.target.value as "general" | "meetings")}>
-                <option value="general">{t("assistant.scopeGeneral")}</option>
-                <option value="meetings">{t("assistant.scopeMeetings")}</option>
-              </select>
-              {scope === "meetings" && <MeetingReference onChoose={(title, recordedAt) => setInput((value) => `${value}${value ? "\n" : ""}关于会议「${title}」（${recordedAt.slice(0, 16).replace("T", " ")}）：`)} disabled={sessionStatus === "paused" || ask.isPending} />}
-            </>}
-            identity={<Link className="assistant-identity" to={defaultRepairPath} title={providerHeader + " · " + t("agentConsole.provider.newSessionNote")}>{identity ?? conversationName}</Link>} />
-          {empty && <div className="agent-chat-starters">{(scope === "general" ? [t("assistant.generalStarter1"), t("assistant.generalStarter2")] : ASK_STARTERS).map((starter) => <button key={starter} type="button" onClick={() => setInput(starter)}>{starter}</button>)}</div>}
-          <p className="assistant-scope-note" title={scopeDetail}>{t(scopeNote)}</p>
+          <div className="assistant-composer-tools">
+            <select className="assistant-scope" aria-label={t("assistant.scope")} value={scope}
+              disabled={!draftSession || ask.isPending || createSession.isPending}
+              title={!draftSession ? t("assistant.scopePinned") : undefined}
+              onChange={(event) => setDraftScope(event.target.value as "general" | "meetings")}>
+              <option value="general">{t("assistant.scopeGeneral")}</option>
+              <option value="meetings">{t("assistant.scopeMeetings")}</option>
+            </select>
+            {scope === "meetings" && <MeetingReference onChoose={(title, recordedAt) => setInput((value) => `${value}${value ? "\n" : ""}关于会议「${title}」（${recordedAt.slice(0, 16).replace("T", " ")}）：`)} disabled={sessionStatus === "paused" || ask.isPending} />}
+            <span title={scope === "general" ? t("assistant.generalIntro") : provider === "xai" ? t("agentConsole.xai.localBoundary") : t("assistant.agentScope.detail")}>{t(scope === "general" ? "assistant.generalScope" : provider === "xai" ? "assistant.localScope" : "assistant.agentScope")}</span>
+          </div>
+          <Composer value={input} onChange={setInput} onSubmit={submit} pending={awaitingRemote || ask.isPending || createSession.isPending || appendSession.isPending} disabled={sessionStatus === "paused"} placeholder={messages.length ? "继续提问..." : scope === "general" ? t("assistant.generalPlaceholder") : "问会议记录、决策、行动项..."} />
         </div>
       </div>
     </div>
@@ -531,14 +527,15 @@ function MeetingReference({ onChoose, disabled }: { onChoose: (title: string, re
   const close = () => { setOpen(false); button.current?.focus(); };
   const meetings = (overview.data ?? []).filter((task) => task.stem && task.hasTranscript && task.title.toLowerCase().includes(query.toLowerCase()));
   return <div className="assistant-reference" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); close(); } }}>
-    <button ref={button} type="button" disabled={disabled} className="assistant-reference-toggle" aria-expanded={open} aria-controls="assistant-meetings" onClick={() => setOpen(!open)}><FileText size={14} strokeWidth={1.75} />{t("assistant.reference")}</button>
-    {open && <div ref={panel} id="assistant-meetings" className="assistant-meeting-picker menu" role="region" aria-label={t("assistant.reference")}>
+    <button ref={button} type="button" disabled={disabled} className="assistant-reference-toggle" aria-expanded={open} aria-controls="assistant-meetings" onClick={() => setOpen(!open)}><FileText size={14} />{t("assistant.reference")}</button>
+    {open && <div ref={panel} id="assistant-meetings" className="assistant-meeting-picker" role="region" aria-label={t("assistant.reference")}>
       <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("assistant.reference.search")} aria-label={t("assistant.reference.search")} />
       <p>{t("assistant.reference.hint")}</p>
       <div className="assistant-meeting-list">
-        {meetings.map((meeting) => <button type="button" className="menu-item" key={meeting.stem} onClick={() => { onChoose(meeting.title, meeting.recordedAt); close(); }}><strong>{meeting.title}</strong><span>{meeting.recordedAt.slice(0, 10)}</span></button>)}
+        {meetings.map((meeting) => <button type="button" key={meeting.stem} onClick={() => { onChoose(meeting.title, meeting.recordedAt); close(); }}><strong>{meeting.title}</strong><span>{meeting.recordedAt.slice(0, 10)}</span></button>)}
         {meetings.length === 0 && <p role="status">{t(overview.isPending ? "common.loading" : overview.isError ? "assistant.reference.error" : "assistant.reference.empty")}</p>}
       </div>
+      <Link to="/inbox">{t("assistant.recordings")}</Link>
     </div>}
   </div>;
 }
@@ -562,14 +559,14 @@ function PausedConversation({
 }) {
   const t = useT();
   return (
-    <div className="agent-conversation-paused notice" data-tone="warn">
+    <div className="agent-conversation-paused">
       <strong role="alert">{t("agentConsole.provider.paused.heading")}</strong>
       <span>{t("agentConsole.provider.paused.body", { identity })}</span>
       {reason && <em>{reason}</em>}
       <div>
-        {retryAvailable && <button type="button" className="btn" disabled={retrying} onClick={onRetry}>{t("agentConsole.provider.paused.retry")}</button>}
-        <Link className="btn" to={repairPath}>{t("settings.providers.open")}</Link>
-        <button type="button" className="btn btn-quiet" onClick={onNew}>{t("agentConsole.provider.paused.newConversation")}</button>
+        {retryAvailable && <button type="button" disabled={retrying} onClick={onRetry}>{t("agentConsole.provider.paused.retry")}</button>}
+        <Link to={repairPath}>{t("settings.providers.open")}</Link>
+        <button type="button" onClick={onNew}>{t("agentConsole.provider.paused.newConversation")}</button>
       </div>
       <small>{t("agentConsole.provider.newSessionNote")}</small>
     </div>
@@ -591,15 +588,15 @@ function NewConversationFailure({
 }) {
   const t = useT();
   return (
-    <div className="agent-conversation-paused notice" data-tone="warn">
+    <div className="agent-conversation-paused">
       <strong role="alert">{t("agentConsole.provider.createFailed.heading")}</strong>
       <span>{t("agentConsole.provider.createFailed.body", { identity })}</span>
       <em>{reason}</em>
       <div>
-        <button type="button" className="btn" disabled={retrying} onClick={onRetry}>
+        <button type="button" disabled={retrying} onClick={onRetry}>
           {t("agentConsole.provider.createFailed.retry")}
         </button>
-        <Link className="btn" to={repairPath}>{t("settings.providers.open")}</Link>
+        <Link to={repairPath}>{t("settings.providers.open")}</Link>
       </div>
     </div>
   );
@@ -645,6 +642,7 @@ function AgentSessionPanel({
   selectedSessionId,
   loading,
   onSelect,
+  onNew,
   onRename,
   onDelete,
   onArchive,
@@ -655,6 +653,7 @@ function AgentSessionPanel({
   selectedSessionId: string | null;
   loading: boolean;
   onSelect: (id: string) => void;
+  onNew: () => void;
   onRename: (session: AgentSessionSummary) => void;
   onDelete: (session: AgentSessionSummary) => void;
   onArchive: (session: AgentSessionSummary) => void;
@@ -667,9 +666,10 @@ function AgentSessionPanel({
   useEffect(() => { panelRef.current?.querySelector("input")?.focus(); }, []);
   return (
     <aside ref={panelRef} id="assistant-history" className="agent-session-panel" aria-label="对话历史" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }}>
+      <div className="agent-session-pane agent-session-history">
         <div className="agent-session-panel-head">
           <span>历史</span>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="收起对话历史"><X size={16} strokeWidth={1.8} /></button>
+          <button type="button" className="assistant-tool" onClick={onClose} aria-label="收起对话历史"><X size={16} /></button>
         </div>
         <input
           className="agent-session-search"
@@ -692,18 +692,21 @@ function AgentSessionPanel({
                     onClick={() => onSelect(session.id)}
                     title={session.title}
                   >
-                    <strong>{session.title}</strong>
-                    <em>{session.messageCount} 条 · {formatSessionTime(session.updatedAt)}</em>
+                    <MessageSquare size={13} strokeWidth={2} />
+                    <span>
+                      <strong>{session.title}</strong>
+                      <em>{session.messageCount} 条 · {formatSessionTime(session.updatedAt)}</em>
+                    </span>
                   </button>
                   <details className="agent-session-menu">
                     <summary aria-label={`${session.title} 操作`}>
-                      <MoreHorizontal size={15} strokeWidth={1.8} />
+                      <MoreHorizontal size={14} strokeWidth={2} />
                     </summary>
-                    <div className="menu">
-                      <button type="button" className="menu-item" onClick={() => onRename(session)}><Pencil size={14} strokeWidth={1.75} />重命名</button>
-                      <button type="button" className="menu-item" onClick={() => onPin(session)}><Pin size={14} strokeWidth={1.75} />{session.pinnedAt ? "取消置顶" : "置顶"}</button>
-                      <button type="button" className="menu-item" onClick={() => onArchive(session)}><Archive size={14} strokeWidth={1.75} />归档</button>
-                      <button type="button" className="menu-item danger" onClick={() => onDelete(session)}><Trash2 size={14} strokeWidth={1.75} />删除</button>
+                    <div>
+                      <button type="button" onClick={() => onRename(session)}><Pencil size={13} />重命名</button>
+                      <button type="button" onClick={() => onPin(session)}><Pin size={13} />{session.pinnedAt ? "取消置顶" : "置顶"}</button>
+                      <button type="button" onClick={() => onArchive(session)}><Archive size={13} />归档</button>
+                      <button type="button" className="danger" onClick={() => onDelete(session)}><Trash2 size={13} />删除</button>
                     </div>
                   </details>
                 </div>
@@ -712,6 +715,7 @@ function AgentSessionPanel({
           ))}
           {groups.length === 0 && <span className="agent-session-empty">{loading ? "读取历史..." : "暂无历史会话"}</span>}
         </div>
+      </div>
     </aside>
   );
 }
@@ -764,8 +768,7 @@ function Composer({
   pending,
   disabled,
   placeholder,
-  tools,
-  identity,
+  large,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -773,21 +776,11 @@ function Composer({
   pending?: boolean;
   disabled?: boolean;
   placeholder: string;
-  tools?: ReactNode;
-  identity?: ReactNode;
+  large?: boolean;
 }) {
-  const field = useRef<HTMLTextAreaElement>(null);
-  // Grow with the question, up to a few lines, then scroll.
-  useLayoutEffect(() => {
-    const node = field.current;
-    if (!node) return;
-    node.style.height = "auto";
-    node.style.height = `${Math.min(node.scrollHeight, 220)}px`;
-  }, [value]);
   return (
     <div className="agent-composer">
       <textarea
-        ref={field}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
@@ -796,17 +789,13 @@ function Composer({
             onSubmit();
           }
         }}
-        rows={1}
+        rows={large ? 2 : 1}
         disabled={disabled}
         placeholder={placeholder}
       />
-      <div className="agent-composer-bar">
-        <div className="agent-composer-tools">{tools}</div>
-        {identity}
-        <button type="button" className="agent-composer-send" disabled={disabled || !value.trim() || pending} onClick={onSubmit} aria-label="发送">
-          {pending ? <Loader2 className="spin" size={15} strokeWidth={2} /> : <ArrowUp size={16} strokeWidth={2.2} />}
-        </button>
-      </div>
+      <button type="button" disabled={disabled || !value.trim() || pending} onClick={onSubmit} aria-label="发送">
+        {pending ? <Loader2 className="spin" size={15} strokeWidth={2} /> : <ArrowUp size={15} strokeWidth={2} />}
+      </button>
     </div>
   );
 }

@@ -50,14 +50,13 @@ interface SpeakerOption {
 
 const LEGACY_SPEAKER_RE = /^(Speaker [A-Z]:)/;
 const TAGGED_LINE_RE = /^\[(\d{2}:\d{2}(?::\d{2})?)\s+(.+?)\]\s*(.*)$/;
-/** Speaker identity colours, shared with the speaker panel. */
-export const SPEAKER_COLORS = [
-  "var(--accent)",
+const SPEAKER_COLORS = [
+  "var(--blue)",
   "var(--green)",
   "var(--purple)",
-  "var(--amber)",
+  "var(--accent)",
   "var(--red)",
-  "var(--teal)",
+  "#5CCFE6",
 ];
 
 export function TranscriptView({ text, speakerData, onSeek, onAssignSpeaker }: TranscriptViewProps) {

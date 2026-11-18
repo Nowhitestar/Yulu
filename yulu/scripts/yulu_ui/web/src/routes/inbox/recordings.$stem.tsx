@@ -3,10 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { AudioLines, Check, ChevronLeft, Copy, Ellipsis, GitMerge, RefreshCw, Trash2, Users } from "lucide-react";
+import { Check, ChevronLeft, Code, Copy, FileText, RefreshCw, Sparkles, Pencil, Trash2, Users, GitMerge } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
-import { SPEAKER_COLORS, TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
+import { TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
 import { MarkdownView } from "../../components/MarkdownView.js";
 import { TagEditor } from "../../components/TagEditor.js";
 import { EmptyState } from "../../components/EmptyState.js";
@@ -14,15 +14,26 @@ import { ReprocessButton, type ReprocessButtonState } from "../../components/Rep
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
 import { SharePopover, type RecordingShareView } from "../../components/SharePopover.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
-import { PopoverMenu } from "../../components/PopoverMenu.js";
-import { useLang, useT } from "../../i18n/LanguageProvider.js";
+import { useT } from "../../i18n/LanguageProvider.js";
 import { useWsChannel } from "../../ws.js";
 import "./recordings.reader.css";
 
 const GET_KEY = [["recordings", "get"]] as const;
 const LIST_KEY = [["recordings", "list"]] as const;
+const SPEAKER_COLORS = [
+  "var(--blue)",
+  "var(--green)",
+  "var(--purple)",
+  "var(--accent)",
+  "var(--red)",
+  "#5CCFE6",
+];
 const AUDIO_MOUNT_DELAY_MS = 250;
 
+export const handle = {
+  breadcrumb: "breadcrumb.reader",
+  filters: null,
+};
 
 type Tab = "transcript" | "summary" | "raw";
 type ManualAction = "transcribe" | "summarize" | "share";
@@ -361,7 +372,6 @@ export function RecordingReader() {
   const navigate = useNavigate();
   const confirm = useConfirm();
   const t = useT();
-  const { lang } = useLang();
   const { data, error, isPending } = trpc.recordings.get.useQuery({ stem }, { enabled: stem.length > 0 });
   const { data: summaryPrompts } = trpc.prompts.list.useQuery({ category: "summary" });
   const acknowledgeGuidedCompletion = trpc.activation.acknowledgeGuidedCompletion.useMutation();
@@ -752,66 +762,60 @@ export function RecordingReader() {
     setParams(next, { replace: true });
   };
 
-  const actionAlert = actionError?.message ?? null;
-  const recorded = new Date(data.recordedAt ?? data.mtimeMs);
-
   return (
     <div className="reader">
-      {activationComplete && (
-        <div className="reader-activation-success notice" data-tone="ok" role="status" aria-live="polite">
-          <Check size={16} aria-hidden="true" />
-          {t("reader.activation.complete")}
-        </div>
-      )}
-      <header className="reader-header">
-        <button type="button" className="reader-mobile-back" onClick={() => navigate("/inbox")}>
-          <ChevronLeft size={15} strokeWidth={1.8} />
-          <span>{t("nav.recordings")}</span>
-        </button>
-        <div className="reader-heading">
-          <div className="reader-heading-copy">
-            {editingTitle ? (
-              <input
-                ref={titleInputRef}
-                className="reader-title reader-title-input"
-                value={titleDraft}
-                placeholder={data.title ?? t("reader.title.placeholder")}
-                aria-label={t("reader.title.aria")}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onBlur={commitRename}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") { e.preventDefault(); commitRename(); }
-                  else if (e.key === "Escape") { e.preventDefault(); setEditingTitle(false); }
-                }}
-              />
-            ) : (
-              <button type="button" className="reader-title reader-title-edit" onClick={startRename} title={t("reader.title.rename")}>
-                {data.title ?? data.stem}
-              </button>
-            )}
-            <div className="reader-meta">
-              <span>{recorded.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}</span>
-              {!agentTask && <RecordingStatusBadge state={data.status} error={data.statusError} />}
-              <AgentTaskStatus task={agentTask} delivery={notionDelivery} />
-              <TagEditor tags={data.tags ?? []} onChange={handleTagsChange} />
-            </div>
+      <div className="reader-workspace">
+        {activationComplete && (
+          <div className="reader-activation-success" role="status" aria-live="polite">
+            <Check size={16} aria-hidden="true" />
+            {t("reader.activation.complete")}
           </div>
-          <div className="reader-header-actions">
-            <SharePopover
-              className="btn"
-              view={recordingShare}
-              pending={shareRecordingMut.isPending || reconcileRecordingShareMut.isPending || abandonRecordingShareMut.isPending}
-              reconciling={reconcileRecordingShareMut.isPending}
-              error={actionError?.action === "share" ? actionError.message : undefined}
-              onConfirm={handleShare}
-              onReconcileUnknown={handleReconcileRecordingShare}
-              onAbandonUnknown={handleAbandonRecordingShare}
-              disabled={!data.summary || data.summaryStale || taskActionBlocked || manualActionPending}
-            />
-            {/* Everything you do rarely: reprocess with another template, or delete. */}
-            <PopoverMenu label={t("reader.more")} icon={<Ellipsis size={17} strokeWidth={1.8} />} className="reader-more">
+        )}
+        <div className="reader-header">
+          <button type="button" className="reader-mobile-back" onClick={() => navigate("/inbox")}>
+            <ChevronLeft size={14} strokeWidth={1.8} />
+            <span>{t("nav.recordings")}</span>
+          </button>
+          <div className="reader-heading">
+            <div className="reader-heading-copy">
+              <div className="reader-titlerow">
+                {editingTitle ? (
+                  <input
+                    ref={titleInputRef}
+                    className="reader-title-input"
+                    value={titleDraft}
+                    placeholder={data.title ?? t("reader.title.placeholder")}
+                    aria-label={t("reader.title.aria")}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                      else if (e.key === "Escape") { e.preventDefault(); setEditingTitle(false); }
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="reader-title reader-title-edit"
+                    onClick={startRename}
+                    title={t("reader.title.rename")}
+                  >
+                    <span>{data.title ?? data.stem}</span>
+                    <Pencil size={12} strokeWidth={1.75} className="reader-title-pencil" />
+                  </button>
+                )}
+              </div>
+              <div className="reader-meta">
+                <span>{new Date(data.mtimeMs).toLocaleDateString()}</span>
+                <span>•</span>
+                {!agentTask && <RecordingStatusBadge state={data.status} error={data.statusError} />}
+                <AgentTaskStatus task={agentTask} delivery={notionDelivery} />
+                <TagEditor tags={data.tags ?? []} onChange={handleTagsChange} />
+              </div>
+            </div>
+            <div className="reader-header-actions">
               {summaryTemplateOptions.length > 0 && (
-                <label className="reader-menu-field" title={t("reader.summaryTemplate.title")}>
+                <label className="reader-action-select reader-action-select--summary" title={t("reader.summaryTemplate.title")}>
                   <span>{t("reader.summaryTemplate.label")}</span>
                   <select
                     value={summaryTemplateId}
@@ -826,184 +830,231 @@ export function RecordingReader() {
                   </select>
                 </label>
               )}
-              <ReprocessButton
-                label={t("reader.action.regenerate")}
-                icon={<RefreshCw size={14} strokeWidth={1.75} />}
-                state={deriveButtonState("summarize")}
-                error={buttonError("summarize")}
-                onClick={handleSummarize}
-                disabled={!data.transcript || taskActionBlocked || manualActionPending}
-                disabledReason={!data.transcript ? t("reader.disabled.transcriptFirst") : actionsDisabledReason}
-              />
-              <ReprocessButton
-                label={t("reader.action.retranscribe")}
-                icon={<AudioLines size={14} strokeWidth={1.75} />}
-                state={deriveButtonState("transcribe")}
-                error={buttonError("transcribe")}
-                onClick={handleTranscribe}
-                disabled={!data.wavPath || taskActionBlocked || manualActionPending}
-                disabledReason={!data.wavPath ? t("reader.disabled.wavMissing") : actionsDisabledReason}
-              />
-              <div className="menu-sep" />
               <button
                 type="button"
-                className="menu-item danger"
-                data-close
+                className="reader-header-icon reader-header-delete"
                 onClick={handleDelete}
                 disabled={deleteMut.isPending || taskDeleteBlocked}
                 aria-label={t("reader.delete.aria")}
                 title={taskDeleteBlocked ? t("reader.disabled.agentTaskActive") : t("reader.delete.title")}
               >
-                <Trash2 size={14} strokeWidth={1.75} />
-                <span>{t("reader.action.delete")}</span>
+                <Trash2 size={15} strokeWidth={1.75} />
               </button>
-            </PopoverMenu>
+            </div>
           </div>
-        </div>
 
-        {actionAlert && <div className="reader-action-error notice" data-tone="bad" role="alert">{actionAlert}</div>}
+          <div className="reader-actions">
+          <ReprocessButton
+            label={t("reader.action.retranscribe")}
+            icon={<RefreshCw size={14} strokeWidth={1.75} />}
+            state={deriveButtonState("transcribe")}
+            error={buttonError("transcribe")}
+            onClick={handleTranscribe}
+            disabled={!data.wavPath || taskActionBlocked || manualActionPending}
+            disabledReason={!data.wavPath ? t("reader.disabled.wavMissing") : actionsDisabledReason}
+          />
+          <ReprocessButton
+            label={t("reader.action.regenerate")}
+            icon={<Sparkles size={14} strokeWidth={1.75} />}
+            state={deriveButtonState("summarize")}
+            error={buttonError("summarize")}
+            onClick={handleSummarize}
+            disabled={!data.transcript || taskActionBlocked || manualActionPending}
+            disabledReason={!data.transcript ? t("reader.disabled.transcriptFirst") : actionsDisabledReason}
+          />
+          <SharePopover
+            className="reader-action-share"
+            view={recordingShare}
+            pending={shareRecordingMut.isPending || reconcileRecordingShareMut.isPending || abandonRecordingShareMut.isPending}
+            reconciling={reconcileRecordingShareMut.isPending}
+            error={actionError?.action === "share" ? actionError.message : undefined}
+            onConfirm={handleShare}
+            onReconcileUnknown={handleReconcileRecordingShare}
+            onAbandonUnknown={handleAbandonRecordingShare}
+            disabled={!data.summary || data.summaryStale || taskActionBlocked || manualActionPending}
+          />
+          </div>
 
-        {agentTask?.state === "awaiting_provider" && (
-          <div className="reader-reconciliation notice" data-tone="warn" role="alert">
-            <div>
-              <strong>{t("reader.providerPause.heading")}</strong>
-              <p>
-                {t("reader.providerPause.body", {
+          {actionError?.action === "share" && <div className="reader-action-error" role="alert">{actionError.message}</div>}
+
+          {agentTask?.state === "awaiting_provider" && (
+            <div className="reader-reconciliation reader-provider-pause" role="alert">
+              <div>
+                <strong>{t("reader.providerPause.heading")}</strong>
+                <p>
+                  {t("reader.providerPause.body", {
+                    provider: agentTask.summaryProvider === "xai" ? "xAI" : agentTask.summaryProvider,
+                    model: agentTask.summaryModel,
+                  })}
+                </p>
+                {agentTask.error && <p>{agentTask.error}</p>}
+              </div>
+              {keptPausedTaskId === agentTask.id ? (
+                <span role="status">{t("reader.providerPause.kept")}</span>
+              ) : (
+                <div className="reader-reconciliation-actions" style={{ flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={handleProviderRetry}
+                    disabled={retryTaskMut.isPending}
+                  >
+                    {t("reader.providerPause.retry")}
+                  </button>
+                  <Link to={summaryRepairPath}>{t("settings.providers.open")}</Link>
+                  <button type="button" onClick={() => setKeptPausedTaskId(agentTask.id)}>
+                    {t("reader.providerPause.keep")}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {agentTask?.state === "execution_unverified" && (
+            <div className="reader-reconciliation reader-provider-pause" role="alert">
+              <div>
+                <strong>{t("reader.unknownSummary.heading")}</strong>
+                <p>{t("reader.unknownSummary.body", {
                   provider: agentTask.summaryProvider === "xai" ? "xAI" : agentTask.summaryProvider,
                   model: agentTask.summaryModel,
-                })}
-              </p>
-              {agentTask.error && <p>{agentTask.error}</p>}
+                })}</p>
+                {agentTask.error && <p>{agentTask.error}</p>}
+              </div>
+              {keptPausedTaskId === agentTask.id ? (
+                <span role="status">{t("reader.unknownSummary.kept")}</span>
+              ) : (
+                <div className="reader-reconciliation-actions" style={{ flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={handleUnknownSummaryAttempt}
+                    disabled={createSummaryAttemptFromUnknownMut.isPending}
+                  >
+                    {t("reader.unknownSummary.newAttempt")}
+                  </button>
+                  <Link to={summaryRepairPath}>{t("settings.providers.open")}</Link>
+                  <button type="button" onClick={() => setKeptPausedTaskId(agentTask.id)}>
+                    {t("reader.unknownSummary.keep")}
+                  </button>
+                </div>
+              )}
             </div>
-            {keptPausedTaskId === agentTask.id ? (
-              <span role="status">{t("reader.providerPause.kept")}</span>
-            ) : (
+          )}
+
+          {agentTask?.state === "delivery_unverified" && (
+            <div className="reader-reconciliation" role="alert">
+              <div>
+                <strong>{t("reader.reconciliation.heading")}</strong>
+                <p>{t("reader.reconciliation.description")}</p>
+              </div>
               <div className="reader-reconciliation-actions">
-                <button type="button" className="btn" onClick={handleProviderRetry} disabled={retryTaskMut.isPending}>
-                  {t("reader.providerPause.retry")}
+                <button
+                  type="button"
+                  onClick={handleConfirmDelivery}
+                  disabled={confirmDeliveryMut.isPending || abandonDeliveryMut.isPending}
+                >
+                  {t("reader.reconciliation.confirmDelivered")}
                 </button>
-                <Link className="btn" to={summaryRepairPath}>{t("settings.providers.open")}</Link>
-                <button type="button" className="btn btn-quiet" onClick={() => setKeptPausedTaskId(agentTask.id)}>
-                  {t("reader.providerPause.keep")}
+                <button
+                  type="button"
+                  onClick={handleAbandonDelivery}
+                  disabled={confirmDeliveryMut.isPending || abandonDeliveryMut.isPending}
+                >
+                  {t("reader.reconciliation.abandon")}
                 </button>
               </div>
-            )}
-          </div>
-        )}
-
-        {agentTask?.state === "execution_unverified" && (
-          <div className="reader-reconciliation notice" data-tone="warn" role="alert">
-            <div>
-              <strong>{t("reader.unknownSummary.heading")}</strong>
-              <p>{t("reader.unknownSummary.body", {
-                provider: agentTask.summaryProvider === "xai" ? "xAI" : agentTask.summaryProvider,
-                model: agentTask.summaryModel,
-              })}</p>
-              {agentTask.error && <p>{agentTask.error}</p>}
             </div>
-            {keptPausedTaskId === agentTask.id ? (
-              <span role="status">{t("reader.unknownSummary.kept")}</span>
-            ) : (
-              <div className="reader-reconciliation-actions">
-                <button type="button" className="btn" onClick={handleUnknownSummaryAttempt} disabled={createSummaryAttemptFromUnknownMut.isPending}>
-                  {t("reader.unknownSummary.newAttempt")}
-                </button>
-                <Link className="btn" to={summaryRepairPath}>{t("settings.providers.open")}</Link>
-                <button type="button" className="btn btn-quiet" onClick={() => setKeptPausedTaskId(agentTask.id)}>
-                  {t("reader.unknownSummary.keep")}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+          )}
 
-        {agentTask?.state === "delivery_unverified" && (
-          <div className="reader-reconciliation notice" data-tone="warn" role="alert">
-            <div>
-              <strong>{t("reader.reconciliation.heading")}</strong>
-              <p>{t("reader.reconciliation.description")}</p>
+          {mountedAudioSrc === audioSrc ? (
+            <AudioPlayer src={audioSrc} initialSeek={initialSeek} />
+          ) : (
+            <div className="audioplayer audioplayer-deferred" aria-hidden="true">
+              <button type="button" className="audioplayer-play" disabled />
+              <div className="audioplayer-wave" />
+              <div className="audioplayer-time">0:00 / 0:00</div>
             </div>
-            <div className="reader-reconciliation-actions">
-              <button type="button" className="btn" onClick={handleConfirmDelivery} disabled={confirmDeliveryMut.isPending || abandonDeliveryMut.isPending}>
-                {t("reader.reconciliation.confirmDelivered")}
-              </button>
-              <button type="button" className="btn btn-quiet" onClick={handleAbandonDelivery} disabled={confirmDeliveryMut.isPending || abandonDeliveryMut.isPending}>
-                {t("reader.reconciliation.abandon")}
-              </button>
-            </div>
-          </div>
-        )}
+          )}
 
-        {mountedAudioSrc === audioSrc ? (
-          <AudioPlayer src={audioSrc} initialSeek={initialSeek} />
-        ) : (
-          <div className="audioplayer audioplayer-deferred" aria-hidden="true">
-            <button type="button" className="audioplayer-play" disabled />
-            <div className="audioplayer-wave" />
-            <div className="audioplayer-time">0:00 / 0:00</div>
-          </div>
-        )}
-
-        <div className="reader-tabbar">
-          <div className="reader-tabs seg" role="tablist">
-            {(showRaw ? ["summary", "transcript", "raw"] as const : ["summary", "transcript"] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                role="tab"
-                aria-selected={tab === item}
-                className={"reader-tab" + (tab === item ? " active" : "")}
-                title={item === "raw" ? t("reader.tab.raw.title") : undefined}
-                onClick={() => setTab(item)}
-              >
-                {t(`reader.tab.${item}`)}
-              </button>
-            ))}
-          </div>
-          {tab === "summary" && data.summary && (
+          <div className="reader-tabs" role="tablist">
+          <button
+            key="summary"
+            type="button"
+            aria-selected={tab === "summary"}
+            className={"reader-tab" + (tab === "summary" ? " active" : "")}
+            onClick={() => setTab("summary")}
+          >
+            <Sparkles size={14} strokeWidth={1.75} />
+            {t("reader.tab.summary")}
+          </button>
+          <button
+            key="transcript"
+            type="button"
+            aria-selected={tab === "transcript"}
+            className={"reader-tab" + (tab === "transcript" ? " active" : "")}
+            onClick={() => setTab("transcript")}
+          >
+            <FileText size={14} strokeWidth={1.75} />
+            {t("reader.tab.transcript")}
+          </button>
+          {showRaw && (
             <button
+              key="raw"
               type="button"
-              className="reader-copy-summary btn btn-quiet"
-              onClick={handleCopySummary}
-              aria-label={t("reader.copySummary.aria")}
-              title={t("reader.copySummary.title")}
+              aria-selected={tab === "raw"}
+              className={"reader-tab" + (tab === "raw" ? " active" : "")}
+              onClick={() => setTab("raw")}
+              title={t("reader.tab.raw.title")}
             >
-              {copiedSummary ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={1.75} />}
-              <span>{copiedSummary ? t("reader.copySummary.done") : t("reader.copySummary")}</span>
+              <Code size={14} strokeWidth={1.75} />
+              {t("reader.tab.raw")}
             </button>
           )}
+          </div>
         </div>
-      </header>
 
-      <div className="reader-body" ref={bodyRef}>
-        {tab === "summary" && (
-          data.summary
-            ? <div className="reader-summary"><MarkdownView text={data.summary} /></div>
-            : <EmptyState label={t("reader.empty.summary")} />
-        )}
-        {tab === "transcript" && (
-          (data.transcript || data.realtime)
-            ? (
-              <TranscriptView
-                text={data.transcript ?? data.realtime ?? ""}
-                speakerData={data.speakerData}
-                onSeek={handleSeek}
-                onAssignSpeaker={handleAssignSegmentSpeaker}
-              />
-            )
-            : <EmptyState label={t("reader.empty.transcript")} />
-        )}
-        {tab === "raw" && showRaw && (
-          <pre className="reader-raw">{data.raw ?? data.transcript ?? ""}</pre>
-        )}
-        {tab === "transcript" && (
-          <SpeakerPanel
-            speakerData={data.speakerData}
-            onRename={handleRenameSpeaker}
-            onMerge={handleMergeSpeakers}
-          />
-        )}
+        <div className="reader-body" ref={bodyRef}>
+          {tab === "summary" && (
+            data.summary ? (
+              <div className="reader-summary">
+                <div className="reader-summary-actions">
+                  <button
+                    type="button"
+                    className="reader-copy-summary"
+                    onClick={handleCopySummary}
+                    aria-label={t("reader.copySummary.aria")}
+                    title={t("reader.copySummary.title")}
+                  >
+                    {copiedSummary ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={1.75} />}
+                    <span>{copiedSummary ? t("reader.copySummary.done") : t("reader.copySummary")}</span>
+                  </button>
+                </div>
+                <MarkdownView text={data.summary} />
+              </div>
+            ) : <EmptyState label={t("reader.empty.summary")} />
+          )}
+          {tab === "transcript" && (
+            (data.transcript || data.realtime)
+              ? (
+                <TranscriptView
+                  text={data.transcript ?? data.realtime ?? ""}
+                  speakerData={data.speakerData}
+                  onSeek={handleSeek}
+                  onAssignSpeaker={handleAssignSegmentSpeaker}
+                />
+              )
+              : <EmptyState label={t("reader.empty.transcript")} />
+          )}
+          {tab === "raw" && showRaw && (
+            <pre className="reader-raw">{data.raw ?? data.transcript ?? ""}</pre>
+          )}
+        </div>
+
+        <SpeakerPanel
+          speakerData={data.speakerData}
+          onRename={handleRenameSpeaker}
+          onMerge={handleMergeSpeakers}
+        />
       </div>
+
     </div>
   );
 }

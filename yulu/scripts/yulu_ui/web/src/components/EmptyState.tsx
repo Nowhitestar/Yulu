@@ -13,7 +13,7 @@ export function EmptyState({ icon, label, cta }: EmptyStateProps) {
       {icon && <div className="emptystate-icon" aria-hidden="true">{icon}</div>}
       <div className="emptystate-label">{label}</div>
       {cta && (
-        <button type="button" className="emptystate-cta btn" onClick={cta.onClick}>
+        <button type="button" className="emptystate-cta" onClick={cta.onClick}>
           {cta.label}
         </button>
       )}

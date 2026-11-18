@@ -56,7 +56,7 @@ export function AgentQueueSection() {
           {pipelineHealth?.paused && <p>{pipelineHealth.policyReason}</p>}
         </div>
         <div className="control-actions">
-          <button type="button" className="btn" onClick={() => refetch()}>{t("common.refresh")}</button>
+          <button type="button" className="control-btn" onClick={() => refetch()}>{t("common.refresh")}</button>
         </div>
       </div>
 
@@ -79,7 +79,7 @@ export function AgentQueueSection() {
               <div className="control-card-head">
                 <div>
                   <div className="control-card-title">{entry.title || entry.id}</div>
-                  <Link className="control-card-link link" to={`/inbox/${encodeURIComponent(entry.recordingStem)}`}>{t("runtime.openRecording")}</Link>
+                  <Link className="runtime-feature-action" to={`/inbox/${encodeURIComponent(entry.recordingStem)}`}>{t("runtime.openRecording")}</Link>
                 </div>
                 <span className="control-pill" data-status={entry.state}>
                   {t(taskStateKey(entry.state))}
@@ -101,7 +101,7 @@ export function AgentQueueSection() {
               )) && <div className="control-actions">
                 <button
                   type="button"
-                  className="btn"
+                  className="control-btn"
                   disabled={retryMut.isPending}
                   onClick={() => retryMut.mutate({ id: entry.id })}
                 >
@@ -111,7 +111,7 @@ export function AgentQueueSection() {
               {entry.state === "delivery_unverified" && <div className="control-actions">
                 <button
                   type="button"
-                  className="btn"
+                  className="control-btn"
                   disabled={confirmMut.isPending || abandonMut.isPending}
                   onClick={() => {
                     const url = window.prompt(t("health.queue.confirmPrompt"), "");
@@ -123,7 +123,7 @@ export function AgentQueueSection() {
                 </button>
                 <button
                   type="button"
-                  className="btn"
+                  className="control-btn"
                   disabled={confirmMut.isPending || abandonMut.isPending}
                   onClick={() => {
                     if (window.confirm(t("health.queue.abandonConfirm"))) {

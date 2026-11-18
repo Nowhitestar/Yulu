@@ -57,7 +57,7 @@ export function DaemonCard({ daemon, onRestart, onStop, onStart, restartPending,
         {daemon.status === "stopped" && onStart && (
           <button
             type="button"
-            className="btn"
+            className="daemon-card-btn restart"
             onClick={() => onStart(daemon.name)}
             disabled={startPending}
           >
@@ -67,7 +67,7 @@ export function DaemonCard({ daemon, onRestart, onStop, onStart, restartPending,
         )}
         <button
           type="button"
-          className="btn"
+          className="daemon-card-btn restart"
           onClick={() => onRestart(daemon.name)}
           disabled={restartPending}
         >
@@ -75,13 +75,13 @@ export function DaemonCard({ daemon, onRestart, onStop, onStart, restartPending,
         </button>
         <button
           type="button"
-          className="btn btn-danger"
+          className="daemon-card-btn stop"
           onClick={() => onStop(daemon.name)}
           disabled={stopPending || daemon.status === "stopped"}
         >
           {t("health.daemon.stop")}
         </button>
-        <Link to={`/health/logs?name=${encodeURIComponent(daemon.name)}`} className="daemon-card-logs link">
+        <Link to={`/health/logs?name=${encodeURIComponent(daemon.name)}`} className="daemon-card-btn link">
           {t("health.daemon.viewLogs")}
         </Link>
       </div>

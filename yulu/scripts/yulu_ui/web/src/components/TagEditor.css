@@ -1,7 +1,52 @@
-.tag-editor { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 5px; }
-.tag-chip { display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 4px 0 8px; border-radius: var(--r-pill); background: var(--fill); color: var(--fg-2); font-size: 11.5px; }
-.tag-chip-remove { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; color: var(--fg-3); }
-.tag-chip-remove:hover { background: var(--fill-2); color: var(--fg); }
-.tag-add { display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 6px; border-radius: var(--r-pill); color: var(--fg-3); font-size: 11.5px; }
-.tag-add:hover { background: var(--fill); color: var(--fg); }
-.tag-input { width: 96px; height: 20px; padding: 0 8px; border: 0; border-radius: var(--r-pill); outline: 0; background: var(--fill); font-size: 11.5px; box-shadow: 0 0 0 1.5px var(--accent); }
+.tag-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 2px 4px 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-on, var(--accent));
+  border: 1px solid color-mix(in oklch, var(--accent) 20%, var(--edge));
+}
+.tag-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: inherit;
+  opacity: 0.6;
+}
+.tag-chip-remove:hover { opacity: 1; background: var(--glass-2); }
+
+.tag-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px dashed var(--edge);
+  color: var(--fg-2);
+}
+.tag-add:hover { color: var(--fg); border-color: var(--fg-3); }
+
+.tag-input {
+  font-size: 11px;
+  padding: 2px 8px;
+  width: 90px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--accent);
+  background: var(--field-bg);
+  color: var(--fg);
+}
+.tag-input:focus { outline: none; }

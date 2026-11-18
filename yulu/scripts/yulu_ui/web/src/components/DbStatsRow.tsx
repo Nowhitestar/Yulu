@@ -26,7 +26,7 @@ export function DbStatsRow({ name, path, size, rows, actionLabel, onAction, acti
         <span>{rows === null ? "— rows" : `${rows} rows`}</span>
       </div>
       {actionLabel && onAction && (
-        <button type="button" className="btn" onClick={onAction} disabled={actionDisabled}>
+        <button type="button" className="dbstats-action" onClick={onAction} disabled={actionDisabled}>
           {actionLabel}
         </button>
       )}

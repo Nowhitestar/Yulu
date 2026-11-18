@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router";
 import { trpc } from "../../trpc.js";
 import { LogTail } from "../LogTail.js";
 import { useT } from "../../i18n/LanguageProvider.js";
-import "./ControlSections.css";
+import "./LogsSection.css";
 
 const YULU_DAEMONS = [
   "com.yulu.audiodaemon",
@@ -44,7 +44,7 @@ export function LogsSection() {
       <div className="logs-toolbar">
         <select
           aria-label={t("health.logs.daemon.aria")}
-          className="logs-select field"
+          className="logs-select"
           data-testid="logs-daemon"
           value={fullName}
           onChange={(e) => setName(e.target.value)}
@@ -53,10 +53,10 @@ export function LogsSection() {
             <option key={d} value={d}>{d}</option>
           ))}
         </select>
-        <button type="button" className="btn" onClick={() => setPaused((p) => !p)}>
+        <button type="button" className="logs-btn" onClick={() => setPaused((p) => !p)}>
           {paused ? t("health.logs.resume") : t("health.logs.pause")}
         </button>
-        <button type="button" className="btn" onClick={() => setResetKey((k) => k + 1)}>
+        <button type="button" className="logs-btn" onClick={() => setResetKey((k) => k + 1)}>
           {t("health.logs.clear")}
         </button>
       </div>

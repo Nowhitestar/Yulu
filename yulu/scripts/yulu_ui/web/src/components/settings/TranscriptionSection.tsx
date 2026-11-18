@@ -81,7 +81,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
 
         <div className="local-caption-actions">
           {!local.data?.installed ? (
-            <button type="button" className="btn btn-primary" disabled={localBusy || !local.data} onClick={() => install.mutate()}>
+            <button type="button" className="path-btn local-caption-primary" disabled={localBusy || !local.data} onClick={() => install.mutate()}>
               {install.isPending ? t("settings.transcription.localModel.installing") : t("settings.transcription.localModel.install")}
             </button>
           ) : (
@@ -89,12 +89,12 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
               <p>{t("settings.transcription.localModel.disk")}: {formatBytes((local.data?.runtimeBytes ?? 0) + (local.data?.modelBytes ?? 0))}</p>
               <p>sherpa-onnx Paraformer · INT8</p>
               <div className="settings-inline-actions">
-              <button type="button" className="btn" disabled={localBusy} onClick={() => testModel.mutate()}>
+              <button type="button" className="path-btn" disabled={localBusy} onClick={() => testModel.mutate()}>
                 {testModel.isPending ? t("settings.transcription.localModel.testing") : t("settings.transcription.localModel.test")}
               </button>
               <button
                 type="button"
-                className="btn btn-danger"
+                className="path-btn"
                 disabled={localBusy || local.data.sessionActive}
                 onClick={() => {
                   if (window.confirm(t("settings.transcription.localModel.uninstallConfirm"))) uninstall.mutate();
@@ -121,7 +121,6 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
       <h2 className="settings-section-h">{t("settings.transcription.heading")}</h2>
       <p className="settings-section-sub">{t("settings.transcription.sub")}</p>
 
-      <div className="group settings-group">
       <InlineEditRow
         label={t("settings.transcription.engine.label")}
         help={engineHelp}
@@ -171,7 +170,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
           {providers.data?.readiness.transcription.testedAt && <> · {providers.data.readiness.transcription.model}</>}
         </div>
         <div className="local-caption-actions">
-          <Link className="btn" to="/settings/connections?connection=direct-xai&capability=transcription#ai-connections">
+          <Link className="path-btn local-caption-primary" to="/settings/connections?connection=direct-xai&capability=transcription#ai-connections">
             {t("settings.providers.open")}
           </Link>
         </div>
@@ -181,11 +180,10 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
       {selectedEngine !== "local" && (local.data?.installed || localBusy) && (
         <AdvancedDisclosure title={t("settings.transcription.localModel.manage")} note="">{localModel}</AdvancedDisclosure>
       )}
-      </div>
 
-      <p className="settings-section-foot">
-        <Link className="link" to="/knowledge/glossary">{t("settings.transcription.manageGlossary")}</Link>
-      </p>
+      <div style={{ marginTop: 16 }}>
+        <Link to="/knowledge/glossary">{t("settings.transcription.manageGlossary")}</Link>
+      </div>
     </section>
   );
 }

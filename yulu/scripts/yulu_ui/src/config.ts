@@ -33,10 +33,27 @@ const ConnectorsSchema = z.object({
   }).passthrough().default({}),
 }).passthrough().default({});
 
-// Legacy `family` / `custom` keys from retired theme presets may still be on
-// disk; passthrough keeps them inert instead of rejecting an older config.
+const ThemeTokenSchema = z.object({
+  wallpaper: z.string().optional(),
+  surface: z.string().optional(),
+  surfaceStrong: z.string().optional(),
+  edge: z.string().optional(),
+  text: z.string().optional(),
+  muted: z.string().optional(),
+  accent: z.string().optional(),
+  blue: z.string().optional(),
+  green: z.string().optional(),
+  red: z.string().optional(),
+  purple: z.string().optional(),
+}).passthrough().default({});
+
 const ThemeSchema = z.object({
+  family: z.enum(["default", "ayu", "paper", "custom"]).default("default"),
   mode: z.enum(["auto", "light", "dark"]).default("auto"),
+  custom: z.object({
+    light: ThemeTokenSchema,
+    dark: ThemeTokenSchema,
+  }).passthrough().default({}),
 }).passthrough().default({});
 
 const AgentConsoleSchema = z.object({

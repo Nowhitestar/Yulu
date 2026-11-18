@@ -77,7 +77,7 @@ export function SharingSettings() {
         <div className="sharing-selection">
           <label>
             {t("sharing.agentConnection")}
-            <select className="field"
+            <select
               aria-label={t("sharing.agentConnection")}
               value={connectionId}
               disabled={busy}
@@ -91,7 +91,7 @@ export function SharingSettings() {
           </label>
           <label>
             {t("sharing.connector")}
-            <select className="field"
+            <select
               aria-label={t("sharing.connector")}
               value={connector}
               disabled={busy}
@@ -105,10 +105,10 @@ export function SharingSettings() {
       )}
 
       <div className="sharing-check-row">
-        <span className={`badge sharing-badge ${selectionChanged ? "untested" : data.connectorReadiness.status}`}>
+        <span className={`sharing-badge ${selectionChanged ? "untested" : data.connectorReadiness.status}`}>
           {t(`sharing.status.${selectionChanged ? "untested" : data.connectorReadiness.status}`)}
         </span>
-        <button className="btn" type="button" disabled={!connectionId || busy} onClick={() => void checkConnection()}>
+        <button type="button" disabled={!connectionId || busy} onClick={() => void checkConnection()}>
           {checking ? t("sharing.checking") : t("sharing.check")}
         </button>
         <small>{t("sharing.checkHelp")}</small>
@@ -120,7 +120,7 @@ export function SharingSettings() {
       <div className="sharing-destination">
         <div className="sharing-section-heading">
           <h3>{t("sharing.destination.title")}</h3>
-          <span className={`badge sharing-badge ${data.destination.configured ? "ready" : "untested"}`}>
+          <span className={`sharing-badge ${data.destination.configured ? "ready" : "untested"}`}>
             {data.destination.configured
               ? t("sharing.destination.configured")
               : t("sharing.destination.notConfigured")}
@@ -128,7 +128,7 @@ export function SharingSettings() {
         </div>
         <label>
           {t("sharing.destination.input")}
-          <input className="field"
+          <input
             aria-label={t("sharing.destination.input")}
             aria-describedby={connector === "notion" ? "sharing-notion-target-help" : undefined}
             placeholder={connector === "notion" ? t("sharing.destination.notionPlaceholder") : undefined}
@@ -142,7 +142,7 @@ export function SharingSettings() {
           />
         </label>
         {connector === "notion" && <p id="sharing-notion-target-help">{t("sharing.destination.notionHelp")}</p>}
-        <button className="btn"
+        <button
           type="button"
           disabled={!canSave || save.isPending}
           onClick={() => { setError(""); save.mutate({ destination: destination.trim() }); }}
@@ -150,14 +150,14 @@ export function SharingSettings() {
           {t("sharing.destination.save")}
         </button>
         <AdvancedDisclosure title={t("sharing.browseDestinations")} note="">
-          <button className="btn" type="button" disabled={!data.selection || selectionChanged || busy}
+          <button type="button" disabled={!data.selection || selectionChanged || busy}
             onClick={() => { setError(""); discover.mutate(); }}>
             {discover.isPending ? t("sharing.checking") : t("sharing.discovery.action")}
           </button>
           {data.connectorDiscovery.status === "failed" && <p role="alert">{data.connectorDiscovery.detail} {data.connectorDiscovery.remediation}</p>}
           {data.connectorDiscovery.options.length > 0 && <label>
             {t("sharing.destination.suggestions")}
-            <select className="field" value="" disabled={busy} onChange={(event) => setDestination(event.target.value)}>
+            <select value="" disabled={busy} onChange={(event) => setDestination(event.target.value)}>
               <option value="">{t("sharing.chooseDestination")}</option>
               {data.connectorDiscovery.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
@@ -168,7 +168,7 @@ export function SharingSettings() {
       <div className="sharing-test-share">
         <div className="sharing-section-heading">
           <h3>{t("sharing.testShare.title")}</h3>
-          <span className={`badge sharing-badge ${data.sharingReadiness.status}`}>
+          <span className={`sharing-badge ${data.sharingReadiness.status}`}>
             {t(`sharing.status.${data.sharingReadiness.status}`)}
           </span>
         </div>
@@ -186,7 +186,7 @@ export function SharingSettings() {
             <p>{t("sharing.unknown.action", { id: data.sharingReadiness.action.id })}</p>
             <label>
               {t("sharing.unknown.receiptId")}
-              <input className="field"
+              <input
                 aria-label={t("sharing.unknown.receiptId")}
                 value={receiptId}
                 maxLength={500}
@@ -195,7 +195,7 @@ export function SharingSettings() {
             </label>
             <label>
               {t("sharing.unknown.receiptUrl")}
-              <input className="field"
+              <input
                 aria-label={t("sharing.unknown.receiptUrl")}
                 value={receiptUrl}
                 maxLength={2_000}
@@ -203,7 +203,7 @@ export function SharingSettings() {
               />
             </label>
             <div className="sharing-unknown-actions">
-              <button className="btn"
+              <button
                 type="button"
                 disabled={(!receiptId.trim() && !receiptUrl.trim()) || reconcileUnknown.isPending}
                 onClick={() => {
@@ -217,7 +217,7 @@ export function SharingSettings() {
               >
                 {t("sharing.unknown.reconcile")}
               </button>
-              <button className="btn"
+              <button
                 type="button"
                 disabled={abandonUnknown.isPending}
                 onClick={() => {
@@ -235,7 +235,7 @@ export function SharingSettings() {
             </div>
           </div>
         )}
-        <button className="btn"
+        <button
           type="button"
           disabled={!canTest || testShare.isPending}
           onClick={() => {

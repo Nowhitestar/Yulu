@@ -61,7 +61,7 @@ function isRetiredLocalTranscriptionCapability(name: string): boolean {
 export function CapabilityBadge({ status, detail }: { status: string; detail?: string }) {
   const t = useT();
   return (
-    <span className="badge cap-badge" data-status={status} title={detail || undefined}>
+    <span className="cap-badge" data-status={status} title={detail || undefined}>
       {t(statusKey(status))}
     </span>
   );
@@ -103,7 +103,7 @@ export function CapabilitiesSection() {
           <h2 className="settings-section-h">{t("settings.capabilities.heading")}</h2>
           <p className="settings-section-sub">{t("settings.capabilities.sub")}</p>
         </div>
-        <button type="button" className="btn" onClick={() => { refetch(); }}>
+        <button type="button" className="path-btn" onClick={() => { refetch(); }}>
           {t("settings.capabilities.refresh")}
         </button>
       </div>
@@ -122,7 +122,7 @@ export function CapabilitiesSection() {
               <div className="row-help">{t(provenanceKey(capability.provenance))}</div>
             </div>
             <div className="row-value"><CapabilityStatusValue cap={capability} /></div>
-            <div className="cap-state"><CapabilityBadge status={capability.status} detail={capability.detail} /></div>
+            <div className="row-status"><CapabilityBadge status={capability.status} detail={capability.detail} /></div>
           </div>
         ))
       )}

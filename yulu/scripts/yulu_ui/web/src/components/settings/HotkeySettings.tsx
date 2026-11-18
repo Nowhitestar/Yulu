@@ -106,14 +106,14 @@ export function HotkeySettings({ hotkeys, disabled, onCommit }: {
 
   return <div className="hotkey-settings">
     <div className="hotkey-settings-heading"><h3 className="settings-subheading">{t("settings.voice.shortcuts")}</h3>
-      <button type="button" className="btn btn-quiet" disabled={disabled || saving || pause.isPending} onClick={() => void restore()}><RotateCcw size={13} />{t("settings.voice.hotkey.restore")}</button></div>
+      <button type="button" className="path-btn" disabled={disabled || saving || pause.isPending} onClick={() => void restore()}><RotateCcw size={14} />{t("settings.voice.hotkey.restore")}</button></div>
     <p className="settings-section-sub">{t("settings.voice.hotkey.help")}</p>
     {error && <p className="calendar-source-error" role="alert">{error}</p>}
     {saving && <p role="status">{t("settings.voice.hotkey.saving")}</p>}
-    <div className="group settings-group">{ACTIONS.map((action) => <div key={action}>
+    {ACTIONS.map((action) => <div key={action}>
       <div className="row row--wide"><div className="row-label">{t(`settings.voice.hotkey.${action}`)}</div><div className="row-value"><div className="voice-hotkey-display">
-        <kbd className="kbd">{formatHotkey(hotkeys[action] ?? DEFAULT_HOTKEYS[action], lang === "en")}</kbd>
-        <button type="button" className="btn btn-quiet voice-hotkey-capture" aria-pressed={editing === action} aria-label={`${t(`settings.voice.hotkey.${action}`)} ${t("settings.voice.hotkey.reconfigure")}`}
+        <kbd>{formatHotkey(hotkeys[action] ?? DEFAULT_HOTKEYS[action], lang === "en")}</kbd>
+        <button type="button" className="voice-hotkey-capture" aria-pressed={editing === action} aria-label={`${t(`settings.voice.hotkey.${action}`)} ${t("settings.voice.hotkey.reconfigure")}`}
           disabled={disabled || saving || pause.isPending || (editing !== null && editing !== action)} onClick={async (event) => {
             button.current = event.currentTarget; setError("");
             if (editing === action) { close(); return; }
@@ -121,23 +121,22 @@ export function HotkeySettings({ hotkeys, disabled, onCommit }: {
               await pauseShortcuts({ active: true });
               setDraft(hotkeys[action] ?? DEFAULT_HOTKEYS[action]); setEditing(action);
             } catch { setError(t("settings.voice.hotkey.editUnavailable")); }
-          }}><Pencil size={13} />{t(editing === action ? "danger.cancel" : "settings.voice.hotkey.reconfigure")}</button>
+          }}><Pencil size={14} />{t(editing === action ? "danger.cancel" : "settings.voice.hotkey.reconfigure")}</button>
       </div></div><div className="row-status" /></div>
       {editing === action && <div className="hotkey-editor" role="group" aria-label={t("settings.voice.hotkey.editor")}>
         <p role="status">{t("settings.voice.hotkey.capture")}</p>
-        <label>{t("settings.voice.hotkey.key")}<select className="field" aria-label={t("settings.voice.hotkey.key")} value={draft.key} onChange={(event) => setDraft({ key: event.target.value, modifiers: [] })}>
+        <label>{t("settings.voice.hotkey.key")}<select aria-label={t("settings.voice.hotkey.key")} value={draft.key} onChange={(event) => setDraft({ key: event.target.value, modifiers: [] })}>
           {HOTKEY_KEYS.map((key) => <option key={key} value={key}>{formatHotkey({ key, modifiers: [] }, lang === "en")}</option>)}
         </select></label>
         <div className="hotkey-modifiers">{GROUPS.map((group) => <label key={group}>{formatHotkey({ key: "", modifiers: [group] }, lang === "en").replace(/ \+ $/, "")}<select
-          className="field"
           aria-label={`${t("settings.voice.hotkey.modifier")} ${group}`}
           value={draft.modifiers.find((modifier) => modifier === group || modifier.endsWith(`_${group}`)) ?? ""}
           onChange={(event) => setDraft({ ...draft, modifiers: [...draft.modifiers.filter((modifier) => modifier !== group && !modifier.endsWith(`_${group}`)), ...(event.target.value ? [event.target.value] : [])] })}>
           <option value="">{t("settings.voice.hotkey.none")}</option><option value={group}>{t(group === "fn" ? "settings.voice.hotkey.with" : "settings.voice.hotkey.either")}</option>
           {group !== "fn" && <><option value={`left_${group}`}>{t("settings.voice.hotkey.left")}</option><option value={`right_${group}`}>{t("settings.voice.hotkey.right")}</option></>}
         </select></label>)}</div>
-        <div className="hotkey-editor-actions"><kbd className="kbd">{formatHotkey(draft, lang === "en")}</kbd><button type="button" className="btn btn-primary" onClick={() => void save(action, draft)}>{t("settings.voice.hotkey.save")}</button></div>
+        <div className="hotkey-editor-actions"><kbd>{formatHotkey(draft, lang === "en")}</kbd><button type="button" className="path-btn" onClick={() => void save(action, draft)}>{t("settings.voice.hotkey.save")}</button></div>
       </div>}
-    </div>)}</div>
+    </div>)}
   </div>;
 }

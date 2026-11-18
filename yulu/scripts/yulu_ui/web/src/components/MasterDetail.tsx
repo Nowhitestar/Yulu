@@ -10,8 +10,6 @@ export interface MasterDetailProps {
   /** localStorage key for the master-list width. */
   storageKey?: string;
   className?: string;
-  /** Quiet hint shown in the detail pane while nothing is selected. */
-  emptyLabel?: string;
 }
 
 export function MasterDetail({
@@ -20,7 +18,6 @@ export function MasterDetail({
   listPending = false,
   storageKey = "yulu_ui.master.list.width",
   className,
-  emptyLabel,
 }: MasterDetailProps) {
   return (
     <div className={`masterdetail${className ? ` ${className}` : ""}`}>
@@ -39,7 +36,7 @@ export function MasterDetail({
             : listSlot}
         </div>
       </ResizableSplit>
-      <div className="masterdetail-detail" data-empty={emptyLabel}>{detailSlot}</div>
+      <div className="masterdetail-detail">{detailSlot}</div>
     </div>
   );
 }

@@ -79,8 +79,8 @@ export function DangerConfirmProvider({ children }: { children: ReactNode }) {
               {t("danger.body.pre")}<span className="danger-confirm-field">{pending.label}</span>{t("danger.body.post")}
             </div>
             <div className="danger-confirm-actions">
-              <button type="button" className="btn" onClick={() => settle(false)}>{t("danger.cancel")}</button>
-              <button type="button" className="btn btn-danger" onClick={() => settle(true)}>{t("danger.apply")}</button>
+              <button type="button" className="path-btn" onClick={() => settle(false)}>{t("danger.cancel")}</button>
+              <button type="button" className="path-btn danger-confirm-accept" onClick={() => settle(true)}>{t("danger.apply")}</button>
             </div>
           </div>
         </div>

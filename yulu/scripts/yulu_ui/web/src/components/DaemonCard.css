@@ -1,24 +1,115 @@
-/* One background service: a row inside the services list (see ControlSections.css). */
-.daemon-card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.daemon-card-name { min-width: 0; font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+/* web/src/components/DaemonCard.css */
+.daemon-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--glass-3);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+  backdrop-filter: var(--blur-pill);
+  -webkit-backdrop-filter: var(--blur-pill);
+  min-width: 0;
+}
+.daemon-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.daemon-card-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--fg);
+  font-family: var(--font-mono);
+}
 .status-pill {
   display: inline-flex;
   align-items: center;
-  flex: none;
-  gap: 5px;
-  min-height: 20px;
-  padding: 0 8px;
-  border-radius: var(--r-pill);
-  background: var(--fill);
-  color: var(--fg-2);
-  font-size: 11.5px;
-  font-weight: 500;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 var(--edge-top);
 }
-.status-pill-glyph { display: inline-flex; }
-.status-pill[data-status="running"] { background: var(--green-soft); color: var(--green); }
-.status-pill[data-status="crashed"] { background: var(--red-soft); color: var(--red); }
-.daemon-card-meta { display: flex; gap: 10px; min-width: 0; color: var(--fg-3); font-family: var(--font-mono); font-size: 11.5px; }
-.daemon-card-pid { flex: none; }
-.daemon-card-lastlog { min-width: 0; overflow: hidden; color: var(--fg-2); text-overflow: ellipsis; white-space: nowrap; }
-.daemon-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.daemon-card-logs { margin-left: auto; font-size: 12px; }
+.status-pill[data-status="running"] {
+  background: rgba(186, 230, 126, 0.18);
+  color: var(--green);
+}
+.status-pill[data-status="idle"] {
+  background: color-mix(in oklch, var(--blue) 14%, transparent);
+  color: var(--blue);
+}
+.status-pill[data-status="stopped"] {
+  background: var(--row-hover);
+  color: var(--fg-3);
+}
+.status-pill[data-status="crashed"] {
+  background: rgba(255, 123, 114, 0.18);
+  color: var(--red);
+}
+.status-pill-glyph { font-size: 9px; }
+.daemon-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.daemon-card-pid {
+  font-size: 10px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+}
+.daemon-card-lastlog {
+  font-size: 11px;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.daemon-card-actions {
+  display: flex;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--edge);
+}
+.daemon-card-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  font-size: 11px;
+  border-radius: 10px;
+  text-decoration: none;
+  background: var(--glass);
+  color: var(--fg-2);
+  border: 1px solid var(--edge);
+  cursor: pointer;
+}
+.daemon-card-btn:hover { color: var(--fg); background: var(--glass-3); }
+.daemon-card-btn.restart { color: var(--accent); }
+.daemon-card-btn.restart:hover { background: var(--accent-soft); }
+.daemon-card-btn.stop { color: var(--red); }
+.daemon-card-btn.stop:hover { background: rgba(255, 123, 114, 0.18); }
+.daemon-card-btn.link { color: var(--fg-3); margin-left: auto; }
+.daemon-card-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+@media (max-width: 760px) {
+  .daemon-card-header,
+  .daemon-card-actions {
+    flex-wrap: wrap;
+  }
+
+  .daemon-card-name,
+  .daemon-card-lastlog {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .daemon-card-btn.link {
+    margin-left: 0;
+  }
+}

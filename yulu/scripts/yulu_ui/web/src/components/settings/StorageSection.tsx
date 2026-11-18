@@ -22,7 +22,6 @@ export function StorageSection({ tracker }: StorageSectionProps) {
     <section id="storage" className="settings-section">
       <h2 className="settings-section-h">{t("settings.storage.heading")}</h2>
       <p className="settings-section-sub">{t("settings.storage.sub")}</p>
-      <div className="group settings-group">
       <AdvancedDisclosure title={t("settings.storage.maintenance")} note="">
       <div className="storage-section">{t("settings.storage.databases")}</div>
       {(dbStats ?? []).map((d) => (
@@ -43,7 +42,6 @@ export function StorageSection({ tracker }: StorageSectionProps) {
         <InlineEditRow key={lp.name} label={lp.name} type="readonly" value={lp.path} revealInFinder />
       ))}
       </AdvancedDisclosure>
-      </div>
     </section>
   );
 }

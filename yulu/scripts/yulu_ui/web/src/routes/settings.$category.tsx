@@ -1,6 +1,7 @@
 // web/src/routes/settings.$category.tsx
 import { useEffect, useRef, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useParams, useOutletContext } from "react-router";
+import { ArrowLeft } from "lucide-react";
 import { categoryMeta, settingsTarget } from "../components/settings/categories.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import type { SettingsOutletContext } from "./settings.js";
@@ -26,26 +27,24 @@ function GeneralSettings({ tracker }: { tracker: SettingsRestartTracker }) {
   return <>
     <HotkeySection tracker={tracker} />
     <AboutSection />
-    <div className="group settings-group settings-group--solo">
-      <AdvancedDisclosure title={t("settings.diagnostics")} note={t("settings.diagnostics.note")}>
-        <CapabilitiesSection />
-        <Link className="link" to="/health">{t("settings.diagnostics.open")}</Link>
-      </AdvancedDisclosure>
-    </div>
+    <AdvancedDisclosure title={t("settings.diagnostics")} note={t("settings.diagnostics.note")}>
+      <CapabilitiesSection />
+      <Link className="settings-text-link" to="/health">{t("settings.diagnostics.open")}</Link>
+    </AdvancedDisclosure>
   </>;
 }
 
 function ConnectionSettings() {
   const t = useT();
   return <>
-    <div id="ai-connections"><AgentConnections /></div>
-    <div className="group settings-group settings-group--solo">
-      <AgentConnectorSettings />
-      <div id="sharing">
-        <AdvancedDisclosure title={t("settings.connections.sharing")} note={t("settings.connections.sharing.note")}>
-          <SharingSettings />
-        </AdvancedDisclosure>
-      </div>
+    <div id="ai-connections"><AgentConnections embedded /></div>
+    <AgentConnectorSettings />
+    <div id="sharing">
+      <AdvancedDisclosure title={t("settings.connections.sharing")} note={t("settings.connections.sharing.note")}>
+        <SharingSettings />
+      </AdvancedDisclosure>
+    </div>
+    <div className="settings-connection-disclosure">
       <AdvancedDisclosure title={t("settings.connections.calendar")} note={t("settings.connections.calendar.note")}>
         <AgentCalendarConnectorSection />
       </AdvancedDisclosure>
@@ -78,7 +77,7 @@ export function SettingsCategory() {
   useEffect(() => {
     const detail = detailRef.current;
     if (!detail) return;
-    detail.closest(".root-body")?.scrollTo?.({ top: 0 });
+    detail.parentElement?.scrollTo?.({ top: 0 });
     if (!location.hash) return;
     // Wait for query-backed sections before revealing legacy deep links.
     const reveal = () => {
@@ -107,10 +106,11 @@ export function SettingsCategory() {
 
   return (
     <div className="settings-detail" ref={detailRef}>
+      <Link className="settings-mobile-back settings-text-link" to="/settings"><ArrowLeft size={16} />{t("settings.allCategories")}</Link>
       {meta ? <>
         <header className="settings-detail-head">
-          <h1 className="page-title">{t(meta.labelKey)}</h1>
-          <p className="page-sub">{t(meta.descKey)}</p>
+          <h1 className="settings-detail-title">{t(meta.labelKey)}</h1>
+          <p className="settings-detail-sub">{t(meta.descKey)}</p>
         </header>
         {CATEGORY_SECTIONS[meta.id]?.(tracker)}
       </> : <p className="settings-detail-empty">{t("settings.detail.unknownCategory")}</p>}
