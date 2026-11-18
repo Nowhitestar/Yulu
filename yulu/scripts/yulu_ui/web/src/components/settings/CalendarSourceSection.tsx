@@ -140,7 +140,6 @@ export function CalendarSourceSection() {
         <p>{readiness?.detail}</p>
         {readiness?.remediation && <p>{readiness.remediation}</p>}
         {error && <p className="calendar-source-error">{error}</p>}
-        <p>{t("settings.calendarSource.connector.detail")} <Link to="/settings/connections#agent-calendar-connector">{t("settings.calendarSource.connector.open")}</Link></p>
       </AdvancedDisclosure>
     </section>
   );

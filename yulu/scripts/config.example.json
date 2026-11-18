@@ -138,8 +138,7 @@
     "voice_input_mode": "toggle",
     "hotkeys": {
       "dictate": {"key": "Fn", "modifiers": []},
-      "translate": {"key": "Fn", "modifiers": ["shift"], "target_language": "English"},
-      "voice_chat": {"key": "Space", "modifiers": ["fn"]}
+      "translate": {"key": "Fn", "modifiers": ["shift"], "target_language": "English"}
     },
     "note": "Menu-bar agent: recording indicator + menu items + global hotkeys. Shortcuts support Fn, single modifiers and left/right modifier keys; modifier names include fn, cmd/shift/alt/ctrl and left_/right_ variants."
   }

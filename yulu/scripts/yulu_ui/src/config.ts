@@ -103,9 +103,8 @@ const StatusAgentSchema = z.object({
   hotkeys: z.object({
     dictate: StatusAgentHotkeySchema.default(DEFAULT_HOTKEYS.dictate),
     translate: StatusAgentHotkeySchema.default({ ...DEFAULT_HOTKEYS.translate, target_language: "English" }),
-    voice_chat: StatusAgentHotkeySchema.default(DEFAULT_HOTKEYS.voice_chat),
   }).passthrough().superRefine((hotkeys, ctx) => validateHotkeyConflicts({
-    dictate: hotkeys.dictate, translate: hotkeys.translate, voice_chat: hotkeys.voice_chat,
+    dictate: hotkeys.dictate, translate: hotkeys.translate,
   }, ctx)).default({}),
 }).passthrough().default({});
 

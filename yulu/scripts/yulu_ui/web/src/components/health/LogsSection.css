@@ -11,23 +11,23 @@
 }
 .logs-select {
   padding: 6px 10px;
-  border-radius: var(--radius-pill);
-  background: var(--field-bg);
+  border-radius: var(--r-md);
+  background: var(--paper);
   color: var(--fg);
   font-size: 12px;
   font-family: var(--font-mono);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--line);
 }
 .logs-btn {
   padding: 6px 12px;
-  border-radius: var(--radius-pill);
-  background: var(--glass);
+  border-radius: var(--r-md);
+  background: transparent;
   color: var(--fg-2);
   font-size: 11px;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--line);
   cursor: pointer;
 }
-.logs-btn:hover { color: var(--fg); background: var(--glass-3); }
+.logs-btn:hover { color: var(--fg); background: var(--fill); }
 
 @media (max-width: 760px) {
   .logs-toolbar {

@@ -1,46 +1,11 @@
-.restart-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 10px 14px;
-  background: var(--accent-soft);
-  border: 1px solid color-mix(in oklch, var(--accent) 24%, var(--edge));
-  border-radius: var(--radius-panel);
-  margin: 6px 12px;
-  box-shadow: var(--edge-shadow);
-}
+/* Some settings only take effect after a background service restarts. */
+.restart-banner { display: flex; align-items: center; gap: 12px; padding: 10px 13px; border-radius: var(--r-md); background: var(--accent-soft); }
 .restart-banner-dot { color: var(--accent); font-size: 14px; line-height: 1.2; }
 .restart-banner-body { flex: 1; min-width: 0; }
-.restart-banner-title { font-size: 13px; color: var(--fg); margin-bottom: 2px; }
-.restart-banner-daemons {
-  font-size: 11px;
-  color: var(--fg-2);
-  font-family: var(--font-mono);
-}
-.restart-banner-btn {
-  padding: 5px 11px;
-  font-size: 11px;
-  border-radius: var(--radius-pill);
-  background: var(--glass-3);
-  color: var(--fg);
-}
-.restart-banner-btn:hover { background: var(--glass-2); }
-.restart-banner-btn.primary {
-  background: var(--accent);
-  color: white;
-  align-self: center;
-}
-.restart-banner-btn.primary:hover { opacity: 0.9; }
-.restart-banner-dismiss { align-self: center; color: var(--fg-2); }
-
-@media (max-width: 760px) {
-  .restart-banner {
-    flex-wrap: wrap;
-    margin: 4px 0 8px;
-    padding: 10px;
-  }
-
-  .restart-banner-btn.primary {
-    align-self: flex-start;
-  }
-}
+.restart-banner-title { font-size: 13px; }
+.restart-banner-daemons { color: var(--fg-2); font-family: var(--font-mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.restart-banner-btn { flex: none; min-height: 28px; padding: 0 11px; border-radius: var(--r-md); color: var(--fg-2); font-size: 12.5px; font-weight: 500; }
+.restart-banner-btn:hover { color: var(--fg); }
+.restart-banner-btn.primary { background: var(--accent); color: var(--on-accent); }
+.restart-banner-btn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, #000); color: var(--on-accent); }
+@container (max-width: 560px) { .restart-banner { flex-wrap: wrap; } }

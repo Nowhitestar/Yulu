@@ -83,13 +83,24 @@ def test_fn_shift_never_also_triggers_fn(shortcut_binary, code, side, reverse):
 
 
 def test_fn_space_consumes_repeat_and_release_without_fn_action(shortcut_binary):
+    specs = [{"action": "dictate", "key": "Fn", "code": 63},
+             {"action": "custom", "key": "Space", "code": 49, "modifiers": ["fn"]}]
     result = run(shortcut_binary, [
         {"flags": FN}, {"kind": "down", "code": 49, "flags": FN},
         {"kind": "down", "code": 49, "flags": FN, "repeat": True},
         {"flags": 0}, {"kind": "up", "code": 49},
-    ])
-    assert result["signals"] == pair("voice_chat")
+    ], specs)
+    assert result["signals"] == pair("custom")
     assert all(result["consumed"])
+
+
+def test_default_shortcuts_leave_fn_space_alone(shortcut_binary):
+    result = run(shortcut_binary, [
+        {"flags": FN}, {"kind": "down", "code": 49, "flags": FN},
+        {"kind": "up", "code": 49, "flags": FN}, {"flags": 0},
+    ])
+    assert result["signals"] == []
+    assert result["consumed"][1:3] == [False, False]
 
 
 def test_fn_with_unrelated_key_does_not_start_capture(shortcut_binary):

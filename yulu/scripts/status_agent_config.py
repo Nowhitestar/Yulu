@@ -25,7 +25,6 @@ DEFAULT_BLOCK = {
     "hotkeys": {
         "dictate": {"key": "Fn", "modifiers": []},
         "translate": {"key": "Fn", "modifiers": ["shift"], "target_language": "English"},
-        "voice_chat": {"key": "Space", "modifiers": ["fn"]},
     },
 }
 
@@ -140,7 +139,7 @@ def status_agent_hotkeys() -> list[dict]:
         or "English"
     )
     items = []
-    for action in ("dictate", "translate", "voice_chat"):
+    for action in ("dictate", "translate"):
         spec = block["hotkeys"][action]
         item = {
             "action": action,

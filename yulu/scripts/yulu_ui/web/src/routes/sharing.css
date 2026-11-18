@@ -1,48 +1,48 @@
-.sharing-settings { display: grid; gap: 18px; }
-.sharing-settings header h2,
-.sharing-state-card h3,
-.sharing-destination h3,
-.sharing-test-share h3 { margin: 0; }
-.sharing-eyebrow { margin: 0; color: var(--accent); font: 600 12px/1 var(--font-mono, monospace); text-transform: uppercase; letter-spacing: .12em; }
-.sharing-selection,
-.sharing-state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.sharing-selection label,
-.sharing-destination label { display: grid; gap: 7px; }
-.sharing-selection select,
-.sharing-destination input { min-height: 38px; border: 1px solid var(--edge); border-radius: 8px; background: var(--field-bg); color: var(--fg); }
-.sharing-state-card,
-.sharing-destination,
-.sharing-test-share { padding: 16px; border: 1px solid var(--edge); border-radius: 12px; background: var(--glass-paper); }
-.sharing-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.sharing-badge { padding: 4px 9px; border: 1px solid var(--edge); border-radius: 999px; font-size: 12px; }
-.sharing-badge.ready { color: var(--green); }
-.sharing-badge.failed,
-.sharing-badge.unknown,
+/* Sharing destinations: pick the connector, name where it goes, prove it with
+   a test that carries no meeting content. */
+.sharing-settings { display: grid; gap: 14px; padding-top: 6px; color: var(--fg-2); font-size: 12.5px; line-height: 1.55; }
+.sharing-settings header h2 { color: var(--fg); font-size: 13px; font-weight: 600; }
+.sharing-settings :is(h3, label) { color: var(--fg); font-size: 12.5px; font-weight: 500; }
+.sharing-selection { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.sharing-settings label { display: grid; gap: 5px; }
+.sharing-settings :is(select, input) {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--paper);
+  color: var(--fg);
+  font-weight: 400;
+  outline: none;
+}
+.sharing-settings :is(select, input):focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sharing-settings button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  transition: background 0.12s;
+}
+.sharing-settings button:hover:not(:disabled) { background: var(--fill); }
+.sharing-settings button:disabled { opacity: 0.45; }
+.sharing-settings button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sharing-check-row, .sharing-unknown-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.sharing-destination, .sharing-test-share { padding-top: 14px; border-top: 1px solid var(--line); }
+.sharing-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.sharing-badge { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-2); font-size: 12.5px; }
+.sharing-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--fg-3); }
+.sharing-badge.ready::before { background: var(--green); }
+.sharing-badge:is(.failed, .unknown)::before { background: var(--red); }
 .sharing-error { color: var(--red); }
-.sharing-badge.untested { color: var(--fg-3); }
-.sharing-remediation { padding: 10px; border-left: 3px solid var(--accent); background: var(--glass-2); overflow-wrap: anywhere; }
-.sharing-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-.sharing-unknown-reconciliation { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--edge); border-radius: 8px; }
-.sharing-unknown-reconciliation label { display: grid; gap: 7px; }
-.sharing-unknown-reconciliation input { min-height: 38px; border: 1px solid var(--edge); border-radius: 8px; background: var(--field-bg); color: var(--fg); }
-.sharing-unknown-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.sharing-settings button { min-height: 36px; border: 1px solid var(--edge); border-radius: 8px; background: var(--surface-solid); color: var(--fg); cursor: pointer; }
-.sharing-settings button:disabled { cursor: not-allowed; opacity: .55; }
-.sharing-settings button:focus-visible,
-.sharing-settings select:focus-visible,
-.sharing-settings input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-@media (max-width: 760px) { .sharing-selection, .sharing-state-grid { grid-template-columns: 1fr; } }
-
-.sharing-settings { font-size: 12px; color: var(--fg-2); }
-.sharing-settings header h2 { font-size: 14px; color: var(--fg); }
-.sharing-settings :is(h3, label) { color: var(--fg); font-size: 12px; }
-.sharing-check-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.sharing-check-row small { font-size: 12px; }
-.sharing-destination, .sharing-test-share { padding: 16px 0 0; border: 0; border-top: 1px solid var(--edge); border-radius: 0; background: transparent; }
-.sharing-section-heading { flex-wrap: wrap; margin-bottom: 12px; }
-.sharing-settings :is(select, input) { min-width: 0; width: 100%; max-width: 100%; box-sizing: border-box; padding: 8px 10px; }
-.sharing-settings :is(button, input, select) { font: inherit; }
-.sharing-settings button { padding: 7px 11px; }
-.sharing-destination > .adv-disclosure { margin-top: 12px; }
+.sharing-remediation { padding: 10px 12px; border-radius: var(--r-md); background: var(--fill); overflow-wrap: anywhere; }
+.sharing-unknown-reconciliation { display: grid; gap: 10px; padding: 12px; border-radius: var(--r-md); background: var(--amber-soft); color: var(--fg); }
 .sharing-destination .adv-body { display: grid; gap: 12px; }
 .sharing-destination .adv-body > button { justify-self: start; }
+@container (max-width: 560px) { .sharing-selection { grid-template-columns: 1fr; } }

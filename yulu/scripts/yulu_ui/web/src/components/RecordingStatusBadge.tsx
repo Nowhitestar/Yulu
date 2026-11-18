@@ -1,4 +1,4 @@
-import { Loader2, AlertTriangle, Clock3 } from "lucide-react";
+import { CircleAlert, Clock3, Loader2 } from "lucide-react";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./RecordingStatusBadge.css";
 
@@ -54,19 +54,24 @@ export function RecordingStatusBadge({ state, error, compact }: RecordingStatusB
   const failed = state === "failed" || state.endsWith("_failed") ||
     state === "delivery_unverified" || state === "execution_unverified";
   const waiting = state === "agent_queued" || state === "awaiting_agent" || state === "awaiting_policy";
+  const label = t(LABEL_KEYS[state]!);
+  // In a list the state is an icon alone; its name and any reason are one hover away.
+  const size = compact ? 15 : 12;
   return (
     <span
       className={`rec-status rec-status-${failed ? "failed" : "busy"}`}
       data-testid="recording-status"
       data-state={state}
-      title={failed && error ? error : undefined}
+      role={compact ? "img" : undefined}
+      aria-label={compact ? label : undefined}
+      title={failed && error ? error : compact ? label : undefined}
     >
       {failed
-        ? <AlertTriangle size={11} strokeWidth={2} />
+        ? <CircleAlert size={size} strokeWidth={1.9} />
         : waiting
-          ? <Clock3 size={11} strokeWidth={2} />
-          : <Loader2 size={11} strokeWidth={2.25} className="rec-status-spin" />}
-      {!compact && <span>{t(LABEL_KEYS[state]!)}</span>}
+          ? <Clock3 size={size} strokeWidth={1.9} />
+          : <Loader2 size={size} strokeWidth={2} className="rec-status-spin" />}
+      {!compact && <span>{label}</span>}
     </span>
   );
 }

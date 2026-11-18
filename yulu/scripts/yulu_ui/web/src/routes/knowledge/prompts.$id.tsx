@@ -11,7 +11,6 @@ import {
 import { EmptyState } from "../../components/EmptyState.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 
-export const handle = { breadcrumb: "breadcrumb.reader", filters: null };
 
 export function PromptReaderRoute() {
   const { id = "" } = useParams();

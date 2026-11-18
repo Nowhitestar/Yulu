@@ -6,7 +6,6 @@ import { trpc } from "../../trpc.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import "./glossary.css";
 
-export const handle = { breadcrumb: "breadcrumb.glossary", filters: null };
 
 interface VocabRow {
   id: string;

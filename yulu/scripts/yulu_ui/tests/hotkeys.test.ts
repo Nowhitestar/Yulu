@@ -3,13 +3,18 @@ import { DEFAULT_HOTKEYS, HotkeySchema, HotkeysSchema, formatHotkey } from "../s
 import { ConfigSchema } from "../src/config.js";
 
 describe("voice shortcuts", () => {
-  it("defaults to Fn, Fn+Shift and Fn+Space and preserves existing shortcuts", () => {
+  it("defaults to Fn and Fn+Shift and preserves existing shortcuts", () => {
     const defaults = ConfigSchema.parse({}).status_agent.hotkeys;
     expect(defaults.dictate).toEqual(DEFAULT_HOTKEYS.dictate);
     expect(defaults.translate).toMatchObject(DEFAULT_HOTKEYS.translate);
-    expect(defaults.voice_chat).toEqual(DEFAULT_HOTKEYS.voice_chat);
+    expect(Object.keys(defaults)).toEqual(["dictate", "translate"]);
     const custom = { key: "V", modifiers: ["left_cmd"] };
     expect(ConfigSchema.parse({ status_agent: { hotkeys: { dictate: custom } } }).status_agent.hotkeys.dictate).toEqual(custom);
+  });
+  it("keeps a retired ask-agent shortcut in an existing config inert", () => {
+    const legacy = { key: "Fn", modifiers: [] };
+    const parsed = ConfigSchema.safeParse({ status_agent: { hotkeys: { voice_chat: legacy } } });
+    expect(parsed.success).toBe(true);
   });
   it.each(["LeftCommand", "RightCommand", "LeftShift", "RightShift", "LeftControl", "RightControl", "LeftOption", "RightOption", "Fn", "Command"])("accepts %s alone", (key) => {
     expect(HotkeySchema.parse({ key, modifiers: [] })).toEqual({ key, modifiers: [] });

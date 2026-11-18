@@ -1,7 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./tokens.css";
-import "./wallpaper.css";
+import "./base.css";
 import { App } from "./App.js";
 
 const root = document.getElementById("root");

@@ -26,14 +26,8 @@ function swatchStyle(colors: string[]): CSSProperties {
   };
 }
 
-function previewStyle(colors: string[]): CSSProperties {
-  return {
-    background: `linear-gradient(135deg, ${colors[0]}, ${colors[1]})`,
-    color: colors[1],
-  };
-}
-
-export function ThemePresetPicker({ compact = false }: { compact?: boolean } = {}) {
+/** Appearance: light or dark, one of four palettes, and the custom palette's colours. */
+export function ThemePresetPicker() {
   const { family, setFamily, mode, setMode, resolved, customTheme, setCustomTheme, resetCustomTheme } = useTheme();
   const [editMode, setEditMode] = useState<ResolvedThemeMode>(resolved);
   const t = useT();
@@ -71,11 +65,8 @@ export function ThemePresetPicker({ compact = false }: { compact?: boolean } = {
   return (
     <div className="theme-preset-stack">
       <div className="theme-panel-heading">
-        <div>
-          <div className="theme-panel-title">{t("theme.family.heading")}</div>
-          {!compact && <div className="theme-panel-sub">{t("theme.family.sub")}</div>}
-        </div>
-        <div className="theme-mode-toggle" role="group" aria-label={t("theme.mode.aria")}>
+        <div className="theme-panel-title">{t("theme.family.heading")}</div>
+        <div className="theme-mode-toggle seg" role="group" aria-label={t("theme.mode.aria")}>
           {(["auto", "light", "dark"] as const).map((value) => (
             <button
               key={value}
@@ -105,26 +96,10 @@ export function ThemePresetPicker({ compact = false }: { compact?: boolean } = {
         ))}
       </div>
 
-      {!compact && <div className="theme-preview-window" aria-label={t("theme.preview.aria")}>
-        <div className="theme-preview-chrome">
-          <span />
-          <span />
-          <span />
-        </div>
-        <div className="theme-preview-body" style={family === "custom" ? previewStyle([customTheme[resolved].surface, customTheme[resolved].text]) : undefined}>
-          <div className="theme-preview-sidebar" />
-          <div className="theme-preview-main">
-            <div className="theme-preview-line strong" />
-            <div className="theme-preview-line" />
-            <div className="theme-preview-card" />
-          </div>
-        </div>
-      </div>}
-
       {family === "custom" && (
         <div className="theme-custom-panel" aria-label={t("theme.custom.aria")}>
           <div className="theme-custom-head">
-            <div className="theme-custom-mode" role="group" aria-label={t("theme.custom.mode.aria")}>
+            <div className="theme-custom-mode seg" role="group" aria-label={t("theme.custom.mode.aria")}>
               {(["light", "dark"] as const).map((value) => (
                 <button
                   key={value}

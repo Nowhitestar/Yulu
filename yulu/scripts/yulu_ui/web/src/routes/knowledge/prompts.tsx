@@ -11,7 +11,6 @@ import { useT } from "../../i18n/LanguageProvider.js";
 import type { Category } from "../../components/PromptReader.js";
 import "./prompts.css";
 
-export const handle = { breadcrumb: "breadcrumb.prompts", filters: null };
 
 interface Row {
   id: string;

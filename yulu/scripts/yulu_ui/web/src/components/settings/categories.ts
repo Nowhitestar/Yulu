@@ -25,8 +25,6 @@ const LEGACY_CATEGORIES: Record<string, { id: SettingsCategoryId; hash: string }
 };
 
 export function settingsTarget(category: string, hash = "", path = "") {
-  // Preserve older remediation links to individual connections and connectors.
-  if (category === "integrations" && hash === "#agent-calendar-connector") return { id: "connections", hash };
   if (path.startsWith("agent_pipeline.")) return { id: "recording", hash: "#recording-processing" };
   const legacy = LEGACY_CATEGORIES[category];
   return { id: legacy?.id ?? category, hash: hash || legacy?.hash || "" };

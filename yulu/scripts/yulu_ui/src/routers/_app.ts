@@ -25,6 +25,7 @@ import { sharingRouter } from "./sharing.js";
 import { onboardingRouter } from "./onboarding.js";
 import { agentCalendarConnectorRouter } from "./agentCalendarConnector.js";
 import { permissionsRouter } from "./permissions.js";
+import { mcpAgentsRouter } from "./mcpAgents.js";
 
 export const appRouter = router({
   recordings:   recordingsRouter,
@@ -53,6 +54,7 @@ export const appRouter = router({
   onboarding: onboardingRouter,
   agentCalendarConnector: agentCalendarConnectorRouter,
   permissions: permissionsRouter,
+  mcpAgents: mcpAgentsRouter,
 });
 
 export type AppRouter = typeof appRouter;

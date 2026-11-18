@@ -6,7 +6,6 @@ import { useLang, useT } from "../i18n/LanguageProvider.js";
 import { trpc } from "../trpc.js";
 import "./activate.css";
 
-export const handle = { breadcrumb: "breadcrumb.activate", filters: null };
 
 export function Activate() {
   const activation = trpc.activation.status.useQuery(undefined, {
@@ -95,7 +94,7 @@ export function Activate() {
             <button type="button" className="activate-action primary" onClick={() => void activation.refetch()}>
               {t("activation.statusError.retry")}
             </button>
-            <Link className="activate-action" to="/agent-console">{t("activation.statusError.continue")}</Link>
+            <Link className="activate-action" to="/inbox">{t("activation.statusError.continue")}</Link>
           </div>
         </div>
       </section>
@@ -247,7 +246,7 @@ export function Activate() {
                 })}
               </button>
             )}
-            <Link className="activate-action" to="/agent-console">{t("activation.attempt.leave")}</Link>
+            <Link className="activate-action" to="/inbox">{t("activation.attempt.leave")}</Link>
           </div>
           {actionFailed && (
             <p role="alert">{t("activation.action.errorDetail", { reason: actionFailed })}</p>
@@ -634,7 +633,7 @@ export function Activate() {
               onClick={() => {
                 setDeferFailed(false);
                 void defer.mutateAsync().then(
-                  () => navigate("/agent-console", { replace: true }),
+                  () => navigate("/inbox", { replace: true }),
                   () => setDeferFailed(true),
                 );
               }}

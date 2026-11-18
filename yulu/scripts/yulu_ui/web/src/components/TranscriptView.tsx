@@ -50,7 +50,8 @@ interface SpeakerOption {
 
 const LEGACY_SPEAKER_RE = /^(Speaker [A-Z]:)/;
 const TAGGED_LINE_RE = /^\[(\d{2}:\d{2}(?::\d{2})?)\s+(.+?)\]\s*(.*)$/;
-const SPEAKER_COLORS = [
+/** Speaker identity colours, shared with the speaker panel. */
+export const SPEAKER_COLORS = [
   "var(--blue)",
   "var(--green)",
   "var(--purple)",

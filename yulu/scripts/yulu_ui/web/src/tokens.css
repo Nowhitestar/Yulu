@@ -22,18 +22,50 @@
 
 :root {
   color-scheme: light;
-  --font-heading: "Fraunces", "Noto Serif SC", ui-serif, Georgia, serif;
+  --font-heading: "Fraunces", "Songti SC", "Noto Serif CJK SC", ui-serif, Georgia, serif;
   --font-han: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   --font-mono: "Geist Mono", "SF Mono", ui-monospace, monospace;
-  --radius-panel: 28.8px;
+  --radius-panel: 12px;
   --radius-pill: 999px;
-  --radius-inner: 22.4px;
-  --radius-control: 16px;
+  --radius-inner: 10px;
+  --radius-control: 8px;
   --blur-glass: blur(40px) saturate(150%);
-  --blur-card: blur(24px) saturate(150%);
-  --blur-pill: blur(16px) saturate(150%);
-  --edge-shadow: inset 0 1px 0 var(--edge-top), 0 0 0 1px var(--edge);
+  --blur-card: none;
+  --blur-pill: none;
+  --edge-shadow: none;
+  --shadow-card: none;
+  --shadow-paper: none;
+  --shadow-button: none;
+
+  /* Shape and layout */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+  --toolbar-h: 44px;
+  --pane-w: 304px;
+  --read-w: 720px;
+  --font-serif: var(--font-heading);
+
+  /* Semantic layer. Components use these; every theme family feeds them
+     through the palette variables below, including a custom theme. */
+  --pane: var(--glass);
+  --sheet: var(--glass-paper);
+  --paper: var(--field-bg);
+  --raised: var(--surface-solid);
+  --fill: var(--row-hover);
+  --fill-2: color-mix(in oklch, var(--fg) 9%, transparent);
+  --line: color-mix(in oklch, var(--fg) 10%, transparent);
+  --line-2: color-mix(in oklch, var(--fg) 18%, transparent);
+  --on-accent: #ffffff;
+  --red-soft: color-mix(in oklch, var(--red) 12%, transparent);
+  --green-soft: color-mix(in oklch, var(--green) 13%, transparent);
+  --amber: #96590a;
+  --amber-soft: rgba(183, 110, 12, 0.13);
+  --shadow-pop: 0 0 0 0.5px color-mix(in oklch, var(--fg) 16%, transparent), 0 14px 44px -8px rgba(0, 0, 0, 0.22);
+  --shadow-sm: 0 0 0 0.5px color-mix(in oklch, var(--fg) 12%, transparent), 0 1px 3px rgba(0, 0, 0, 0.08);
+  --scrim: rgba(20, 22, 28, 0.24);
 
   /* Default: Apple-inspired Liquid Glass */
   --wp-1: oklch(0.98 0.005 250);
@@ -48,7 +80,7 @@
   --edge-card: rgba(255, 255, 255, 0.8);
   --fg: oklch(0.15 0.01 250);
   --fg-2: oklch(0.45 0.01 250);
-  --fg-3: oklch(0.62 0.01 250 / 0.7);
+  --fg-3: oklch(0.52 0.012 250);
   --accent: oklch(0.55 0.15 250);
   --accent-soft: oklch(0.55 0.15 250 / 0.1);
   --accent-on: oklch(0.55 0.15 250);
@@ -57,9 +89,6 @@
   --red: #d70015;
   --purple: #8e5cf7;
   --shadow: 0 4px 24px -8px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  --shadow-card: 0 2px 12px -4px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  --shadow-paper: 0 4px 24px -8px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  --shadow-button: 0 1px 4px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.8);
   --row-hover: rgba(0, 0, 0, 0.05);
   --field-bg: rgba(255, 255, 255, 0.6);
   --surface-solid: rgba(255, 255, 255, 0.82);
@@ -68,6 +97,10 @@
 
 [data-theme="dark"] {
   color-scheme: dark;
+  --amber: #e0a13c;
+  --amber-soft: rgba(224, 161, 60, 0.16);
+  --on-accent: #0f1c33;
+  --scrim: rgba(0, 0, 0, 0.5);
   --wp-1: oklch(0.15 0.005 250);
   --wp-2: oklch(0.15 0.005 250);
   --wp-3: oklch(0.2 0.005 250);
@@ -80,7 +113,7 @@
   --edge-card: rgba(255, 255, 255, 0.1);
   --fg: oklch(0.95 0.005 250);
   --fg-2: oklch(0.65 0.005 250);
-  --fg-3: oklch(0.65 0.005 250 / 0.58);
+  --fg-3: oklch(0.66 0.008 250);
   --accent: oklch(0.65 0.15 250);
   --accent-soft: oklch(0.65 0.15 250 / 0.15);
   --accent-on: oklch(0.65 0.15 250);
@@ -89,7 +122,6 @@
   --red: #ff6961;
   --purple: #b794ff;
   --shadow: 0 4px 28px -8px rgba(0, 0, 0, 0.48), inset 0 1px 0 var(--edge-top);
-  --shadow-card: 0 2px 18px -6px rgba(0, 0, 0, 0.42), inset 0 1px 0 var(--edge-top);
   --row-hover: rgba(255, 255, 255, 0.065);
   --field-bg: oklch(0.25 0.005 250 / 0.78);
   --surface-solid: oklch(0.15 0.005 250);
@@ -120,7 +152,6 @@
   --red: #e65050;
   --purple: #a176cb;
   --shadow: 0 4px 24px -8px rgba(60, 80, 110, 0.12), inset 0 1px 0 var(--edge-top);
-  --shadow-card: 0 2px 14px -6px rgba(60, 80, 110, 0.12), inset 0 1px 0 var(--edge-top);
   --row-hover: rgba(107, 125, 143, 0.14);
   --field-bg: #fcfcfc;
   --surface-solid: #fcfcfc;
@@ -150,7 +181,6 @@
   --red: #d95757;
   --purple: #d0a1ff;
   --shadow: 0 4px 26px -8px rgba(0, 0, 0, 0.48), inset 0 1px 0 var(--edge-top);
-  --shadow-card: 0 2px 18px -6px rgba(0, 0, 0, 0.42), inset 0 1px 0 var(--edge-top);
   --row-hover: rgba(71, 82, 102, 0.25);
   --field-bg: #10141c;
   --surface-solid: #10141c;
@@ -181,7 +211,6 @@
   --red: #af0000;
   --purple: #8700af;
   --shadow: 0 4px 22px -8px rgba(50, 50, 50, 0.14), inset 0 1px 0 var(--edge-top);
-  --shadow-card: 0 2px 12px -6px rgba(50, 50, 50, 0.12), inset 0 1px 0 var(--edge-top);
   --row-hover: rgba(0, 0, 0, 0.045);
   --field-bg: #eeeeee;
   --surface-solid: #f7f7f7;
@@ -211,7 +240,6 @@
   --red: #af005f;
   --purple: #af87d7;
   --shadow: 0 4px 26px -8px rgba(0, 0, 0, 0.45), inset 0 1px 0 var(--edge-top);
-  --shadow-card: 0 2px 18px -6px rgba(0, 0, 0, 0.36), inset 0 1px 0 var(--edge-top);
   --row-hover: rgba(255, 255, 255, 0.06);
   --field-bg: #303030;
   --surface-solid: #262626;

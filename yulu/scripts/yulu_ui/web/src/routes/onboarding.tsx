@@ -6,14 +6,14 @@ import { trpc } from "../trpc.js";
 import { PermissionsPanel } from "../components/PermissionsPanel.js";
 import "./onboarding.css";
 
-export const handle = { breadcrumb: "nav.onboarding", filters: null };
 
-const CAPABILITY_LABELS = {
-  conversation: "onboarding.capability.conversation",
+const CAPABILITY_LABELS: Record<string, string> = {
   "calendar-source": "onboarding.capability.calendarSource",
-  "agent-calendar-connector": "onboarding.capability.agentCalendarConnector",
   sharing: "onboarding.capability.sharing",
-} as const;
+};
+
+/** The meeting assistant is retired; its optional setup steps are no longer offered. */
+const RETIRED_CAPABILITIES = new Set<string>(["conversation", "agent-calendar-connector"]);
 
 const READINESS_LABELS = {
   ready: "onboarding.readiness.ready",
@@ -25,9 +25,7 @@ const READINESS_LABELS = {
 export function OnboardingHome() {
   const t = useT();
   const home = trpc.onboarding.status.useQuery(undefined, { retry: false });
-  const adoptConversation = trpc.onboarding.adoptConversation.useMutation();
   const adoptCalendarSource = trpc.onboarding.adoptCalendarSource.useMutation();
-  const adoptAgentCalendarConnector = trpc.onboarding.adoptAgentCalendarConnector.useMutation();
   const adoptSharing = trpc.onboarding.adoptSharing.useMutation();
   const deferOptional = trpc.onboarding.deferOptionalCapability.useMutation();
   const deferActivation = trpc.onboarding.deferActivationJourney.useMutation();
@@ -108,7 +106,7 @@ export function OnboardingHome() {
       </article>
 
       <div className="onboarding-grid">
-        {data.optionalCapabilities.map((capability) => {
+        {data.optionalCapabilities.filter((capability) => !RETIRED_CAPABILITIES.has(capability.id)).map((capability) => {
           const durableState = capability.outcome?.outcome ?? (capability.isNew ? "new" : "pending");
           return (
             <article
@@ -119,7 +117,7 @@ export function OnboardingHome() {
               <div className="onboarding-card-heading">
                 <div>
                   <span className="onboarding-step-kind">{t("onboarding.optional")}</span>
-                  <h2>{t(CAPABILITY_LABELS[capability.id])}</h2>
+                  <h2>{t(CAPABILITY_LABELS[capability.id] ?? capability.id)}</h2>
                 </div>
                 <span className="onboarding-outcome" data-outcome={durableState}>
                   {capability.isNew && !capability.outcome && <Sparkles size={14} aria-hidden="true" />}
@@ -140,16 +138,6 @@ export function OnboardingHome() {
                     {t("onboarding.action.open")}
                   </Link>
                 )}
-                {capability.id === "conversation" && !capability.outcome && (
-                  <button
-                    type="button"
-                    className="onboarding-action"
-                    disabled={adoptConversation.isPending}
-                    onClick={() => void run(() => adoptConversation.mutateAsync())}
-                  >
-                    {t("onboarding.action.adoptConversation")}
-                  </button>
-                )}
                 {capability.id === "calendar-source" && !capability.outcome && (
                   <button
                     type="button"
@@ -158,19 +146,6 @@ export function OnboardingHome() {
                     onClick={() => void run(() => adoptCalendarSource.mutateAsync())}
                   >
                     {t("onboarding.action.adoptCalendarSource")}
-                  </button>
-                )}
-                {capability.id === "agent-calendar-connector" && !capability.outcome && (
-                  <button
-                    type="button"
-                    className="onboarding-action"
-                    disabled={
-                      capability.readiness.state !== "ready" ||
-                      adoptAgentCalendarConnector.isPending
-                    }
-                    onClick={() => void run(() => adoptAgentCalendarConnector.mutateAsync())}
-                  >
-                    {t("onboarding.action.adoptAgentCalendarConnector")}
                   </button>
                 )}
                 {capability.id === "sharing" && !capability.outcome && (
