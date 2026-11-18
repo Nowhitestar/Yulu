@@ -22,8 +22,9 @@ def test_empty_config_reports_local_yulu_audio_defaults():
     assert report["transcription"]["provider"] == "local"
     assert report["transcription"]["yulu_executor"] is True
     assert report["transcription"]["cloud_audio_opt_in"] is False
-    assert report["conversation"]["provider"] == "hermes"
-    assert report["conversation"]["yulu_executor"] is False
+    assert "conversation" not in report
+    assert report["dictation_text"]["provider"] == "none"
+    assert report["dictation_text"]["cloud_text_opt_in"] is False
     assert report["summary_delivery"]["auto_channel"] == "file"
     assert report["summary_delivery"]["external_opt_in_channels"] == []
 
@@ -54,7 +55,7 @@ def test_legacy_automatic_summary_opt_in_is_retired():
     assert report["summary_delivery"]["owner"] == "hermes"
 
 
-def test_conversation_agent_does_not_change_selected_audio_engine():
+def test_general_agent_does_not_change_selected_audio_engine_or_dictation_text():
     mod = load_privacy()
 
     report = mod.privacy_opt_in_report({
@@ -63,7 +64,25 @@ def test_conversation_agent_does_not_change_selected_audio_engine():
         "transcription": {"engine": "xai"},
     })
 
-    assert report["conversation"]["provider"] == "codex"
+    assert "conversation" not in report
+    assert report["dictation_text"]["provider"] == "none"
     assert report["transcription"]["provider"] == "xai"
     assert report["transcription"]["credential_source"] == "yulu-keychain"
     assert report["transcription"]["cloud_audio_opt_in"] is True
+
+
+def test_dictation_text_reports_only_the_explicit_xai_switch():
+    mod = load_privacy()
+
+    selected = mod.privacy_opt_in_report({
+        "transcription": {"engine": "xai", "dictation": {"text_provider": "xai"}},
+    })
+    retired = mod.privacy_opt_in_report({
+        "intelligence": {"conversation": {"provider": "xai"}},
+        "transcription": {"engine": "xai", "dictation": {"cleanup_model": "conversation"}},
+    })
+
+    assert selected["dictation_text"]["provider"] == "xai"
+    assert selected["dictation_text"]["cloud_text_opt_in"] is True
+    assert retired["dictation_text"]["provider"] == "none"
+    assert retired["dictation_text"]["cloud_text_opt_in"] is False

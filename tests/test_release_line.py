@@ -268,7 +268,13 @@ def test_public_guidance_matches_current_install_provider_and_share_boundaries()
         encoding="utf-8"
     )
     assert "automatic summaries currently use Hermes" not in config_example
-    assert '"destinations": {}' in config_example
+    # ADR-010: the example must not reintroduce retired conversation settings.
+    example = json.loads(config_example)
+    assert "agent_console" not in example
+    assert "conversation" not in example["intelligence"]
+    assert "voice_chat_scope" not in example["transcription"]["dictation"]
+    assert "cleanup_model" not in example["transcription"]["dictation"]
+    assert example["transcription"]["dictation"]["text_provider"] == "none"
     current_path_guidance = {
         "CONTRIBUTING.md": "~/Library/Logs/Yulu",
         "CLAUDE.md": "~/Library/Application Support/Yulu",

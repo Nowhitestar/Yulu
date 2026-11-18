@@ -95,9 +95,7 @@ def _returned_fixture(tmp_path: Path, scenario: str, journey: str | None) -> tup
     optional = {
         "onboardingVersion": "phase-13-v1", "currentCompleted": True,
         "capabilities": [
-            {"id": "conversation", "contractVersion": "conversation-v1", "outcome": "deferred"},
             {"id": "calendar-source", "contractVersion": "calendar-source-v1", "outcome": "adopted"},
-            {"id": "agent-calendar-connector", "contractVersion": "agent-calendar-connector-v1", "outcome": "deferred"},
             {"id": "sharing", "contractVersion": "sharing-v1", "outcome": "adopted"},
         ],
     }

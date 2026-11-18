@@ -412,7 +412,8 @@ def _safe_process_projection(
 _ADAPTERS = {"codex", "claude-code", "hermes", "openclaw", "direct-xai"}
 _KINDS = {"supported-agent", "direct-provider", "legacy-custom"}
 _LIFECYCLES = {"connected", "disconnected", "candidate", "legacy", "available"}
-_CAPABILITIES = {"transcription", "summary", "conversation"}
+# Conversation is retired (ADR-010); the Host no longer reports it.
+_CAPABILITIES = {"transcription", "summary"}
 _READINESS_STATUSES = {"ready", "failed", "untested"}
 _READINESS_REASONS = {"invalid_model", "readiness_failed", "unknown_outcome"}
 _CREDENTIAL_SOURCES = {"runtime-oauth", "oauth", "api-key"}

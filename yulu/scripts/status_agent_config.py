@@ -296,21 +296,6 @@ def _cmd_translate(args) -> int:
     return 0
 
 
-def _cmd_voice_chat() -> int:
-    try:
-        resp = _ipc_send("voice_chat")
-    except RuntimeError as exc:
-        print(f"⚠️ {exc}", file=sys.stderr)
-        return 1
-    if not resp.get("ok"):
-        print(f"⚠️ {resp.get('error', 'voice chat failed')}", file=sys.stderr)
-        return 1
-    before = resp.get("state_before", "?")
-    after = resp.get("state_after", "?")
-    print(f"✅ voice chat: {before} → {after}")
-    return 0
-
-
 def _cmd_state() -> int:
     try:
         resp = _ipc_send("status")
@@ -325,10 +310,6 @@ def _cmd_state() -> int:
         print(f"dictation active: {bool(resp['dictation_active'])}")
     if "launcher_pid" in resp:
         print(f"launcher pid: {resp['launcher_pid']}")
-    if "voice_chat_window_visible" in resp:
-        print(f"voice chat window visible: {bool(resp['voice_chat_window_visible'])}")
-    if resp.get("voice_chat_window_url"):
-        print(f"voice chat window url: {resp['voice_chat_window_url']}")
     return 0
 
 
@@ -354,37 +335,6 @@ def _cmd_open_inbox() -> int:
         return 1
     if resp.get("ok"):
         print("✅ open_inbox dispatched")
-        return 0
-    print(f"⚠️ {resp.get('error', 'failed')}", file=sys.stderr)
-    return 1
-
-
-def _cmd_open_agent_console() -> int:
-    try:
-        resp = _ipc_send("open_agent_console")
-    except RuntimeError as exc:
-        print(f"⚠️ {exc}", file=sys.stderr)
-        return 1
-    if resp.get("ok"):
-        print("✅ open_agent_console dispatched")
-        return 0
-    print(f"⚠️ {resp.get('error', 'failed')}", file=sys.stderr)
-    return 1
-
-
-def _cmd_open_voice_chat(args) -> int:
-    fields = {"url": args.url} if args.url else {}
-    try:
-        resp = _ipc_send("open_voice_chat", **fields)
-    except RuntimeError as exc:
-        print(f"⚠️ {exc}", file=sys.stderr)
-        return 1
-    if resp.get("ok"):
-        print("✅ open_voice_chat dispatched")
-        if "voice_chat_window_visible" in resp:
-            print(f"voice chat window visible: {bool(resp['voice_chat_window_visible'])}")
-        if resp.get("voice_chat_window_url"):
-            print(f"voice chat window url: {resp['voice_chat_window_url']}")
         return 0
     print(f"⚠️ {resp.get('error', 'failed')}", file=sys.stderr)
     return 1
@@ -460,7 +410,6 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("dictate", help="Toggle experimental dictation via IPC")
     translate = sub.add_parser("translate", help="Toggle translation dictation via IPC")
     translate.add_argument("--target-language", default="")
-    sub.add_parser("voice-chat", help="Record a voice question and send it to Agent Console")
     hotkeys = sub.add_parser("hotkeys", help="Print configured global hotkeys")
     hotkeys.add_argument("--json", action="store_true")
     paste_smoke = sub.add_parser("paste-smoke", help="Paste test text via StatusAgent IPC")
@@ -470,9 +419,6 @@ def main(argv: list[str] | None = None) -> int:
     paste_smoke.add_argument("--delay-sec", type=float, default=0.0)
     paste_smoke.add_argument("--json", action="store_true")
     sub.add_parser("open-inbox", help="Open the inbox in the browser via IPC")
-    sub.add_parser("open-agent-console", help="Open the Agent Console via IPC")
-    open_voice_chat = sub.add_parser("open-voice-chat", help="Open the voice chat floating window via IPC")
-    open_voice_chat.add_argument("--url", default="")
 
     args = parser.parse_args(argv)
     if args.cmd == "enable":
@@ -491,18 +437,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_dictate()
     if args.cmd == "translate":
         return _cmd_translate(args)
-    if args.cmd == "voice-chat":
-        return _cmd_voice_chat()
     if args.cmd == "hotkeys":
         return _cmd_hotkeys(args.json)
     if args.cmd == "paste-smoke":
         return _cmd_paste_smoke(args)
     if args.cmd == "open-inbox":
         return _cmd_open_inbox()
-    if args.cmd == "open-agent-console":
-        return _cmd_open_agent_console()
-    if args.cmd == "open-voice-chat":
-        return _cmd_open_voice_chat(args)
     parser.print_help()
     return 1
 

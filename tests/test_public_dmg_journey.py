@@ -186,28 +186,12 @@ def _share_responses(stage: str) -> dict[str, object]:
     })
     optional_capabilities = [
         {
-            "id": "conversation", "contractVersion": "conversation-v1",
-            "outcome": {
-                "onboardingVersion": "phase-13-v1", "capability": "conversation",
-                "contractVersion": "conversation-v1", "outcome": "deferred",
-            },
-            "readiness": {"state": "not_tested", "detail": "private conversation detail"},
-        },
-        {
             "id": "calendar-source", "contractVersion": "calendar-source-v1",
             "outcome": {
                 "onboardingVersion": "phase-13-v1", "capability": "calendar-source",
                 "contractVersion": "calendar-source-v1", "outcome": "adopted",
             },
             "readiness": {"state": "ready", "detail": "private calendar detail"},
-        },
-        {
-            "id": "agent-calendar-connector", "contractVersion": "agent-calendar-connector-v1",
-            "outcome": {
-                "onboardingVersion": "phase-13-v1", "capability": "agent-calendar-connector",
-                "contractVersion": "agent-calendar-connector-v1", "outcome": "deferred",
-            },
-            "readiness": {"state": "not_tested", "detail": "private connector detail"},
         },
     ]
     if stage == "pre-test":
@@ -495,9 +479,7 @@ def test_manual_sharing_modes_prove_cancel_then_exactly_one_bound_production_act
         "onboardingVersion": "phase-13-v1",
         "currentCompleted": True,
         "capabilities": [
-            {"id": "conversation", "contractVersion": "conversation-v1", "outcome": "deferred"},
             {"id": "calendar-source", "contractVersion": "calendar-source-v1", "outcome": "adopted"},
-            {"id": "agent-calendar-connector", "contractVersion": "agent-calendar-connector-v1", "outcome": "deferred"},
             {"id": "sharing", "contractVersion": "sharing-v1", "outcome": "adopted"},
         ],
     }
@@ -826,13 +808,14 @@ def test_fresh_optional_outcome_contract_uses_exact_current_manifest_and_manual_
     source = OBSERVER.read_text()
     driver = (ROOT / "packaging" / "acceptance" / "public_dmg_target.sh").read_text()
     for capability, contract in (
-        ("conversation", "conversation-v1"),
         ("calendar-source", "calendar-source-v1"),
-        ("agent-calendar-connector", "agent-calendar-connector-v1"),
         ("sharing", "sharing-v1"),
     ):
         assert capability in source
         assert contract in source
+    # ADR-010 retired these steps; a fresh install must not project them.
+    for retired in ("conversation-v1", "agent-calendar-connector-v1"):
+        assert retired not in source
     assert "currentVersionCompleted" in source
     assert "I-ADOPTED-OR-DEFERRED-FRESH-OPTIONAL-CAPABILITIES" in driver
     assert "awaiting_optional_outcomes" in driver
@@ -846,7 +829,7 @@ def test_fresh_optional_outcomes_fail_closed_for_nonexact_or_incomplete_projecti
     if mutation == "duplicate":
         capabilities.append(dict(capabilities[0]))
     elif mutation == "contract":
-        capabilities[0]["contractVersion"] = "conversation-v0"
+        capabilities[0]["contractVersion"] = "calendar-source-v0"
     elif mutation == "outcome":
         capabilities[0]["outcome"]["outcome"] = "pending"
     else:

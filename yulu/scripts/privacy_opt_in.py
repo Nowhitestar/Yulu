@@ -22,13 +22,14 @@ def _dict(value: Any) -> dict[str, Any]:
 def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
     cfg = dict(config or {})
     agent_pipeline = _dict(cfg.get("agent_pipeline"))
-    llm = _dict(cfg.get("llm"))
-    agent = _dict(llm.get("agent"))
     transcription = _dict(cfg.get("transcription"))
     transcription_engine = str(transcription.get("engine") or "local").strip().lower()
     if transcription_engine not in {"local", "xai"}:
         transcription_engine = "local"
-    conversation_provider = str(agent.get("provider") or "hermes").strip().lower()
+    dictation = _dict(transcription.get("dictation"))
+    # ADR-010: Yulu owns no conversation. Dictated text reaches xAI only through
+    # this explicit switch, the xAI audio engine, and an accepted disclosure.
+    dictation_text_provider = "xai" if dictation.get("text_provider") == "xai" else "none"
     pipeline_enabled = agent_pipeline.get("enabled") is not False
 
     return {
@@ -42,11 +43,13 @@ def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
             "credential_source": "yulu-keychain" if transcription_engine == "xai" else None,
             "ok": True,
         },
-        "conversation": {
-            "owner": "agent",
-            "provider": conversation_provider,
-            "yulu_executor": False,
-            "ok": llm.get("enabled") is not False,
+        "dictation_text": {
+            "owner": "yulu",
+            "provider": dictation_text_provider,
+            "yulu_executor": True,
+            "cloud_text_opt_in": dictation_text_provider == "xai",
+            "requires_xai_audio_engine": True,
+            "ok": True,
         },
         "summary_delivery": {
             "owner": "hermes",

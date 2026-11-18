@@ -306,6 +306,17 @@ def test_native_status_reports_its_own_input_permissions(running_controls):
     assert ipc(socket_path, "open_permission_settings", permission="notifications") == {"ok": False}
 
 
+def test_retired_conversation_controls_are_unknown_and_report_no_chat_window(running_controls):
+    _, socket_path, _, _ = running_controls
+    # ADR-010: voice chat and the Agent Console are retired from native controls.
+    for action in ["voice_chat", "open_agent_console", "open_voice_chat"]:
+        assert ipc(socket_path, action) == {"ok": False, "error": f"unknown_action: {action}"}
+    # Application Migration retires a legacy StatusAgent only when this is false.
+    state = ipc(socket_path, "status")
+    assert state["voice_chat_window_visible"] is False
+    assert "voice_chat_window_url" not in state
+
+
 def test_old_or_unowned_dictation_progress_cannot_change_the_overlay(running_controls):
     _, socket_path, _, _ = running_controls
     before = ipc(socket_path, "status")["state"]
@@ -330,8 +341,8 @@ def test_notification_ipc_validates_events_without_impersonating_the_app(running
 
 
 @pytest.mark.parametrize("action", [
-    "toggle", "stop", "dictate_toggle", "dictate_translate", "voice_chat",
-    "open_inbox", "open_agent_console", "open_voice_chat", "paste_clipboard",
+    "toggle", "stop", "dictate_toggle", "dictate_translate",
+    "open_inbox", "paste_clipboard",
     "preview_sound", "search", "notify", "open_permission_settings", "shortcut_editing",
 ])
 def test_quiesced_controls_reject_work_until_resumed(running_controls, action):

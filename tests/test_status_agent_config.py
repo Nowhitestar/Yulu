@@ -335,14 +335,6 @@ def test_audio_daemon_status_exposes_real_mic_level():
     assert '"micLevel": recorder.micLevel' in src
 
 
-def test_status_agent_has_agent_console_entry():
-    src = _swift_source()
-    assert '"Open Agent Console"' in src
-    assert '"open_agent_console"' in src
-    assert "onOpenAgentConsole" in src
-    assert "http://127.0.0.1:7777/agent-console" in src
-
-
 def test_status_agent_menu_matches_approved_hierarchy():
     src = _swift_source()
     menu = src[src.index("class MenuBuilder") : src.index("struct RecentRecording")]
@@ -350,8 +342,7 @@ def test_status_agent_menu_matches_approved_hierarchy():
     assert menu.index('"Start Recording"') < menu.index('"Start Dictation"')
     assert menu.index('"Start Dictation"') < menu.index('"Translate to English"')
     assert '"Ask Agent by Voice"' not in menu
-    assert menu.index('"Open Yulu"') < menu.index('"Open Agent Console"')
-    assert menu.index('"Open Agent Console"') < menu.index('"Recent Recordings"')
+    assert menu.index('"Open Yulu"') < menu.index('"Recent Recordings"')
     assert menu.index('"Recent Recordings"') < menu.index('"Settings…"')
     assert menu.index('"Settings…"') < menu.index('"Quit Yulu"')
     assert "recentItem.submenu = recentMenu" in menu
@@ -377,6 +368,17 @@ def test_native_ui_uses_config_backed_language_and_current_logo():
         native = (SCRIPTS / name).read_text(encoding="utf-8")
         assert 'let ui = raw["ui"] as? [String: Any]' in native
         assert 'let value = ui["language"] as? String' in native
+
+
+def test_status_agent_has_no_agent_console_or_voice_chat_controls():
+    src = _swift_source()
+    # ADR-010 retired the Agent Console and voice chat from native controls.
+    for retired in ['"Open Agent Console"', "onOpenAgentConsole", "/agent-console",
+                    '"open_agent_console"', '"open_voice_chat"', 'case "voice_chat"',
+                    "onVoiceChat", "openVoiceChatWindow", "ask-toggle", "import WebKit"]:
+        assert retired not in src, retired
+    # A legacy StatusAgent is retired only when it reports no visible chat window.
+    assert 'resp["voice_chat_window_visible"] = false' in src
 
 
 def test_status_agent_has_no_voice_chat_shortcut_or_menu_entry():
