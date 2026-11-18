@@ -160,7 +160,7 @@ test("unresolved activation defers, re-enters, skips proven steps, and discloses
   await expect(page.getByRole("button", { name: "Start recording" })).toBeVisible();
 
   await page.getByRole("button", { name: "Do this later" }).click();
-  await expect(page).toHaveURL(/\/agent-console$/);
+  await expect(page).toHaveURL(/\/inbox(\/.+)?$/);
   await page.goto("/activate");
   await expect(page.getByRole("heading", { name: "Start your Activation Journey" })).toBeVisible();
 

@@ -21,45 +21,54 @@ test.beforeEach(async ({ page }) => {
   }
 });
 
-test("settings has five categories, a separate workspace, and no duplicate appearance controls", async ({ page }) => {
+test("settings takes over the left pane, with one appearance control and diagnostics folded away", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 860 });
   await page.goto("/settings/general");
-  await expect(page.locator(".settings-category-row")).toHaveCount(5);
-  await expect(page.locator("#app-sidebar")).toBeHidden();
+  const nav = page.locator(".root-pane .settings-nav");
+  await expect(nav.getByTestId("settings-category")).toHaveText(["通用", "录音与摘要", "会议提醒", "语音输入", "连接"]);
+  await expect(nav.locator(".settings-nav-item.active")).toHaveText("通用");
+  // The recordings list steps aside while you are in Settings.
+  await expect(page.locator(".root-pane .recordings-list")).toHaveCount(0);
+  await expect(page.locator(".root-body nav")).toHaveCount(0);
   await expect(page.getByRole("group", { name: "主题明暗模式", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("group", { name: "主题家族", exact: true }).getByRole("button")).toHaveCount(4);
   await expect(page.locator("#capabilities")).toBeHidden();
-  await expect(page.locator(".theme-preview-window")).toHaveCount(0);
-  await page.screenshot({ path: "/private/tmp/yulu-settings-general-wide.png" });
+  await page.screenshot({ path: test.info().outputPath("settings-general-wide.png") });
   await page.getByText("排查问题", { exact: true }).click();
   await expect(page.locator("#capabilities")).toBeVisible();
 });
 
-test("meeting settings fit wide and narrow windows, and mobile categories are a list", async ({ page }) => {
+test("meeting settings fit wide and narrow windows, and narrow settings are a list then a page", async ({ page }) => {
   await page.goto("/settings/meetings");
   for (const width of [1440, 960, 760, 680, 420, 360]) {
     await page.setViewportSize({ width, height: 820 });
     await expect(page.getByRole("heading", { name: "日历提醒" })).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-    const content = await page.locator(".settings-content").boundingBox();
+    const content = await page.locator(".root-body").boundingBox();
     expect(content!.width).toBeGreaterThan(300);
-    expect(await page.locator(".settings-content").evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
-    if (width === 960 || width === 420) await page.screenshot({ path: `/private/tmp/yulu-settings-meetings-${width}.png` });
+    expect(await page.locator(".root-body").evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    if (width === 960 || width === 420) await page.screenshot({ path: test.info().outputPath(`settings-meetings-${width}.png`) });
   }
-  await expect(page.locator(".settings-navigation")).toBeHidden();
-  await page.getByRole("link", { name: "全部设置", exact: true }).click();
-  await expect(page.locator(".settings-navigation")).toBeVisible();
-  await expect(page.locator(".settings-content")).toBeHidden();
-  await page.screenshot({ path: "/private/tmp/yulu-settings-categories-narrow.png" });
-  await page.getByRole("link", { name: "通用 语言、外观与关于 Yulu" }).click();
+  const nav = page.locator(".root-pane .settings-nav");
+  await expect(nav).toBeHidden();
+  await page.locator(".topbar-back").click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(nav).toBeVisible();
+  await expect(page.locator(".root-main")).toBeHidden();
+  await page.screenshot({ path: test.info().outputPath("settings-categories-narrow.png") });
+  await nav.getByRole("link", { name: "通用", exact: true }).click();
   await expect(page.getByRole("heading", { name: "偏好设置" })).toBeVisible();
-  await page.screenshot({ path: "/private/tmp/yulu-settings-general-narrow.png" });
+  await expect(nav).toBeHidden();
+  await page.screenshot({ path: test.info().outputPath("settings-general-narrow.png") });
 });
 
 test("legacy links preserve connection remediation and reveal the right advanced section", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 820 });
+  // The Agent calendar connector is gone; its old link lands on meeting reminders.
   await page.goto("/settings/integrations#agent-calendar-connector");
-  await expect(page).toHaveURL(/\/settings\/connections#agent-calendar-connector$/);
-  await expect(page.locator("#agent-calendar-connector")).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/meetings#agent-calendar-connector$/);
+  await expect(page.getByRole("heading", { name: "会议提醒", level: 1 })).toBeVisible();
+  await expect(page.locator("#agent-calendar-connector")).toHaveCount(0);
   await page.goto("/settings/sharing");
   await expect(page).toHaveURL(/\/settings\/connections#sharing$/);
   await expect(page.locator("#sharing > details")).toHaveAttribute("open", "");
@@ -92,10 +101,10 @@ test("reminder edits retain save feedback and recording guards", async ({ page }
 test("all settings categories fit a compact window", async ({ page }) => {
   for (const width of [960, 760, 420]) {
     await page.setViewportSize({ width, height: 860 });
-    for (const category of ["general", "recording", "voice", "connections"]) {
+    for (const category of ["general", "recording", "meetings", "voice", "connections"]) {
       await page.goto(`/settings/${category}`);
-      await expect(page.locator(".settings-detail-head")).toBeVisible();
-      await expect.poll(() => page.locator(".settings-content").evaluate((element) => element.scrollWidth - element.clientWidth), { message: `${category} should fit at ${width}px` }).toBeLessThanOrEqual(1);
+      await expect(page.locator(".settings-detail > h1")).toBeVisible();
+      await expect.poll(() => page.locator(".root-body").evaluate((element) => element.scrollWidth - element.clientWidth), { message: `${category} should fit at ${width}px` }).toBeLessThanOrEqual(1);
     }
   }
 });
@@ -131,19 +140,23 @@ test("account settings start with uses and reveal the chosen capability with the
   page.on("request", (request) => { if (request.method() === "POST") mutations.push(request.url()); });
   await page.setViewportSize({ width: 1120, height: 860 });
   await page.goto("/settings/connections");
-  await expect(page.locator(".agent-usage-row")).toHaveCount(3);
+  // Yulu transcribes and summarizes; nothing here configures a conversation.
+  await expect(page.locator(".agent-usage-row strong")).toHaveText(["转写", "摘要"]);
   await expect(page.locator(".agent-provider-details[open]")).toHaveCount(0);
   await expect(page.locator(".agent-connection-model input").first()).toBeHidden();
-  await page.screenshot({ path: "/private/tmp/yulu-settings-connections-wide.png" });
+  await page.screenshot({ path: test.info().outputPath("settings-connections-wide.png") });
   await page.getByRole("button", { name: "配置摘要", exact: true }).focus();
   await page.keyboard.press("Enter");
   await expect(page.locator("#agent-connection-direct-xai-summary")).toHaveAttribute("open", "");
-  await expect(page.locator("#agent-connection-direct-xai-conversation")).not.toHaveAttribute("open", "");
+  await expect(page.locator('[id$="-conversation"]')).toHaveCount(0);
   await expect(page.locator("#agent-connection-model-summary")).toBeVisible();
   expect(mutations).toEqual([]);
+  await page.goto("/settings/llm?connection=codex&capability=summary");
+  await expect(page.locator("#agent-connection-codex-summary")).toHaveAttribute("open", "");
+  await expect(page.locator("#agent-connection-codex-summary")).toBeFocused();
+  // A link to the retired capability still finds the account it was about.
   await page.goto("/settings/llm?connection=codex&capability=conversation");
-  await expect(page.locator("#agent-connection-codex-conversation")).toHaveAttribute("open", "");
-  await expect(page.locator("#agent-connection-codex-conversation")).toBeFocused();
+  await expect(page.locator("#agent-connection-codex")).toBeFocused();
 });
 
 test("recording, voice and expanded account controls fit narrow windows", async ({ page }) => {
@@ -151,17 +164,17 @@ test("recording, voice and expanded account controls fit narrow windows", async 
   await mockConnectionSettings(page);
   for (const category of ["recording", "voice", "connections"]) {
     await page.goto(`/settings/${category}`);
-    await expect(page.locator(".settings-detail-head")).toBeVisible();
-    if (category === "connections") await expect(page.locator(".agent-usage-row")).toHaveCount(3);
+    await expect(page.locator(".settings-detail > h1")).toBeVisible();
+    if (category === "connections") await expect(page.locator(".agent-usage-row")).toHaveCount(2);
     if (category === "recording") await expect(page.locator("#transcription")).toBeVisible();
-    if (category === "voice") await expect(page.locator(".voice-hotkey-display")).toHaveCount(3);
+    if (category === "voice") await expect(page.locator(".voice-hotkey-display")).toHaveCount(2);
     for (const width of [960, 760, 420, 360]) {
       await page.setViewportSize({ width, height: 860 });
-      await expect.poll(() => page.locator(".settings-content").evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
-      if (width === 960 || width === 420) await page.screenshot({ path: `/private/tmp/yulu-settings-${category}-${width}.png` });
+      await expect.poll(() => page.locator(".root-body").evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+      if (width === 960 || width === 420) await page.screenshot({ path: test.info().outputPath(`settings-${category}-${width}.png`) });
     }
     await page.locator(".settings-detail details").evaluateAll((elements) => elements.forEach((element) => element.setAttribute("open", "")));
-    await expect.poll(() => page.locator(".settings-content").evaluate((element) => element.scrollWidth - element.clientWidth), { message: `${category} expanded controls should fit at 360px` }).toBeLessThanOrEqual(1);
+    await expect.poll(() => page.locator(".root-body").evaluate((element) => element.scrollWidth - element.clientWidth), { message: `${category} expanded controls should fit at 360px` }).toBeLessThanOrEqual(1);
   }
 });
 
@@ -173,16 +186,20 @@ test("voice shortcuts can be cancelled and are saved as one complete value", asy
     updates.push(route.request().postDataJSON());
     return route.fulfill({ json: { result: { data: { daemonsNeedingRestart: [], daemonsNeedingSighup: [] } } } });
   });
+  await page.route("**/trpc/recording.shortcutEditing*", (route) => route.fulfill({ json: { result: { data: { ok: true } } } }));
   await page.goto("/settings/voice");
-  await expect(page.locator("#voice-input .adv-disclosure")).not.toHaveAttribute("open", "");
   const change = page.getByRole("button", { name: "听写快捷键 更改", exact: true });
   await change.click();
+  // Capture starts once the global shortcuts are paused.
+  await expect(change).toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("Escape");
   await expect(change).toHaveAttribute("aria-pressed", "false");
   await expect(change).toBeFocused();
   expect(updates).toEqual([]);
   await change.click();
+  await expect(change).toHaveAttribute("aria-pressed", "true");
   await page.keyboard.press("Control+Alt+F1");
   await expect(page.getByTestId("undo-toast")).toBeVisible();
-  expect(updates).toEqual([{ key: "status_agent.hotkeys.dictate", value: { key: "F1", modifiers: ["ctrl", "alt"] } }]);
+  // Real key presses say which side they came from.
+  expect(updates).toEqual([{ key: "status_agent.hotkeys.dictate", value: { key: "F1", modifiers: ["left_ctrl", "left_alt"] } }]);
 });

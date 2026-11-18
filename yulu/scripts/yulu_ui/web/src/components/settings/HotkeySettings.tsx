@@ -34,7 +34,20 @@ export function HotkeySettings({ hotkeys, disabled, onCommit }: {
   const busy = useRef(false);
   const button = useRef<HTMLButtonElement | null>(null);
   const { mutateAsync: pauseShortcuts } = pause;
-  const close = () => { setEditing(null); button.current?.focus(); };
+  // Closing resumes the global shortcuts and may save, and both briefly disable
+  // the buttons. A disabled button drops focus, so hand it back when that
+  // settles, unless you have moved on to something else meanwhile.
+  const refocus = useRef(false);
+  const close = () => { setEditing(null); refocus.current = true; button.current?.focus(); };
+  useEffect(() => {
+    const moved = (event: FocusEvent) => { if (event.target !== button.current) refocus.current = false; };
+    document.addEventListener("focusin", moved);
+    return () => document.removeEventListener("focusin", moved);
+  }, []);
+  useEffect(() => {
+    if (!refocus.current || editing || saving || pause.isPending) return;
+    if (!document.activeElement || document.activeElement === document.body) button.current?.focus();
+  }, [editing, saving, pause.isPending]);
 
   const save = async (action: Action, shortcut: HotkeyValue) => {
     if (busy.current) return;

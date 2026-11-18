@@ -165,6 +165,15 @@ export function useLang(): { lang: Lang; setLang: (l: Lang) => void } {
 }
 
 /**
+ * The locale to format dates and numbers with, for the active language. Like
+ * `useT`, it falls back to the default language outside a provider.
+ */
+export function useLocale(): string {
+  const lang = useContext(LanguageContext)?.lang ?? DEFAULT_LANG;
+  return lang === "zh" ? "zh-CN" : "en-US";
+}
+
+/**
  * Returns the active-language `t(key, vars?)`. Re-renders the calling component
  * whenever the language switches. Outside a provider it falls back to the
  * default-language translate so isolated unit tests of a single component don't

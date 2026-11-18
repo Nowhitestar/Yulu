@@ -9,7 +9,7 @@ import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
 import { useHotkeys } from "../../hooks/useHotkeys.js";
-import { useLang, useT, type TFunc } from "../../i18n/LanguageProvider.js";
+import { useLocale, useT, type TFunc } from "../../i18n/LanguageProvider.js";
 import "./recordings.css";
 
 interface Row {
@@ -58,8 +58,7 @@ const isDeleteBlocked = (row: Row) => BUSY_STATES.includes(row.status) ||
 export function RecordingsList() {
   const { data, isPending } = trpc.recordings.list.useQuery({});
   const t = useT();
-  const { lang } = useLang();
-  const locale = lang === "zh" ? "zh-CN" : "en-US";
+  const locale = useLocale();
   const confirm = useConfirm();
   const navigate = useNavigate();
   const location = useLocation();

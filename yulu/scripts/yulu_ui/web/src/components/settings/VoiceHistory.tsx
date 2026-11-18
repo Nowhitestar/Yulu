@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { trpc } from "../../trpc.js";
-import { useLang, useT } from "../../i18n/LanguageProvider.js";
+import { useLocale, useT } from "../../i18n/LanguageProvider.js";
 
 interface HistoryItem {
   id: string;
@@ -15,7 +15,7 @@ interface HistoryItem {
 /** What you dictated recently, so text that missed its target is never lost. */
 export function VoiceHistory() {
   const t = useT();
-  const { lang } = useLang();
+  const locale = useLocale();
   const history = trpc.recording.history.useQuery(undefined, { refetchInterval: 5_000 });
   const [copied, setCopied] = useState<string | null>(null);
   const items = (history.data ?? []) as HistoryItem[];
@@ -27,7 +27,7 @@ export function VoiceHistory() {
   };
   const when = (value: string) => {
     const date = new Date(value);
-    return Number.isNaN(date.valueOf()) ? "" : date.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", {
+    return Number.isNaN(date.valueOf()) ? "" : date.toLocaleString(locale, {
       month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
     });
   };

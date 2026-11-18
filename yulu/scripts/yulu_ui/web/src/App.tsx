@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createBrowserRouter, RouterProvider, Navigate, useParams, useSearchParams } from "react-router";
+import { createBrowserRouter, RouterProvider, Navigate, useParams, useSearchParams, type RouteObject } from "react-router";
 import { useState } from "react";
 import { trpc, makeTrpcClient } from "./trpc.js";
 import { ThemeConfigSync, ThemeProvider } from "./theme.js";
@@ -30,7 +30,8 @@ function RecordingRedirect() {
   return <Navigate to={`/inbox/${target}${qs ? `?${qs}` : ""}`} replace />;
 }
 
-const router = createBrowserRouter([
+/** Every place in the app, including the retired ones that still redirect. */
+export const APP_ROUTES: RouteObject[] = [
   {
     path: "/",
     Component: RootLayout,
@@ -76,7 +77,9 @@ const router = createBrowserRouter([
       { path: "health/logs", element: <Navigate to="/health#logs" replace /> },
     ],
   },
-]);
+];
+
+const router = createBrowserRouter(APP_ROUTES);
 
 export function App() {
   const [qc] = useState(() => new QueryClient({

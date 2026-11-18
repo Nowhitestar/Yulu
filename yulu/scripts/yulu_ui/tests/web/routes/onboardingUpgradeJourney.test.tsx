@@ -169,11 +169,10 @@ describe("upgraded Onboarding user journey", () => {
 
     expect(screen.getByText("Onboarding complete for this version")).toBeInTheDocument();
     expect(screen.getByTestId("onboarding-core-activation")).toHaveTextContent("Complete");
-    const conversation = screen.getByTestId("onboarding-capability-conversation");
-    expect(conversation).toHaveTextContent("Adopted");
-    expect(conversation).toHaveTextContent("Current readiness: Needs attention");
-    expect(conversation).toHaveTextContent("The selected runtime is currently unavailable");
-    for (const capability of ["calendar-source", "agent-calendar-connector", "sharing"]) {
+    // The Host still reports the adopted Conversation; the UI no longer offers that step.
+    expect(screen.queryByTestId("onboarding-capability-conversation")).toBeNull();
+    expect(screen.queryByTestId("onboarding-capability-agent-calendar-connector")).toBeNull();
+    for (const capability of ["calendar-source", "sharing"]) {
       expect(within(screen.getByTestId(`onboarding-capability-${capability}`)).getByText("Deferred"))
         .toBeInTheDocument();
     }

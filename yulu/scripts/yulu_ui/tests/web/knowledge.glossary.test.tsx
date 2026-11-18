@@ -49,7 +49,7 @@ function mount() {
 describe("Glossary page", () => {
   it("renders one tag per canonical proper noun", () => {
     mount();
-    expect(screen.getByRole("heading", { name: "专有名词" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "术语表" })).toBeInTheDocument();
     expect(screen.getByText("3 个词")).toBeInTheDocument();
     expect(screen.getAllByText("AgentKey")).toHaveLength(1);
     expect(screen.queryByText("Agency")).not.toBeInTheDocument();

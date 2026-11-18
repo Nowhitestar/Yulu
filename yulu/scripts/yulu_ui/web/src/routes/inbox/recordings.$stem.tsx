@@ -15,7 +15,7 @@ import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
 import { SharePopover, type RecordingShareView } from "../../components/SharePopover.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
 import { PopoverMenu } from "../../components/PopoverMenu.js";
-import { useLang, useT } from "../../i18n/LanguageProvider.js";
+import { useLocale, useT } from "../../i18n/LanguageProvider.js";
 import { useWsChannel } from "../../ws.js";
 import "./recordings.reader.css";
 
@@ -361,7 +361,7 @@ export function RecordingReader() {
   const navigate = useNavigate();
   const confirm = useConfirm();
   const t = useT();
-  const { lang } = useLang();
+  const locale = useLocale();
   const { data, error, isPending } = trpc.recordings.get.useQuery({ stem }, { enabled: stem.length > 0 });
   const { data: summaryPrompts } = trpc.prompts.list.useQuery({ category: "summary" });
   const acknowledgeGuidedCompletion = trpc.activation.acknowledgeGuidedCompletion.useMutation();
@@ -786,7 +786,7 @@ export function RecordingReader() {
               </button>
             )}
             <div className="reader-meta">
-              <span>{recorded.toLocaleString(lang === "zh" ? "zh-CN" : "en-US", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}</span>
+              <span>{recorded.toLocaleString(locale, { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}</span>
               {!agentTask && <RecordingStatusBadge state={data.status} error={data.statusError} />}
               <AgentTaskStatus task={agentTask} delivery={notionDelivery} />
               <TagEditor tags={data.tags ?? []} onChange={handleTagsChange} />

@@ -38,14 +38,20 @@ export function RootLayout() {
   // Settings is navigated from the pane, so it is always there.
   const paneShown = settings || paneOpen;
 
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  useEffect(() => { setPaletteOpen(false); }, [location.key]);
+  // The palette belongs to the page it was opened on: going anywhere closes it,
+  // and opening it in the same instant as a navigation still opens it.
+  const locationKey = useRef(location.key);
+  locationKey.current = location.key;
+  const [paletteAt, setPaletteAt] = useState<string | null>(null);
+  const paletteOpen = paletteAt === location.key;
+  const openPalette = useCallback(() => setPaletteAt(locationKey.current), []);
+  const closePalette = useCallback(() => setPaletteAt(null), []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
       if ((event.metaKey || event.ctrlKey) && (key === "k" || event.code === "KeyK")) {
         event.preventDefault();
-        setPaletteOpen(true);
+        openPalette();
       } else if (event.metaKey && event.ctrlKey && (key === "s" || event.code === "KeyS") && !settings) {
         // The macOS convention for showing and hiding a sidebar.
         event.preventDefault();
@@ -54,13 +60,13 @@ export function RootLayout() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [settings, togglePane]);
+  }, [settings, togglePane, openPalette]);
 
   return (
     <div data-yulu-ready className="root-shell" data-detail={showsDetail(location.pathname)} data-pane={paneShown ? "open" : "closed"}>
       <TopBar settings={settings} paneOpen={paneShown} onTogglePane={togglePane} />
       <aside className="root-pane" id="app-pane">
-        <button type="button" className="pane-search" aria-label={t("search.placeholder")} aria-haspopup="dialog" aria-expanded={paletteOpen} onClick={() => setPaletteOpen(true)}>
+        <button type="button" className="pane-search" aria-label={t("search.placeholder")} aria-haspopup="dialog" aria-expanded={paletteOpen} onClick={openPalette}>
           <Search size={14} strokeWidth={1.9} aria-hidden="true" />
           <span>{t("search.placeholder")}</span>
           <kbd aria-hidden="true">⌘K</kbd>
@@ -72,7 +78,7 @@ export function RootLayout() {
           {isGuidedFlow ? <Outlet /> : <OnboardingEntry><Outlet /></OnboardingEntry>}
         </div>
       </main>
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+      {paletteOpen && <CommandPalette onClose={closePalette} />}
     </div>
   );
 }

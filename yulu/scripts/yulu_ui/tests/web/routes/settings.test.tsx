@@ -32,7 +32,19 @@ interface ConfigUpdateResult {
 
 // Shared spy so tests can assert config.update was called on a field edit.
 // vi.hoisted keeps it available inside the hoisted vi.mock factory below.
-const { configUpdateSpy, promptsListSpy, previewSoundSpy, restartSpy, recording, statusAgent } = vi.hoisted(() => ({
+const { configUpdateSpy, promptsListSpy, previewSoundSpy, restartSpy, recording, statusAgent, mcp } = vi.hoisted(() => ({
+  mcp: {
+    status: {
+      available: true,
+      agents: [
+        { id: "claude", detected: true, configured: null as boolean | null },
+        { id: "codex", detected: true, configured: false as boolean | null },
+        { id: "hermes", detected: false, configured: false as boolean | null },
+      ],
+    },
+    install: vi.fn((_vars: { agent: string }, opts?: { onSuccess?: (result: { ok: boolean }) => void }) => opts?.onSuccess?.({ ok: true })),
+    test: vi.fn(),
+  },
   configUpdateSpy: vi.fn(async (_vars: { key: string; value: unknown }): Promise<ConfigUpdateResult> => ({ daemonsNeedingRestart: [], daemonsNeedingSighup: [] })),
   promptsListSpy: vi.fn(),
   previewSoundSpy: vi.fn(),
@@ -69,6 +81,7 @@ vi.mock("../../../web/src/trpc.js", () => {
       hotkeys: {
         dictate: { key: "Space", modifiers: ["ctrl", "alt"] },
         translate: { key: "T", modifiers: ["ctrl", "alt"] },
+        // A config written before the ask-the-assistant shortcut was retired.
         voice_chat: { key: "A", modifiers: ["ctrl", "alt"] },
       },
     },
@@ -125,6 +138,10 @@ vi.mock("../../../web/src/trpc.js", () => {
       recording: {
         shortcutEditing: { useMutation: () => ({ mutateAsync: shortcutEditingMock, isPending: false }) },
         state: { useQuery: () => ({ data: { state: recording.state } }) },
+        history: { useQuery: () => ({ data: [
+          { id: "h1", action: "dictate", text: "把评审挪到周四下午", createdAt: "2026-11-17T15:02:00+08:00" },
+          { id: "h2", action: "translate", targetLanguage: "English", text: "Move the review to Thursday.", rawText: "把评审挪到周四。", createdAt: "2026-11-17T11:40:00+08:00" },
+        ] }) },
         previewSound: { useMutation: (opts?: { onError?: (error: Error) => void }) => ({
           mutate: () => {
             try { previewSoundSpy(); }
@@ -193,6 +210,11 @@ vi.mock("../../../web/src/trpc.js", () => {
         }) },
         select: { useMutation: noopMutation },
         probe: { useMutation: noopMutation },
+      },
+      mcpAgents: {
+        status: { useQuery: () => ({ data: mcp.status, isPending: false }) },
+        install: { useMutation: () => ({ mutate: mcp.install, isPending: false, variables: undefined }) },
+        test: { useMutation: () => ({ mutate: mcp.test, isPending: false, data: undefined }) },
       },
       agentConsole: {
         overview: {
@@ -344,42 +366,20 @@ vi.mock("../../../web/src/trpc.js", () => {
   };
 });
 
-import { useMatches } from "react-router";
-import { SettingsLayout, SettingsIndex, handle as settingsHandle } from "../../../web/src/routes/settings.js";
+import { SettingsLayout, SettingsIndex } from "../../../web/src/routes/settings.js";
 import { SettingsCategory } from "../../../web/src/routes/settings.$category.js";
-import { categoryLabelKey } from "../../../web/src/components/settings/categories.js";
+import { SettingsNav } from "../../../web/src/components/SettingsNav.js";
 import { CATEGORIES } from "../../../web/src/components/settings/categories.js";
 import { translate, LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 import { UndoToastProvider } from "../../../web/src/components/UndoToast.js";
 import { ThemeProvider } from "../../../web/src/theme.js";
 
-// Minimal breadcrumb probe that mirrors TopBar's breadcrumb computation (read
-// each match's handle.breadcrumb, resolve string|fn to an i18n key, run it
-// through translate(), join with " / "). Breadcrumb values are now i18n keys
-// (or functions returning a key), so we resolve them at the default language
-// (zh) just like TopBar resolves them via t(). This exercises the route-handle
-// wiring without pulling in TopBar's GlobalSearch.
-function BreadcrumbProbe() {
-  const matches = useMatches();
-  const segments: string[] = [];
-  for (const m of matches) {
-    const bc = (m.handle as { breadcrumb?: unknown } | undefined)?.breadcrumb;
-    if (bc == null) continue;
-    if (typeof bc === "string") segments.push(translate("zh", bc));
-    else if (typeof bc === "function") {
-      const key = (bc as (p: Record<string, string | undefined>) => string | null)(m.params as Record<string, string | undefined>);
-      if (key) segments.push(translate("zh", key));
-    }
-  }
-  return <div className="topbar-breadcrumb">{segments.join(" / ")}</div>;
-}
-
-// A layout that renders the breadcrumb above the settings subtree.
+// The shell as Settings sees it: its list in the left pane, the page beside it.
 function Shell() {
   return (
     <>
-      <BreadcrumbProbe />
-      <Outlet />
+      <aside className="root-pane"><SettingsNav returnTo="/inbox/Standup_20260102_090000" /></aside>
+      <main className="root-body"><Outlet /></main>
     </>
   );
 }
@@ -389,19 +389,13 @@ function routesTree() {
     {
       path: "/",
       Component: Shell,
-      handle: { breadcrumb: null },
       children: [
         {
           path: "settings",
           Component: SettingsLayout,
-          handle: settingsHandle,
           children: [
             { index: true, Component: SettingsIndex },
-            {
-              path: ":category",
-              Component: SettingsCategory,
-              handle: { breadcrumb: (p: Record<string, string | undefined>) => categoryLabelKey(p.category ?? ""), filters: null },
-            },
+            { path: ":category", Component: SettingsCategory },
           ],
         },
       ],
@@ -427,11 +421,12 @@ function wrap(initial = "/settings/general") {
 }
 
 describe("Settings navigation", () => {
-  it("renders a category list and content pane", () => {
+  it("renders the settings list beside one reading column", () => {
     const { container } = wrap();
-    expect(container.querySelector(".settings-workspace")).not.toBeNull();
-    expect(container.querySelector(".settings-navigation")).not.toBeNull();
-    expect(container.querySelector(".settings-content")).not.toBeNull();
+    expect(container.querySelector(".root-pane .settings-nav")).not.toBeNull();
+    expect(container.querySelector(".root-body > .settings-page.page")).not.toBeNull();
+    // The page itself carries no second navigation.
+    expect(container.querySelector(".settings-page nav")).toBeNull();
   });
 
   it("renders one category nav per registered category, with no emoji", () => {
@@ -445,21 +440,23 @@ describe("Settings navigation", () => {
     }
   });
 
-  it("shows the Chinese category labels in the nav list", () => {
+  it("lists every settings page in three quiet groups, and a way back", () => {
     const { container } = wrap();
-    const list = container.querySelector(".settings-navigation")!;
-    const scoped = within(list as HTMLElement);
-    expect(scoped.getByText("通用")).toBeInTheDocument();
-    expect(scoped.getByText("录音与纪要")).toBeInTheDocument();
-    expect(scoped.getByText("会议提醒")).toBeInTheDocument();
-    expect(scoped.getByText("账号与连接")).toBeInTheDocument();
-    expect(scoped.queryByText("AI 集成")).toBeNull();
-    expect(scoped.queryByText("Agent Console")).toBeNull();
+    const nav = container.querySelector(".settings-nav") as HTMLElement;
+    expect([...nav.querySelectorAll(".settings-nav-group")].map((group) =>
+      [...group.querySelectorAll("a")].map((link) => link.textContent))).toEqual([
+      ["通用", "录音与摘要", "会议提醒", "语音输入", "连接"],
+      ["模板", "术语表"],
+      ["运行状态"],
+    ]);
+    expect(within(nav).getByRole("link", { name: "返回录音" })).toHaveAttribute("href", "/inbox/Standup_20260102_090000");
+    expect(within(nav).queryByText(/助手|Agent Console/)).toBeNull();
   });
 
-  it("renders the breadcrumb as '设置 / <category>'", () => {
+  it("titles the page with its category", () => {
     const { container } = wrap("/settings/audio");
-    expect(container.querySelector(".topbar-breadcrumb")?.textContent).toBe("设置 / 录音与纪要");
+    expect(within(container.querySelector(".settings-page") as HTMLElement).getByRole("heading", { level: 1 }))
+      .toHaveTextContent("录音与摘要");
   });
 
   it("marks the active category nav for the current route", () => {
@@ -476,7 +473,7 @@ describe("Settings navigation", () => {
 
   it("renders the automation (meeting detection) section", () => {
     const { container } = wrap("/settings/automation");
-    const detail = within(container.querySelector(".settings-content") as HTMLElement);
+    const detail = within(container.querySelector(".settings-page") as HTMLElement);
     // The section <h2> heading (distinct from the detail's <h1> title, which the
     // category label also renders as "自动化").
     expect(container.querySelector("#automation h2")?.textContent).toBe(translate("zh", "settings.automation.heading"));
@@ -492,7 +489,7 @@ describe("Settings category detail content (re-homed widgets)", () => {
 
   it("general: one appearance control, about, and collapsed diagnostics", () => {
     const { container } = wrap("/settings/general");
-    const detail = within(container.querySelector(".settings-content") as HTMLElement);
+    const detail = within(container.querySelector(".settings-page") as HTMLElement);
     expect(detail.getByText(translate("zh", "settings.capabilities.heading"))).toBeInTheDocument();
     // Theme controls are re-homed here.
     expect(container.querySelector('[role="group"][aria-label="主题"]')).toBeNull();
@@ -507,13 +504,13 @@ describe("Settings category detail content (re-homed widgets)", () => {
 
   it("general: exposes persistent Onboarding Home re-entry", () => {
     const { container } = wrap("/settings/general");
-    const detail = within(container.querySelector(".settings-content") as HTMLElement);
+    const detail = within(container.querySelector(".settings-page") as HTMLElement);
     expect(detail.getByRole("link", { name: "打开新手引导" })).toHaveAttribute("href", "/onboarding");
   });
 
   it("audio: audio rows + storage dbStats/logs", () => {
     const { container } = wrap("/settings/audio");
-    const detail = within(container.querySelector(".settings-content") as HTMLElement);
+    const detail = within(container.querySelector(".settings-page") as HTMLElement);
     expect(detail.getByText(translate("zh", "settings.audio.heading"))).toBeInTheDocument();
     expect(detail.getByText(translate("zh", "settings.audio.micDevice.label"))).toBeInTheDocument();
     // StorageSection is re-homed under audio (its "Storage" heading + Databases group).
@@ -536,7 +533,7 @@ describe("Settings category detail content (re-homed widgets)", () => {
 
   it("transcription: shows explicit local/xAI engine selection", () => {
     const { container } = wrap("/settings/transcription");
-    const detail = within(container.querySelector(".settings-content") as HTMLElement);
+    const detail = within(container.querySelector(".settings-page") as HTMLElement);
     // Section <h2> heading is distinct from the detail <h1> title (the category
     // label also renders "转写").
     expect(container.querySelector("#transcription h2")?.textContent).toBe(translate("zh", "settings.transcription.heading"));
@@ -548,7 +545,6 @@ describe("Settings category detail content (re-homed widgets)", () => {
 
   it.each([
     ["快捷键操作", "按一下开始，再按一下结束", "hold", "status_agent.voice_input_mode"],
-    ["语音提问范围", "通用问答", "meetings", "transcription.dictation.voice_chat_scope"],
   ])("voice: saves %s through the existing config controls", async (label, initial, value, key) => {
     configUpdateSpy.mockClear();
     const { container } = wrap("/settings/voice");
@@ -584,6 +580,25 @@ describe("Settings category detail content (re-homed widgets)", () => {
     expect(change).toHaveAttribute("aria-pressed", "false");
     expect(change).toHaveFocus();
     expect(configUpdateSpy).not.toHaveBeenCalled();
+  });
+
+  it("voice: offers dictation and translation shortcuts, and nothing for asking an assistant", () => {
+    const { container } = wrap("/settings/voice");
+    const voice = within(container.querySelector("#voice-input") as HTMLElement);
+    expect(voice.getByLabelText("听写快捷键 更改")).toBeInTheDocument();
+    expect(voice.getByLabelText("翻译快捷键 更改")).toBeInTheDocument();
+    expect(container.querySelectorAll(".voice-hotkey-capture")).toHaveLength(2);
+    expect(voice.queryByText(/问 Agent|提问/)).toBeNull();
+  });
+
+  it("voice: keeps recent dictation on the same page, with the original one step away", () => {
+    const { container } = wrap("/settings/voice");
+    const history = within(container.querySelector("#voice-history") as HTMLElement);
+    expect(history.getByRole("heading", { name: "最近的输入" })).toBeInTheDocument();
+    expect(history.getByText("把评审挪到周四下午")).toBeInTheDocument();
+    expect(history.getByText("Move the review to Thursday.")).toBeInTheDocument();
+    expect(history.getByText("把评审挪到周四。").closest("details")).not.toHaveAttribute("open");
+    expect(history.getAllByRole("button", { name: "复制" })).toHaveLength(2);
   });
 
   it("voice: shows configured state separately from the live StatusAgent state", () => {
@@ -655,33 +670,55 @@ describe("Settings category detail content (re-homed widgets)", () => {
     })));
   });
 
-  it("llm: hosts the authoritative Agent Connection Center", () => {
+  it("connections: registers Yulu with the Agents found on this Mac", () => {
+    mcp.install.mockClear();
+    const { container } = wrap("/settings/connections");
+    const section = within(container.querySelector("#mcp-agents") as HTMLElement);
+    expect(section.getByRole("heading", { name: "接入 Agent" })).toBeInTheDocument();
+    // Only detected Agents are offered; Hermes is not installed here.
+    expect([...container.querySelectorAll("#mcp-agents .row-label")].map((label) => label.textContent))
+      .toEqual(["Claude Code", "Codex"]);
+    expect(container.querySelector('#mcp-agents [data-agent="codex"] .mcp-agent-state')).toHaveTextContent("未接入");
+
+    fireEvent.click(section.getByRole("button", { name: "接入 Codex" }));
+    expect(mcp.install).toHaveBeenCalledWith({ agent: "codex" }, expect.any(Object));
+    expect(container.querySelector('#mcp-agents [data-agent="codex"] .mcp-agent-state')).toHaveTextContent("已接入");
+    expect(section.getByRole("button", { name: "测试 Codex" })).toBeInTheDocument();
+  });
+
+  it("connections: says so when the Agent list cannot be read", () => {
+    const saved = mcp.status.available;
+    mcp.status.available = false;
+    const { container } = wrap("/settings/connections");
+    expect(within(container.querySelector("#mcp-agents") as HTMLElement).getByRole("alert")).toBeInTheDocument();
+    expect(container.querySelector("#mcp-agents .row")).toBeNull();
+    mcp.status.available = saved;
+  });
+
+  it("llm: hosts AI services for transcription and summary only", () => {
     const { container } = wrap("/settings/llm");
-    const detail = within(container.querySelector(".settings-content") as HTMLElement);
+    const detail = within(container.querySelector("#ai-connections") as HTMLElement);
     expect(detail.getByRole("heading", { name: translate("zh", "agentConnections.title") }))
       .toBeInTheDocument();
-    expect(detail.queryByRole("link", { name: translate("zh", "settings.connectionCenter.open") }))
-      .toBeNull();
+    expect([...container.querySelectorAll("#ai-connections .agent-usage-row strong")].map((item) => item.textContent))
+      .toEqual(["转写", "摘要"]);
   });
 
   it("sharing: reaches the reusable Sharing configuration surface from Settings", () => {
     const { container } = wrap("/settings/sharing");
-    const detail = within(container.querySelector(".settings-content") as HTMLElement);
+    const detail = within(container.querySelector(".settings-page") as HTMLElement);
     expect(detail.getByRole("heading", { name: translate("zh", "sharing.title") }))
       .toBeInTheDocument();
     expect(detail.getByText(translate("zh", "sharing.noConnections"))).toBeInTheDocument();
     expect(container.querySelector("#sharing details")).toHaveAttribute("open");
   });
 
-  it("integrations: hosts authoritative Calendar Sources and keeps Agent Calendar Connector separate", () => {
+  it("integrations: hosts authoritative Calendar Sources without an Agent calendar connector", () => {
     const { container } = wrap("/settings/integrations");
-    const detail = within(container.querySelector(".settings-content") as HTMLElement);
+    const detail = within(container.querySelector(".settings-page") as HTMLElement);
     expect(detail.getByRole("heading", { name: translate("zh", "settings.calendarSource.heading") }))
       .toBeInTheDocument();
-    expect(detail.getByRole("link", { name: translate("zh", "settings.calendarSource.connector.open"), hidden: true }))
-      .toHaveAttribute("href", "/settings/connections#agent-calendar-connector");
-    expect(detail.queryByRole("heading", { name: translate("zh", "settings.agentCalendarConnector.heading") }))
-      .toBeNull();
+    expect(container.querySelector('a[href*="agent-calendar-connector"]')).toBeNull();
   });
 
   it("does not list the retired local transcription Advanced category", () => {
