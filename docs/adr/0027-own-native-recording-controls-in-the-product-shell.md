@@ -1,5 +1,8 @@
 # Own native recording controls in the product shell
 
+> The voice-chat controls are superseded by [yulu ADR-010](../../yulu/spec/adr/010-retire-yulu-conversation.md),
+> which retired Yulu-owned conversation.
+
 The Application Runtime links the existing native recording implementation into
 the product shell. The shell activates it only after Application Migration has
 committed. During Application Update health verification it first prepares an

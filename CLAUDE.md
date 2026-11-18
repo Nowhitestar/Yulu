@@ -3,7 +3,7 @@
 **Yulu (语录)** is an Agent-native macOS meeting recorder. It captures system
 audio and microphone input through one native TCC identity, persists each
 completed recording as durable local work, and keeps audio transcription
-separate from the selected summary and conversation Agents.
+separate from the selected Summary Provider.
 
 ### Responsibility boundary
 
@@ -14,20 +14,21 @@ separate from the selected summary and conversation Agents.
   transcripts, and dictation. `local` is the default; `xai` connects directly
   to xAI using Yulu-owned OAuth stored in macOS Keychain.
 - The exact Summary Provider pinned when work is created owns summary generation.
-  Current Summary Providers are direct xAI, Codex, or Claude Code. Hermes and
-  OpenClaw are optional Conversation-only providers.
-- The pinned Conversation Provider owns interactive conversation. Each session
-  pins its scope: general questions use bounded conversation history; meeting
-  questions can also use local meeting excerpts. xAI uses Yulu's strict
-  stateless client; Agent-backed meeting conversations retain their runtime-owned
-  connectors. Changing scope starts a new conversation.
+  Current Summary Providers are direct xAI, Codex, or Claude Code.
+- Yulu owns no conversation. Questions about meetings are asked in the user's
+  own Agent, which reaches Yulu through authenticated MCP and keeps its own
+  history and connectors. Hermes and OpenClaw are MCP clients only.
+- xAI dictation cleanup and translation send dictated text only when
+  `transcription.dictation.text_provider` is `xai`, the audio engine is `xai`,
+  and the dictated-text disclosure was accepted.
 - Python is capture/scheduling/desktop glue. It is not an AI runtime.
 
 Do not add automatic fallback between audio engines or Summary Providers, a
-second chat engine, connector executor, or file-only work queue to Yulu. The
-accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-recording-pipeline.md),
-[`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md), and
-[`ADR-009`](yulu/spec/adr/009-grok-cli-compatible-xai-oauth.md).
+chat engine or Agent Console, connector executor, or file-only work queue to
+Yulu. The accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-recording-pipeline.md),
+[`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md),
+[`ADR-009`](yulu/spec/adr/009-grok-cli-compatible-xai-oauth.md), and
+[`ADR-010`](yulu/spec/adr/010-retire-yulu-conversation.md).
 
 ### Constraints
 
@@ -60,7 +61,7 @@ accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-record
 - Hono, tRPC, Zod, WebSocket, and `better-sqlite3` for the Host.
 - React, React Router, TanStack Query, Vite, and wavesurfer.js for the UI.
 - Optional local Agent CLIs for the capabilities the user explicitly selects;
-  Hermes and OpenClaw are Conversation-only.
+  Hermes and OpenClaw connect only as MCP clients.
 - `sherpa-onnx` Paraformer for the Yulu-managed local audio engine.
 - `ffmpeg`/`sox` for audio inspection and transport preparation, including xAI
   batch-upload compression.
@@ -84,9 +85,8 @@ Yulu's separate xAI audio OAuth grant is stored in macOS Keychain.
 - `~/.config/yulu/` is a legacy read-only migration source.
 
 Relevant config sections are `audio`, `transcription` (engine, language, and
-dictation context), `agent_pipeline`, `llm`,
-`agent_console`, `status_agent`,
-`calendars`, `meeting_detection`, and `ui`.
+dictation context and text provider), `intelligence` (summary), `agent_pipeline`,
+`llm`, `status_agent`, `calendars`, `meeting_detection`, and `ui`.
 
 ### Build and verification
 
@@ -156,9 +156,14 @@ Do not infer live behavior from checkout tests alone.
 - Credentials are never stored in `config.json`.
 - Retired `agent_pipeline.auto_send_notion` is migration input only and can
   never authorize a new Share Action.
-- `llm.agent.provider` selects the general Agent only. Audio uses
-  `transcription.engine`; summary and conversation use their separate
-  `intelligence` selections, snapshotted when work is created.
+- `llm.agent.provider` is migration input only. Audio uses
+  `transcription.engine`; summary uses `intelligence.summary`, snapshotted when
+  work is created; dictation text uses `transcription.dictation.text_provider`
+  and `text_model`.
+- Retired conversation settings (`intelligence.conversation`, `agent_console`,
+  `transcription.dictation.voice_chat_scope` and `cleanup_model`,
+  `status_agent.hotkeys.voice_chat`) are archived to
+  `config.legacy-conversation.<stamp>.json` and rejected on write.
 - Retired inference and Yulu-owned connector fields are archived with mode
   `0600` and removed from active config. Never reintroduce them.
 - Use atomic config writes and preserve unknown forward-compatible keys unless
@@ -204,8 +209,7 @@ Python completion adapter -> authenticated loopback Host
 
 Recording detail -> fresh confirmed Share Action -> selected Agent connector
 
-Agent Console -> pinned Conversation Provider -> xAI bounded history/excerpts
-                                           or -> selected Agent + its connectors
+User's own Agent -> authenticated Yulu MCP -> local meetings and summaries
 ```
 
 ### Runtime components
@@ -223,8 +227,8 @@ Agent Console -> pinned Conversation Provider -> xAI bounded history/excerpts
 | `artifactStore.ts` | Task staging and independent transcript/summary commits |
 | `recordingEventInbox.ts` | Replay completion events after Host downtime |
 | `agentRuntime.ts` | Supported local Agent runtime resolution for explicitly selected capabilities |
-| prompt/glossary/search stores | Local context and discovery; bounded xAI conversation retrieval |
-| `agentSessionStore.ts` / `xaiText.ts` | Pinned local conversation history/sources and strict stateless xAI text requests |
+| prompt/glossary/search stores | Local context and discovery |
+| `xaiText.ts` / `dictationText.ts` | Strict stateless xAI text requests for summaries and explicitly enabled dictation cleanup/translation |
 
 ### Installed services
 
@@ -277,6 +281,9 @@ sending -> delivery_reported -> completed
 - ADR-007 supersedes the audio ownership and fallback decisions in ADR-005 and ADR-006.
 - ADR-009 supersedes ADR-008's summary capability boundary while retaining its
   Yulu-managed xAI credential custody and no-silent-fallback rules.
+- ADR-010 retires Yulu-owned conversation, the Agent Console, voice chat, and the
+  Agent Calendar Connector, superseding the conversation parts of ADR-005 and
+  ADR-009.
 - ADR-002 remains relevant for glossary data; the selected audio engine consumes that context.
 - Historical ADR bodies remain history and must not be treated as active
   implementation instructions.
@@ -288,8 +295,10 @@ sending -> delivery_reported -> completed
 - Running summary or connector code from Python capture paths.
 - Letting any current setting or runtime silently replace a task's pinned
   Summary Provider or model.
-- Letting a conversation retry switch provider, model, credential source, or
-  question scope or persisted local evidence snapshot.
+- Reintroducing a Yulu-owned conversation, chat session store, voice chat, or
+  Agent Console outside ADR-010.
+- Sending dictated text to xAI without the explicit dictation text switch and
+  its accepted disclosure.
 - Writing final transcript/summary files outside the Host commit contract.
 - Calling Notion without task opt-in, Host begin authorization, and Host result
   commit.

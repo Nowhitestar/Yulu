@@ -6,10 +6,11 @@ it with private per-user defaults. The file contains product preferences, paths,
 and Agent selection only; it must not contain Agent or connector secrets.
 `~/.config/yulu/config.json` is a legacy, read-only migration input.
 
-The current schema separates the audio engine, Summary Provider, Conversation
-Provider, and connectors. The explicitly selected audio engine handles realtime
+The current schema separates the audio engine, Summary Provider, dictation text
+provider, and connectors. The explicitly selected audio engine handles realtime
 captions, final transcription, and dictation; local is the default and no
-capability silently falls back to another provider or model.
+capability silently falls back to another provider or model. Yulu owns no
+conversation (ADR-010); ask about meetings in your own Agent through Yulu MCP.
 
 ## Representative configuration
 
@@ -27,6 +28,8 @@ capability silently falls back to another provider or model.
     "engine": "local",
     "language": "zh",
     "dictation": {
+      "text_provider": "none",
+      "text_model": "grok-4.6",
       "prompt_slug": "dictation-cleanup",
       "target_language": "English",
       "deadline_sec": 30,
@@ -36,8 +39,7 @@ capability silently falls back to another provider or model.
     }
   },
   "intelligence": {
-    "summary": { "provider": "agent", "model": "runtime-managed" },
-    "conversation": { "provider": "agent", "model": "runtime-managed" }
+    "summary": { "provider": "agent", "model": "runtime-managed" }
   },
   "agent_pipeline": {
     "enabled": true,
@@ -50,12 +52,6 @@ capability silently falls back to another provider or model.
       "provider": "auto"
     }
   },
-  "agent_console": {
-    "plugins": {
-      "added": ["summary"]
-    },
-    "destinations": {}
-  },
   "status_agent": {
     "enabled": true,
     "voice_input_mode": "toggle",
@@ -65,8 +61,7 @@ capability silently falls back to another provider or model.
         "key": "Fn",
         "modifiers": ["shift"],
         "target_language": "English"
-      },
-      "voice_chat": { "key": "Space", "modifiers": ["fn"] }
+      }
     }
   },
   "calendars": [
@@ -142,18 +137,17 @@ automatic work.
 
 ## `intelligence`
 
-`summary` and `conversation` are independent provider/model selections. `agent`
+`summary` is the only provider/model selection. `agent`
 uses an explicit Agent Connection Center selection in the form
 `{ "provider": "agent", "connectionId": "…", "model": "exact-model" }`.
 Codex and Claude Code therefore keep both the exact connection ID
 and exact tested model; `runtime-managed` is only a legacy compatibility value,
 not proof that a current connection is ready. `xai` stores the exact configured
-model name and resolves to the direct xAI connection. Summary tasks and
-conversation sessions snapshot the connection/provider/model identity at
-creation, so later settings changes affect only new work. No credential belongs
-in either object; persisted tasks and xAI conversation sessions store only
-non-secret credential class/source identities such as `runtime-oauth`, `oauth`,
-or `api-key`. Codex and Claude Code readiness evidence also records only a
+model name and resolves to the direct xAI connection. Summary tasks snapshot
+the connection/provider/model identity at creation, so later settings changes
+affect only new work. No credential belongs in the object; persisted tasks store
+only non-secret credential class/source identities such as `runtime-oauth`,
+`oauth`, or `api-key`. Codex and Claude Code readiness evidence also records only a
 non-secret authorization class. Codex accepts `chatgpt`; Claude Code accepts
 `claude-subscription`. An observed `api-key`, `amazon-bedrock`, or unknown class
 does not satisfy their Runtime-owned OAuth contract and invalidates current
@@ -168,27 +162,14 @@ and the committed transcript. Requests use the exact pinned model with response
 storage disabled; the returned Markdown must pass Host staging validation before
 the transcript/summary pair and artifact provenance are committed.
 
-xAI conversations pin their scope when created. General questions send the
-question and bounded conversation history without searching recordings. Meeting
-questions search local meeting summaries and transcripts before a request.
-Yulu sends at most 8 normalized sources, 1,200 characters per excerpt,
-6,000 characters total across source titles, dates, kinds, and excerpts, and a
-local-history tail of at most 12 messages and 12,000 characters. No matching
-excerpt sends no request in meeting scope. Existing conversations retain meeting
-scope during migration; changing scope requires a new conversation.
-Requests use the pinned model and credential source
-with `store:false` and no tools, files, collections, Web/X search, connectors,
-or response chaining, and reject a different response model. Source cards come
-from those local search hits, not model output. A retrieval or request failure
-pauses the local session without changing its identity or deleting messages and
-sources. Explicit retry is one Host mutation and reuses the persisted evidence
-snapshot; current settings and a fresh search cannot replace it.
-
-xAI answers use the [Responses streaming protocol](https://docs.x.ai/developers/model-capabilities/text/streaming).
-Partial text appears in the existing conversation UI and voice answer panel;
-only a validated completed response is stored as the final answer. A lost stream
-is an Unknown Outcome and is never silently replayed. The answer panel opens
-without activating Yulu, and follow-up voice questions retain their session.
+`intelligence.conversation` is retired (ADR-010). An upgrade archives it with
+the other retired conversation settings (`agent_console`,
+`transcription.dictation.voice_chat_scope` and `cleanup_model`, and
+`status_agent.hotkeys.voice_chat`) to a mode-`0600`
+`config.legacy-conversation.<timestamp>.json` beside `config.json`, removes them
+from the active file, and rejects later writes of those keys. Earlier Agent
+Console history in `agent-sessions.json` is renamed once to a mode-`0600`
+`agent-sessions.retired.<timestamp>.json` and never read again.
 
 ## `transcription`
 
@@ -199,11 +180,11 @@ and dictation. The default is local and there is no automatic fallback.
 |---|---:|---|
 | `engine` | `"local"` | `local` or `xai`; the selected value is used exactly for all audio transcription paths. |
 | `language` | `"zh"` | `zh`, `en`, `ja`, or `auto`. Japanese requires the `xai` engine; Settings rejects the unsupported `local` + `ja` combination. |
-| `dictation.cleanup_enabled` | `true` | Independent auto-cleanup switch; turning it off preserves the chosen level. Cleanup uses the explicitly selected and authorized xAI conversation connection; local dictation stays on-device. |
+| `dictation.cleanup_enabled` | `true` | Independent auto-cleanup switch; turning it off preserves the chosen level. Cleanup runs only through the dictation text provider below; local dictation stays on-device. |
+| `dictation.text_provider` | `"none"` | `none` keeps recognized text as-is; `xai` sends dictated text to xAI for cleanup and quick translation. It applies only with the `xai` audio engine and after the dictated-text disclosure is accepted in Voice settings. An upgrade sets `xai` only where the retired xAI Conversation selection already did this. |
+| `dictation.text_model` | `"grok-4.6"` | Exact xAI text model for dictation cleanup and quick translation. Voice settings offer `grok-4.20-0309-non-reasoning` (fast) and `grok-4.6` (standard); an upgrade keeps the model that was in effect. Summary models are unaffected. |
 | `dictation.cleanup_level` | `"medium"` | `light` removes fillers/repeats and fixes grammar; `medium` joins fragments and removes redundant wording; `heavy` adds natural paragraph breaks and uses numbered points only for clear enumerations, preserving the speaker's voice and meaning. Legacy `none` remains an opt-out. |
-| `dictation.cleanup_model` | `"conversation"` | `conversation` preserves the selected xAI conversation model. Explicitly choose `grok-4.20-0309-non-reasoning` for faster dictation editing, independently of cleanup level. Summary, translation and voice-question models are unaffected. |
 | `dictation.style` | `"casual"` | `formal` uses full punctuation and normal capitalization; `casual` reduces punctuation; `very_casual` also lowercases ordinary English sentence starts while preserving proper names and code. Applies when cleanup is enabled. |
-| `dictation.voice_chat_scope` | `"general"` | Default voice-question scope: `general` uses conversation history only; `meetings` enables meeting questions. Changing this setting starts a new voice conversation on the next question. |
 | `dictation.prompt_slug` | `"dictation-cleanup"` | Legacy compatibility only: `none` retains an existing cleanup opt-out. Normal dictation no longer loads a prompt template. |
 | `dictation.translate_prompt_slug` | `"dictation-translate"` | Legacy compatibility only; ignored. Quick translation uses built-in rules and the selected target language. |
 | `dictation.target_language` | `"English"` | Default target for dictation translation and the realtime-caption language selector. |
@@ -215,17 +196,17 @@ and dictation. The default is local and there is no automatic fallback.
 
 Dictation cleanup is a bounded text transform in the Host using the existing
 stateless xAI client. It sends only the current utterance and matching glossary
-entries, with no meeting retrieval, history or tools. It requires current
-xAI conversation disclosure and never switches providers. Cleanup allows 8 seconds
+entries, with no meeting retrieval, history or tools. It requires
+`text_provider: "xai"` and the accepted dictated-text disclosure and never
+switches providers. Cleanup allows 8 seconds
 for up to 500 characters, adding 2 seconds per additional 500 characters up to
 20 seconds within the remaining dictation deadline; setting `prompt_slug` to
 `"none"`, `cleanup_enabled` to `false`, or `cleanup_level` to `"none"` disables it.
 Short phrases are also cleaned. Supported Grok 4.5/4.6 dictation requests use
-low reasoning effort; summary and conversation requests are unaffected.
-Fast cleanup uses the exact pinned non-reasoning model over the existing authorized
-xAI connection. Older configurations continue to follow the conversation model
-until fast cleanup is explicitly selected; failures retain the original text,
-without retrying against a different model.
+low reasoning effort; summary requests are unaffected.
+Cleanup and translation use the exact `text_model` over the existing authorized
+xAI connection; failures retain the original text, without retrying against a
+different model.
 During normal xAI dictation, completed sentence groups of at least 240 characters
 can be edited while the next sentence is spoken. The unfinished tail is previewed
 only after at least 650 ms of microphone silence. Completed paragraphs are reused
@@ -237,13 +218,13 @@ bounded to one per 1.5 seconds, one in flight, and 64 previews per recording.
 Each segment receives at most 2,000 characters of earlier edited text as reference,
 never as instructions. The combined result is inserted once after finalization.
 Previews stay in memory and are discarded on cancellation, a new session, or
-60 seconds after finalization. Translation, voice questions, local transcription,
+60 seconds after finalization. Translation, local transcription,
 and disabled cleanup do not send previews. Local history records whether cleanup
 was reused, its overlap time, stop-to-result time, and insertion time.
 Normal dictation uses cleanup level and style directly, without loading legacy
-dictation templates. Quick translation uses the selected xAI text connection and
-fixed translation rules; it requires its disclosure and has no legacy Agent CLI
-fallback. Translation failure preserves recognized text in history and the recovery
+dictation templates. Quick translation uses the same dictation text provider,
+`text_model`, and fixed translation rules; it requires the same disclosure and
+has no legacy Agent CLI fallback. Translation failure preserves recognized text in history and the recovery
 panel, without automatically pasting untranslated text. All modes are fixed when
 the recording starts; neither a different stop shortcut nor a prior failed session
 can change that recording's mode. Text editing receives only glossary entries
@@ -263,7 +244,7 @@ headings or impose a fixed number of points. Sparse-punctuation styles still
 retain the punctuation needed to keep long passages readable.
 The utterance is passed as quoted JSON data, and obvious Chinese-to-English
 language changes are rejected rather than silently inserted.
-Translation and voice questions skip normal cleanup. Failures retain the text,
+Translation skips normal cleanup. Failures retain the text,
 with the failure reason and timing in local history. The Voice Input page exposes
 the original alongside the final text, with separate copy actions.
 
@@ -290,7 +271,7 @@ explicitly chooses. OAuth tokens and API keys stay
 in separate macOS Keychain items; neither is a configuration field or browser
 read-back value. OAuth remains primary while present, and an OAuth or entitlement
 failure never causes an automatic switch to the saved API key. The page records
-separate real-request readiness for transcription, summary, and conversation.
+separate real-request readiness for transcription and summary.
 Opening or deep-linking it performs status inspection only; it does not
 implicitly run a capability probe or model request.
 Discovery remains non-mutating: it creates Connection Candidates but never
@@ -305,31 +286,24 @@ both the exact provider and model; missing provider evidence is not readiness.
 Upgrades archive and remove the retired `transcription.xai_credential_source`
 field; Hermes/OpenClaw credentials are not imported or deleted.
 
-Hermes and OpenClaw are Conversation-only entries in Agent Connection Center;
-they are never selectable as Summary providers. OpenClaw readiness uses the
-runtime-owned Gateway and the stable, raw `infer model run --gateway` surface so
-the probe has no agent tools, prior session, bootstrap context, or bundled MCP.
-The subsequent Conversation stays pinned to the exact provider, model, and
-native session returned by `openclaw agent`. Hermes 0.20.0 has no documented
-empty tool allowlist or equivalent raw probe, so its production adapter remains
-fail-closed even when native OAuth status is healthy.
+Hermes and OpenClaw are not Agent Connections (ADR-010). Agent Connection
+Center neither offers nor tests them, and they are never Summary providers.
+They reach Yulu as MCP clients (`yulu mcp install`, or the bundled
+`provision.mcp` command for DMG installs; see `docs/operations.md`). Rows saved
+for them by earlier versions stay inert.
 
-## `llm` and Agent Console
+## `llm`
 
-`llm` configures legacy general-Agent behavior. It does not select transcription,
-summaries, or conversation identity: those use `transcription.engine` and the two
-`intelligence` selections. Future Agent Console sessions require an explicit
-ready `intelligence.conversation` connection; an existing session keeps its
-pinned connection, provider, model, and native session identity.
+`llm` is legacy migration input. It does not select transcription, summaries, or
+dictation text: those use `transcription.engine`, `intelligence.summary`, and
+`transcription.dictation.text_provider`.
 
 | Field | Default | Meaning |
 |---|---:|---|
-| `enabled` | `false` | Keep the retired general-Agent path disabled. Current conversations use the explicit `intelligence.conversation` selection. |
-| `command` | `null` | Optional explicit general-Agent argv. No shell interpolation is performed. |
-| `agent.provider` | `"auto"` | Legacy general-Agent hint. Supported current connections are selected explicitly in AI Providers; Hermes and OpenClaw remain optional Conversation-only providers. |
+| `enabled` | `false` | Keep the retired general-Agent path disabled. |
+| `command` | `null` | Legacy general-Agent argv, read only to migrate an earlier explicit selection. |
+| `agent.provider` | `"auto"` | Legacy general-Agent hint, read only during migration. Supported connections are selected explicitly in AI Providers. |
 
-When `provider=auto`, the general runtime detects supported CLIs in its current
-priority order. This does not change any existing audio/task/session snapshot.
 If the pinned Summary Provider is unavailable, a recording transcript remains
 committed while its summary task waits in `awaiting_provider`.
 
@@ -337,17 +311,15 @@ To pause automatic recording processing, set `agent_pipeline.enabled=false`.
 Realtime captions, transcription, and dictation remain controlled by the selected
 audio engine. `llm.enabled` controls only the legacy general-Agent path.
 
-`agent_console.plugins.added` is a presentation filter for capabilities shown in
-Agent Console. `agent_console.destinations` stores human-readable destination
-hints. Credentials, OAuth state, connector tools, and actual connection settings
+Credentials, OAuth state, connector tools, and actual connection settings
 belong to the Agent. The legacy `agent_pipeline.notion_destination` value cannot
 independently trigger sharing. A manual Share Action pins its destination separately.
 
 ## Sharing configuration
 
 Settings → Sharing is the authoritative destination and Test Share surface. It
-selects a Supported Agent Connection independently from `intelligence.summary`
-and `intelligence.conversation`, discovers connector targets with a read-only
+selects a Supported Agent Connection independently from `intelligence.summary`,
+discovers connector targets with a read-only
 operation, and reports Connector Readiness only after a separate bounded probe.
 A suggested target remains unconfigured until the user explicitly saves it and
 the Host reads back the exact destination. Notion discovery stores the exact
@@ -361,12 +333,14 @@ untrusted URLs are rejected before sending. Saving alone never creates a page.
 A shared Notion page can include only the fixed required title `Yulu Share`, never an inferred
 meeting title or additional properties. The approved content remains unchanged.
 
-Sharing and Agent Calendar connector calls use the selected Connection's explicit
-Conversation model. They pass that exact model to the CLI instead of inheriting
-the CLI's mutable global default. An unselected model stops before execution;
-there is no implicit model fallback.
+Sharing connector calls use the connector model saved when the selected
+Connection was created (stored as its `conversationModel` setting, which is part
+of the revision Test Share receipts are bound to). They pass that exact model to
+the CLI instead of inheriting the CLI's mutable global default. A connection
+without a model stops before execution; remove and re-add it to choose another
+model. There is no implicit model fallback.
 Codex connector operations use low reasoning for bounded configuration and
-receipt work, without changing the user's global CLI or Conversation settings.
+receipt work, without changing the user's global CLI settings.
 Notion Apps bridge names are recognized only within the exact Notion namespace;
 discovery is limited to one recent-page list (limit 10) or a basic Yulu search,
 not shared/private/favorite-page enumeration. Tool lifecycle updates sharing the
@@ -454,8 +428,8 @@ are `fn`, `cmd`, `shift`, `alt`, and `ctrl`. The four sided modifiers also accep
 - `Fn`: dictation;
 - `Fn+Shift` (either Shift): translation.
 
-The earlier `Fn+Space` voice-question shortcut is retired. A `voice_chat` entry
-left in an existing config is ignored.
+The earlier `Fn+Space` voice-question shortcut is retired. An upgrade archives a
+`voice_chat` entry left in an existing config and removes it.
 
 Standalone modifier keys include `Fn`, `Command`, `Shift`, `Option`, and `Control`.
 Use names such as `LeftCommand` or `RightOption` for an exact side. Existing
@@ -500,8 +474,8 @@ dictation history even if the destination application or clipboard fails.
 
 ## Calendars and meeting detection
 
-Calendar/window detection exists only to decide when to offer native capture. It
-is not the connector surface used by Agent Console.
+Calendar/window detection exists only to decide when to offer native capture.
+Yulu does not reach calendars through an Agent connector.
 
 The recommended calendar source is `type: "macos"`, which reuses calendars
 already visible in macOS Calendar. `watch_calendars` may be empty for all visible

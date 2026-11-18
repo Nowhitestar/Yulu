@@ -14,10 +14,10 @@ you are using. No Yulu account or virtual audio device required.
 
 - **Useful files you can keep.** Audio, plain-text transcripts, and Markdown
   summaries live on your Mac, ready to back up, move, and use in other tools.
-- **Build on your existing AI workflow.** Choose transcription, summary, and
-  conversation providers independently, including xAI, Codex, or Claude Code
-  for summaries. Through [MCP](docs/operations.md#dmg-and-cli-entry-points),
-  your Agent can also control recording and search meeting history.
+- **Build on your existing AI workflow.** Choose transcription and summary
+  providers independently, including xAI, Codex, or Claude Code for summaries.
+  Through [MCP](docs/operations.md#dmg-and-cli-entry-points), your own Agent can
+  control recording, search meeting history, and answer questions about it.
 - **Capture directly on your Mac.** System audio and microphone capture need
   no meeting bot or virtual audio device. Movable captions, bilingual
   translation, calendar reminders, and meeting detection support the workflow.
@@ -67,8 +67,9 @@ the DMG does not install a global `yulu` shell command.
 
 - Recordings, transcripts, summaries, and history are stored locally. Recordings
   default to `~/Movies/Yulu`; local speech recognition stays on-device.
-- Cloud features are opt-in: xAI transcription sends audio to xAI; AI summaries,
-  translation, cleanup, and conversations can send text to the selected provider.
+- Cloud features are opt-in: xAI transcription sends audio to xAI; AI summaries
+  send transcripts, and dictation cleanup and translation send dictated text, to
+  the selected provider.
   Providers are selected explicitly, with no silent fallback.
 - Sharing a summary requires a separate manual confirmation. Yulu stores its xAI
   credentials in macOS Keychain; Agent connector credentials stay with the Agent.

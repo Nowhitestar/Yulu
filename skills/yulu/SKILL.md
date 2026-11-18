@@ -17,7 +17,8 @@ Yulu 是 macOS 原生会议记录器和可信本地控制面：
 - Yulu 明确选择的本地/xAI 音频引擎负责实时字幕、最终转写和听写，绝不自动回退；
 - Yulu 使用兼容 Grok CLI 的 OAuth 并把自己的 xAI grant 保存在 macOS 钥匙串；
 - 用户明确选择的 xAI、Codex 或 Claude Code 负责会议纪要，任务固定创建时的服务与模型且绝不自动切换；
-- Agent Console 选中的通用 Agent 负责交互式对话和它自己的连接器。
+- Yulu 不提供对话（ADR-010）：用户在自己的 Agent（包括 Hermes、OpenClaw）里通过 Yulu MCP 询问会议内容，对话历史和连接器都归该 Agent；
+- 听写的 xAI 文字整理与翻译只有在用户于语音设置中显式开启并接受披露后，才会把听写文字发送给 xAI。
 
 Yulu 只管理自己的本地音频模型和 direct xAI 边界，不读取 Codex、Claude Code、Hermes 或 OpenClaw 的 OAuth，也不运行它们的 connector runtime。不要寻找或恢复旧的 STT daemon、JSON Agent 队列或 Yulu-owned Notion 路径。
 
@@ -134,7 +135,7 @@ yulu record stop
 
 录音处理只负责转写并持久化转录与纪要，到此结束。`sendToNotion`、旧配置、完成事件和兼容 MCP 端点都不能开始新投递。分享必须从对应录音详情页发起一个全新的手动 Share Action，并经过独立确认。历史上已经开始且结果不明的投递只能显式确认或放弃，禁止普通重试。
 
-不要把普通 Agent Console 对话中的 Notion 请求和录音分享混为一条路径，也不要让 Yulu 保存 Notion 凭据。
+不要把你自己对话中的 Notion 请求和录音分享混为一条路径，也不要让 Yulu 保存 Notion 凭据。
 
 ## 摘要 Agent 租约任务规则
 

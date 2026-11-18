@@ -1,5 +1,8 @@
 # Keep optional onboarding non-blocking
 
+> Conversation as an Optional Capability is superseded by [yulu ADR-010](../../yulu/spec/adr/010-retire-yulu-conversation.md),
+> which retired Yulu-owned conversation.
+
 Yulu requires Core Activation before Onboarding Completion, while Conversation,
 calendar, and sharing each end with an adopted or explicitly deferred Optional
 Capability Outcome. Later optional additions and current readiness loss surface
