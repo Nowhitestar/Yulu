@@ -3,9 +3,10 @@ import { useEffect, useRef } from "react";
 export type HotkeyMap = Record<string, (e: KeyboardEvent) => void>;
 
 /**
- * Bind global keydown shortcuts. Handler is skipped when focus is inside
+ * Bind global single-key shortcuts. A handler is skipped when focus is inside
  * an editable element (input, textarea, contenteditable) so typing in a
- * search box doesn't trigger nav keys.
+ * search box doesn't trigger nav keys, and when a modifier is held, so ⌘K
+ * is never also read as "k".
  */
 export function useHotkeys(map: HotkeyMap): void {
   // Stable ref so re-renders don't reattach listeners
@@ -16,6 +17,7 @@ export function useHotkeys(map: HotkeyMap): void {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (isEditable(target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const handler = mapRef.current[e.key];
       if (handler) handler(e);
     };

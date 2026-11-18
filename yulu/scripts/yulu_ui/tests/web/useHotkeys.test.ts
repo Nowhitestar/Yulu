@@ -36,6 +36,17 @@ describe("useHotkeys", () => {
     document.body.removeChild(div);
   });
 
+  it("leaves a key alone while a modifier is held, so ⌘K is not also 'k'", () => {
+    const onK = vi.fn();
+    renderHook(() => useHotkeys({ k: onK }));
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "k", altKey: true });
+    expect(onK).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "k" });
+    expect(onK).toHaveBeenCalledTimes(1);
+  });
+
   it("supports multiple keys", () => {
     const onJ = vi.fn();
     const onK = vi.fn();

@@ -200,7 +200,7 @@ yulu record start "Yulu Smoke Test"
 yulu record stop
 ```
 
-Then open `http://127.0.0.1:7777/agent-console` or inspect recent Host task state:
+Then open `http://127.0.0.1:7777/inbox` or inspect recent Host task state:
 
 ```bash
 python3 - <<'PY'

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useLayoutEffect } from "react";
 import { Pencil, RotateCcw } from "lucide-react";
 import { DEFAULT_HOTKEYS, HOTKEY_KEYS, MODIFIER_KEYS, HotkeysSchema, formatHotkey, type HotkeyValue } from "../../../../src/hotkeys.js";
 import { trpc } from "../../trpc.js";
@@ -62,7 +62,9 @@ export function HotkeySettings({ hotkeys, disabled, onCommit }: {
     finally { busy.current = false; setSaving(false); }
   };
 
-  useEffect(() => {
+  // Listen from the same commit that shows capture as on, so a key pressed the
+  // instant the button reads "pressed" is never missed.
+  useLayoutEffect(() => {
     if (!editing) return;
     const held = new Map<string, string>();
     let modifierOnly: HotkeyValue | null = null;

@@ -452,13 +452,15 @@ are `fn`, `cmd`, `shift`, `alt`, and `ctrl`. The four sided modifiers also accep
 `left_` and `right_` prefixes. The default shortcuts are:
 
 - `Fn`: dictation;
-- `Fn+Shift` (either Shift): translation;
-- `Fn+Space`: voice question into Agent Console.
+- `Fn+Shift` (either Shift): translation.
+
+The earlier `Fn+Space` voice-question shortcut is retired. A `voice_chat` entry
+left in an existing config is ignored.
 
 Standalone modifier keys include `Fn`, `Command`, `Shift`, `Option`, and `Control`.
 Use names such as `LeftCommand` or `RightOption` for an exact side. Existing
 custom shortcuts are preserved. Voice Input settings can record a shortcut or
-select its keys, and restore all three defaults without changing the translation
+select its keys, and restore both defaults without changing the translation
 language. Overlapping shortcuts are rejected.
 
 Use `yulu status-agent hotkeys` to inspect the effective values.

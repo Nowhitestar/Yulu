@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
 
+// A test may end while a passthrough route is still fetching; that is not a failure.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => { localStorage.setItem("yulu_ui.lang", "zh"); document.addEventListener("DOMContentLoaded", () => { document.documentElement.dataset.yuluNative = "true"; }); });
   await page.route("**/trpc/config.get*", async (route) => {

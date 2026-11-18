@@ -270,8 +270,6 @@ export const en: Messages = {
   "search.result.settingMeta": "Settings",
   "search.ask.status.title": "Agent workspace",
 
-  // ---- Breadcrumbs (route handles) ----
-
   // ---- Onboarding Home ----
   "onboarding.loading": "Loading Onboarding Home…",
   "onboarding.unavailable": "Onboarding Home is unavailable. Continue using Yulu and try again later.",
@@ -846,7 +844,7 @@ export const en: Messages = {
   "settings.providers.disclosure.saveFailedTitle": "Data path acknowledgement was not saved",
   "settings.providers.disclosure.saveFailed": "The data path acknowledgement was not saved, so the capability was not tested. Try again.",
   "settings.providers.connection.title": "xAI connection",
-  "settings.providers.connection.sub": "Manage xAI login and transcription checks in Accounts & connections.",
+  "settings.providers.connection.sub": "Manage xAI sign-in and transcription checks in Connections.",
   "settings.providers.connection.disconnected": "Not connected",
   "settings.providers.readiness.title": "Capability readiness",
   "settings.providers.readiness.untested": "Not tested",
@@ -1029,8 +1027,6 @@ export const en: Messages = {
   "agentConnections.restore.action": "Restore direct xAI connection",
   "agentConnections.none": "None",
 
-  // ---- Agent Console: pinned xAI conversation ----
-
   // ---- Settings: auto-run templates ----
   "settings.llm.autorun.title": "Auto-run templates",
 
@@ -1058,8 +1054,6 @@ export const en: Messages = {
   "settings.calendarSource.connector.title": "Agent Calendar Connector is separate",
   "settings.agentCalendarConnector.failure.authorization": "Authorization failure",
 
-  // ---- Settings: Output section ----
-
   // ---- Settings: Automation section ----
   "settings.automation.heading": "When a meeting is detected",
   "settings.automation.sub": "Get a recording prompt even when the meeting is not on your calendar.",
@@ -1086,8 +1080,6 @@ export const en: Messages = {
   "settings.automation.match.dedicatedApps.help": "Apps that are always a meeting when frontmost (e.g. Zoom).",
   "settings.automation.match.ignoreKeywords.label": "Ignore window keywords",
   "settings.automation.match.ignoreKeywords.help": "Windows whose title contains any of these are never a meeting.",
-
-  // ---- Settings: Advanced section ----
 
   // ---- AdvancedDisclosure defaults ----
   "disclosure.title": "Advanced",
@@ -1163,10 +1155,6 @@ export const en: Messages = {
   "reprocess.running": "Running…",
   "reprocess.done": "Done",
 
-  // ---- DbStatsRow ----
-
-  // ---- EditableTable ----
-
   // ---- TagEditor ----
   "tag.add": "Add tag",
   "tag.addAria": "Add tag",
@@ -1206,7 +1194,6 @@ export const en: Messages = {
   "meeting.current.pending": "Starting",
   "meeting.current.aria": "Record current meeting: {title}",
   "meeting.current.select.aria": "Current meeting recording action",
-
 };
 
 export const zh: Messages = {
@@ -1463,8 +1450,6 @@ export const zh: Messages = {
   "search.empty": "无匹配结果",
   "search.result.settingMeta": "设置",
   "search.ask.status.title": "Agent 工作台",
-
-  // ---- Breadcrumbs (route handles) ----
 
   // ---- Onboarding Home ----
   "onboarding.loading": "正在读取新手引导…",
@@ -2038,7 +2023,7 @@ export const zh: Messages = {
   "settings.providers.disclosure.saveFailedTitle": "数据路径确认未保存",
   "settings.providers.disclosure.saveFailed": "数据路径确认没有保存，因此尚未进行能力测试。请重试。",
   "settings.providers.connection.title": "xAI 连接",
-  "settings.providers.connection.sub": "在「账号与连接」中管理 xAI 登录与转写检查。",
+  "settings.providers.connection.sub": "在「连接」中管理 xAI 登录与转写检查。",
   "settings.providers.connection.disconnected": "未连接",
   "settings.providers.readiness.title": "能力就绪状态",
   "settings.providers.readiness.untested": "未测试",
@@ -2221,8 +2206,6 @@ export const zh: Messages = {
   "agentConnections.restore.action": "恢复 direct xAI 连接",
   "agentConnections.none": "无",
 
-  // ---- Agent Console: pinned xAI conversation ----
-
   // ---- Settings: auto-run templates ----
   "settings.llm.autorun.title": "自动运行模板",
 
@@ -2250,8 +2233,6 @@ export const zh: Messages = {
   "settings.calendarSource.connector.title": "Agent 日历连接器是独立能力",
   "settings.agentCalendarConnector.failure.authorization": "授权失败",
 
-  // ---- Settings: Output section ----
-
   // ---- Settings: Automation section ----
   "settings.automation.heading": "发现正在进行的会议",
   "settings.automation.sub": "即使会议不在日历中，也能提示你开始录音。",
@@ -2278,8 +2259,6 @@ export const zh: Messages = {
   "settings.automation.match.dedicatedApps.help": "位于前台时始终视为会议的应用（如 Zoom）。",
   "settings.automation.match.ignoreKeywords.label": "忽略的窗口关键词",
   "settings.automation.match.ignoreKeywords.help": "标题包含其中任一关键词的窗口永不视为会议。",
-
-  // ---- Settings: Advanced section ----
 
   // ---- AdvancedDisclosure defaults ----
   "disclosure.title": "高级",
@@ -2355,10 +2334,6 @@ export const zh: Messages = {
   "reprocess.running": "运行中…",
   "reprocess.done": "完成",
 
-  // ---- DbStatsRow ----
-
-  // ---- EditableTable ----
-
   // ---- TagEditor ----
   "tag.add": "添加标签",
   "tag.addAria": "添加标签",
@@ -2398,7 +2373,6 @@ export const zh: Messages = {
   "meeting.current.pending": "启动中",
   "meeting.current.aria": "录制当前会议：{title}",
   "meeting.current.select.aria": "当前会议录制动作",
-
 };
 
 export const MESSAGES: Record<Lang, Messages> = { zh, en };
