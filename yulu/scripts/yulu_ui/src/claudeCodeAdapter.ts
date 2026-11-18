@@ -71,7 +71,7 @@ export interface ClaudeCodeProbeResult {
   evidence?: ClaudeCodeRuntimeEvidence;
 }
 
-export class ClaudeCodeConversationError extends Error {
+export class ClaudeCodeRunError extends Error {
   readonly nativeSessionId?: string;
   readonly evidence: ClaudeCodeRuntimeEvidence;
   readonly unknownOutcome: boolean;
@@ -85,7 +85,7 @@ export class ClaudeCodeConversationError extends Error {
     },
   ) {
     super(message);
-    this.name = "ClaudeCodeConversationError";
+    this.name = "ClaudeCodeRunError";
     this.nativeSessionId = options.nativeSessionId;
     this.evidence = options.evidence;
     this.unknownOutcome = options.unknownOutcome;
@@ -172,13 +172,11 @@ function identityMatches(
   result: ClaudeCodeRuntimeConversationResult,
   model: string,
   runtimeVersion: string,
-  nativeSessionId?: string,
 ): boolean {
   return result.runtimeVersion === runtimeVersion &&
     result.actualModel === model &&
     result.fallbackOccurred === false &&
-    Boolean(result.nativeSessionId) &&
-    (!nativeSessionId || result.nativeSessionId === nativeSessionId);
+    Boolean(result.nativeSessionId);
 }
 
 export class ClaudeCodeAdapter {
@@ -229,20 +227,10 @@ export class ClaudeCodeAdapter {
     };
   }
 
-  async probe(input: { model: string }): Promise<ClaudeCodeProbeResult> {
-    return this.runProbe(input, "Conversation", false);
-  }
-
+  /** The tool-free Capability Probe for Summary, the only Agent Capability. */
   async probeSummary(input: { model: string }): Promise<ClaudeCodeProbeResult> {
-    return this.runProbe(input, "Summary", true);
-  }
-
-  private async runProbe(
-    input: { model: string },
-    capability: "Conversation" | "Summary",
-    toolFree: boolean,
-  ): Promise<ClaudeCodeProbeResult> {
-    const status = await this.status({ toolFree });
+    const capability = "Summary";
+    const status = await this.status({ toolFree: true });
     if (!status.supported) {
       return {
         status: "failed",
@@ -268,7 +256,7 @@ export class ClaudeCodeAdapter {
         model: input.model,
         prompt: PROBE_PROMPT,
         probe: true,
-        ...(toolFree ? { toolFree: true } : {}),
+        toolFree: true,
         timeoutMs: 30_000,
       });
     } catch {
@@ -281,7 +269,7 @@ export class ClaudeCodeAdapter {
           transport: CLAUDE_CODE_TRANSPORT,
           runtimeVersion: status.runtimeVersion,
           authorizationClass: status.authorizationClass,
-          requestedProvider: toolFree ? status.apiProvider : null,
+          requestedProvider: status.apiProvider,
           requestedModel: input.model,
           actualProvider: null,
           actualModel: null,
@@ -296,7 +284,7 @@ export class ClaudeCodeAdapter {
     }
     const evidence = runtimeEvidence(
       status.authorizationClass,
-      toolFree ? status.apiProvider : null,
+      status.apiProvider,
       input.model,
       result,
       result.terminalStatus === "unknown" ? "unknown" : "failed",
@@ -305,8 +293,8 @@ export class ClaudeCodeAdapter {
       result.terminalStatus !== "completed" ||
       result.answer.trim() !== "YULU_CLAUDE_PROBE_OK" ||
       result.toolCalls.length > 0 ||
-      (toolFree && (result.isolationProven !== true || !result.requestId)) ||
-      (toolFree && (!status.apiProvider || result.actualProvider !== status.apiProvider)) ||
+      result.isolationProven !== true || !result.requestId ||
+      !status.apiProvider || result.actualProvider !== status.apiProvider ||
       !identityMatches(result, input.model, status.runtimeVersion)
     ) {
       return {
@@ -364,7 +352,7 @@ export class ClaudeCodeAdapter {
       result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",
     );
     if (result.terminalStatus !== "completed") {
-      throw new ClaudeCodeConversationError(
+      throw new ClaudeCodeRunError(
         result.terminalStatus === "unknown"
           ? "Claude Code Summary entered Unknown Outcome; inspect the native session and do not retry automatically"
           : "Claude Code Summary failed before a terminal successful result",
@@ -397,75 +385,6 @@ export class ClaudeCodeAdapter {
     return {
       summary,
       nativeSessionId: result.nativeSessionId,
-      evidence,
-    };
-  }
-
-  async converse(input: {
-    model: string;
-    prompt: string;
-    nativeSessionId?: string;
-  }) {
-    const status = await this.status();
-    if (!status.supported) throw new Error(status.remediation ?? "Claude Code runtime is unsupported");
-    if (!status.authorized) {
-      throw new Error(authorizationRemediation(
-        this.executable,
-        status.authorizationClass,
-        "retry this same Conversation input",
-      ));
-    }
-    const result = await this.client.runConversation({
-      model: input.model,
-      prompt: input.prompt,
-      probe: false,
-      timeoutMs: 300_000,
-      ...(input.nativeSessionId ? { nativeSessionId: input.nativeSessionId } : {}),
-    });
-    const evidence = runtimeEvidence(
-      status.authorizationClass,
-      null,
-      input.model,
-      result,
-      result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",
-    );
-    if (result.terminalStatus !== "completed") {
-      throw new ClaudeCodeConversationError(
-        result.terminalStatus === "unknown"
-          ? "Claude Code Conversation outcome is unknown; inspect the pinned native session and do not retry automatically"
-          : "Claude Code Conversation failed; restore native authorization and retry this same input explicitly",
-        {
-          ...(result.nativeSessionId ? { nativeSessionId: result.nativeSessionId } : {}),
-          evidence,
-          unknownOutcome: result.terminalStatus === "unknown",
-        },
-      );
-    }
-    if (!identityMatches(result, input.model, status.runtimeVersion, input.nativeSessionId)) {
-      throw new ClaudeCodeConversationError(
-        "Claude Code returned a different provider, model, or native session; fallback was rejected",
-        {
-          ...(result.nativeSessionId ? { nativeSessionId: result.nativeSessionId } : {}),
-          evidence,
-          unknownOutcome: false,
-        },
-      );
-    }
-    const answer = result.answer.trim();
-    if (!answer) {
-      throw new ClaudeCodeConversationError(
-        "Claude Code returned no Conversation answer; retry this same input explicitly",
-        {
-          ...(result.nativeSessionId ? { nativeSessionId: result.nativeSessionId } : {}),
-          evidence,
-          unknownOutcome: false,
-        },
-      );
-    }
-    return {
-      answer,
-      nativeSessionId: result.nativeSessionId,
-      usedFallback: false as const,
       evidence,
     };
   }

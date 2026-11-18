@@ -169,27 +169,6 @@ export interface OptionalCapabilityOutcome {
   decidedAt: string;
 }
 
-export interface ConversationCapabilityEvidenceSnapshot {
-  capability: "conversation";
-  connectionId: string;
-  adapter: string;
-  provider: string;
-  model: string;
-  credentialSource: "oauth" | "api-key" | "runtime-oauth";
-  testedAt: string;
-  runtimeEvidence: PersistedAgentConnectionReadiness["runtimeEvidence"];
-}
-
-export interface AgentCalendarConnectorEvidenceSnapshot {
-  capability: "agent-calendar-connector";
-  connectionId: string;
-  adapter: "codex" | "claude-code";
-  connector: string;
-  connectionRevision: string;
-  operation: string;
-  testedAt: string;
-}
-
 export interface SharingCapabilityEvidenceSnapshot {
   capability: "sharing";
   connectionId: string;
@@ -206,9 +185,7 @@ export interface SharingCapabilityEvidenceSnapshot {
 }
 
 export type OptionalCapabilityEvidenceSnapshot =
-  | ConversationCapabilityEvidenceSnapshot
   | CalendarSourceEvidenceSnapshot
-  | AgentCalendarConnectorEvidenceSnapshot
   | SharingCapabilityEvidenceSnapshot;
 
 export interface OnboardingCompletion {
@@ -262,6 +239,13 @@ export interface SummaryDataPathDisclosure {
   decidedAt: string;
 }
 
+export interface DictationTextDisclosure {
+  provider: string;
+  disclosureVersion: string;
+  decision: "accepted";
+  decidedAt: string;
+}
+
 export interface PersistedAgentConnection {
   id: string;
   kind: "direct-provider" | "supported-agent" | "legacy-custom";
@@ -287,7 +271,7 @@ export interface PersistedAgentConnectionCandidate {
 export interface PersistedAgentConnectionReadiness {
   id: string;
   connectionId: string;
-  capability: "transcription" | "summary" | "conversation";
+  capability: "transcription" | "summary";
   status: "ready" | "failed";
   model: string;
   credentialSource: XaiCredentialSource | null;
@@ -326,31 +310,15 @@ interface AgentConnectionReadinessRow {
   tested_at: string;
 }
 
-export interface AgentConnectionUnknownOutcomeFence {
-  connectionId: string;
-  adapter: string;
-  capability: "conversation";
-  model: string;
-  state: "unknown" | "probing" | "attempting";
-  attemptId: string | null;
-  updatedAt: string;
-}
-
 export interface AgentConnectionDataPathDisclosure {
   connectionId: string;
-  capability: "transcription" | "summary" | "conversation";
+  capability: "transcription" | "summary";
   disclosureVersion: string;
   decision: "accepted" | "declined";
   decidedAt: string;
 }
 
 export type SharingConnector = "notion" | "zulip";
-
-export interface PersistedAgentCalendarConnectorSelection {
-  connectionId: string;
-  connector: string;
-  selectedAt: string;
-}
 
 export interface PersistedSharingConfiguration {
   connectionId: string;
@@ -413,6 +381,22 @@ function summaryDisclosureIdentity(provider: string, disclosureVersion: string) 
   }
   return { provider: normalized, disclosureVersion: version };
 }
+
+function dictationDisclosureIdentity(provider: string, disclosureVersion: string) {
+  const normalized = provider.trim().toLowerCase();
+  const version = disclosureVersion.trim();
+  if (!/^[a-z0-9][a-z0-9._-]{0,99}$/.test(normalized) || !version || version.length > 100) {
+    throw new Error("Dictation Text Disclosure identity is invalid");
+  }
+  return { provider: normalized, disclosureVersion: version };
+}
+
+/** Optional capabilities retired with Yulu-owned conversation (ADR-010). Their
+ * stored outcomes are kept but no longer read or written. */
+const RETIRED_OPTIONAL_CAPABILITIES: ReadonlySet<string> = new Set([
+  "conversation",
+  "agent-calendar-connector",
+]);
 
 function boundedIdentity(value: string, label: string): string {
   const normalized = value.trim();
@@ -627,18 +611,16 @@ function hasExactReadinessRowSemantics(
   evidence: PersistedAgentConnectionReadiness["runtimeEvidence"],
 ): boolean {
   const adapter = evidence.adapter;
-  const supportedAgent = adapter === "codex" || adapter === "claude-code" ||
-    adapter === "hermes" || adapter === "openclaw";
+  const supportedAgent = adapter === "codex" || adapter === "claude-code";
   const expectedTransport = adapter === "direct-xai"
     ? row.capability === "transcription" ? "xai-realtime-websocket" : "xai-http"
     : adapter === "codex"
       ? "codex-app-server-stdio"
-      : adapter === "claude-code"
-        ? "claude-code-print-stream-json"
-        : adapter === "hermes" ? "hermes-cli-chat" : "openclaw-cli-gateway-json";
-  const supportedCapability = adapter === "direct-xai" ||
-    ((adapter === "codex" || adapter === "claude-code") && row.capability !== "transcription") ||
-    ((adapter === "hermes" || adapter === "openclaw") && row.capability === "conversation");
+      : "claude-code-print-stream-json";
+  // Rows of the retired Conversation capability stay in the table but are never
+  // read back as readiness (ADR-010).
+  const supportedCapability = (row.capability === "transcription" || row.capability === "summary") &&
+    (adapter === "direct-xai" || (supportedAgent && row.capability === "summary"));
   const exactRuntimeIdentity = adapter === "direct-xai"
     ? evidence.runtimeVersion === null
     : supportedAgent && Boolean(
@@ -648,12 +630,7 @@ function hasExactReadinessRowSemantics(
     ? evidence.requestedProvider === "xai"
     : adapter === "codex"
       ? evidence.requestedProvider === "openai" && evidence.authorizationClass === "chatgpt"
-      : adapter === "claude-code"
-        ? (row.capability === "conversation"
-            ? evidence.requestedProvider === null
-            : Boolean(evidence.requestedProvider)) &&
-          evidence.authorizationClass === "claude-subscription"
-        : Boolean(evidence.requestedProvider);
+      : Boolean(evidence.requestedProvider) && evidence.authorizationClass === "claude-subscription";
   const exactCredential = adapter === "direct-xai"
     ? row.credential_source === "oauth" || row.credential_source === "api-key"
     : row.credential_source === null;
@@ -666,7 +643,7 @@ function hasExactReadinessRowSemantics(
   const exactReadyResult = row.status !== "ready" || (
     evidence.terminalStatus === "ready" && exactReadyModel && exactReadyProvider &&
     evidence.fallbackOccurred === false &&
-    (adapter === "direct-xai" || adapter === "openclaw" || Boolean(evidence.sessionId))
+    (adapter === "direct-xai" || Boolean(evidence.sessionId))
   );
   return isExactBoundedIdentity(row.id) && isExactBoundedIdentity(row.connection_id) &&
     row.model === row.model.trim() && Boolean(row.model) && row.model.length <= 128 &&
@@ -718,86 +695,6 @@ function readAgentConnectionReadinessRow(
   }
 }
 
-export function exactConversationEvidenceSnapshot(
-  input: ConversationCapabilityEvidenceSnapshot,
-): ConversationCapabilityEvidenceSnapshot | null {
-  const raw = input as unknown as Record<string, unknown>;
-  const connectionId = boundedEvidenceString(raw.connectionId, 200);
-  const adapter = boundedEvidenceString(raw.adapter, 100);
-  const provider = boundedEvidenceString(raw.provider, 128);
-  const model = boundedEvidenceString(raw.model, 128);
-  const testedAt = boundedEvidenceString(raw.testedAt, 100);
-  const credentialSource = raw.credentialSource === "oauth" || raw.credentialSource === "api-key" ||
-    raw.credentialSource === "runtime-oauth" ? raw.credentialSource : null;
-  if (raw.capability !== "conversation" || !connectionId || !adapter || !provider || !model ||
-    !testedAt || !credentialSource || Number.isNaN(Date.parse(testedAt)) ||
-    new Date(testedAt).toISOString() !== testedAt) return null;
-  if (!raw.runtimeEvidence || typeof raw.runtimeEvidence !== "object" || Array.isArray(raw.runtimeEvidence)) {
-    return null;
-  }
-  const runtimeEvidence = secretSafeReadinessEvidence(
-    raw.runtimeEvidence as PersistedAgentConnectionReadiness["runtimeEvidence"],
-  );
-  const directXai = adapter === "direct-xai";
-  const supportedAgent = adapter === "codex" || adapter === "claude-code" ||
-    adapter === "hermes" || adapter === "openclaw";
-  const expectedTransport = adapter === "direct-xai"
-    ? "xai-http"
-    : adapter === "codex"
-      ? "codex-app-server-stdio"
-      : adapter === "claude-code"
-        ? "claude-code-print-stream-json"
-        : adapter === "hermes" ? "hermes-cli-chat" : "openclaw-cli-gateway-json";
-  const exactRuntimeIdentity = runtimeEvidence.transport === expectedTransport &&
-    (directXai
-      ? runtimeEvidence.runtimeVersion === null
-      : Boolean(runtimeEvidence.runtimeVersion && /^\d+\.\d+\.\d+(?:[-+ ].*)?$/.test(
-          runtimeEvidence.runtimeVersion,
-        )));
-  const exactProvider = directXai
-    ? provider === "xai" && runtimeEvidence.requestedProvider === "xai" &&
-      runtimeEvidence.actualProvider === "xai"
-    : adapter === "codex"
-      ? provider === "codex" && runtimeEvidence.requestedProvider === "openai" &&
-        runtimeEvidence.actualProvider === "openai" && runtimeEvidence.authorizationClass === "chatgpt"
-      : adapter === "claude-code"
-        ? provider === "claude-code" && runtimeEvidence.requestedProvider === null &&
-          runtimeEvidence.actualProvider === null && runtimeEvidence.authorizationClass === "claude-subscription"
-        : provider === adapter && Boolean(runtimeEvidence.requestedProvider) &&
-          runtimeEvidence.actualProvider === runtimeEvidence.requestedProvider;
-  const exactCredential = directXai
-    ? credentialSource === "oauth" || credentialSource === "api-key"
-    : credentialSource === "runtime-oauth";
-  if (
-    (!directXai && !supportedAgent) || runtimeEvidence.adapter !== adapter ||
-    runtimeEvidence.requestedModel !== model || runtimeEvidence.actualModel !== model ||
-    runtimeEvidence.terminalStatus !== "ready" || runtimeEvidence.fallbackOccurred !== false ||
-    !exactProvider || !exactCredential || !exactRuntimeIdentity ||
-    (!directXai && adapter !== "openclaw" && !runtimeEvidence.sessionId)
-  ) return null;
-  return {
-    capability: "conversation",
-    connectionId,
-    adapter,
-    provider,
-    model,
-    credentialSource,
-    testedAt,
-    runtimeEvidence,
-  };
-}
-
-function readConversationEvidenceSnapshot(value: string | null): ConversationCapabilityEvidenceSnapshot | null {
-  if (!value) return null;
-  try {
-    return exactConversationEvidenceSnapshot(
-      JSON.parse(value) as ConversationCapabilityEvidenceSnapshot,
-    );
-  } catch {
-    return null;
-  }
-}
-
 function secretSafeCalendarSourceEvidenceSnapshot(
   input: CalendarSourceEvidenceSnapshot,
 ): CalendarSourceEvidenceSnapshot | null {
@@ -836,37 +733,6 @@ function secretSafeCalendarSourceEvidenceSnapshot(
     enumerationSucceeded: true,
     eventCount,
     window: { start, end },
-    testedAt,
-  };
-}
-
-function secretSafeAgentCalendarConnectorEvidenceSnapshot(
-  input: AgentCalendarConnectorEvidenceSnapshot,
-): AgentCalendarConnectorEvidenceSnapshot | null {
-  const raw = input as unknown as Record<string, unknown>;
-  const connectionId = boundedEvidenceString(raw.connectionId, 200)?.trim() || null;
-  const adapter = raw.adapter === "codex" || raw.adapter === "claude-code" ? raw.adapter : null;
-  const connector = boundedEvidenceString(raw.connector, 100)?.trim() || null;
-  const connectionRevision = boundedEvidenceString(raw.connectionRevision, 64);
-  const operation = boundedEvidenceString(raw.operation, 100)?.trim() || null;
-  const testedAt = boundedEvidenceString(raw.testedAt, 100);
-  if (
-    raw.capability !== "agent-calendar-connector" || !connectionId || !adapter || !connector ||
-    !/^[a-z0-9][a-z0-9._-]{0,99}$/.test(connector) ||
-    !connectionRevision || !/^[a-f0-9]{64}$/.test(connectionRevision) ||
-    !operation || ![
-      "list_calendars", "get_calendars", "list_events", "get_events",
-      "search_events", "calendar_list", "events_list",
-    ].includes(operation) || !testedAt || Number.isNaN(Date.parse(testedAt)) ||
-    new Date(Date.parse(testedAt)).toISOString() !== testedAt
-  ) return null;
-  return {
-    capability: "agent-calendar-connector",
-    connectionId,
-    adapter,
-    connector,
-    connectionRevision,
-    operation,
     testedAt,
   };
 }
@@ -920,15 +786,11 @@ function secretSafeSharingEvidenceSnapshot(
 function secretSafeOptionalCapabilityEvidenceSnapshot(
   input: OptionalCapabilityEvidenceSnapshot,
 ): OptionalCapabilityEvidenceSnapshot | null {
-  return input.capability === "conversation"
-    ? exactConversationEvidenceSnapshot(input)
-    : input.capability === "calendar-source"
-      ? secretSafeCalendarSourceEvidenceSnapshot(input)
-      : input.capability === "agent-calendar-connector"
-        ? secretSafeAgentCalendarConnectorEvidenceSnapshot(input)
-        : input.capability === "sharing"
-          ? secretSafeSharingEvidenceSnapshot(input)
-          : null;
+  return input.capability === "calendar-source"
+    ? secretSafeCalendarSourceEvidenceSnapshot(input)
+    : input.capability === "sharing"
+      ? secretSafeSharingEvidenceSnapshot(input)
+      : null;
 }
 
 function readOptionalCapabilityEvidenceSnapshot(
@@ -944,15 +806,6 @@ function readOptionalCapabilityEvidenceSnapshot(
   }
 }
 
-function isExactConversationProbeEvidence(
-  kind: string | null,
-  reference: string | null,
-  snapshot: OptionalCapabilityEvidenceSnapshot | null,
-): snapshot is ConversationCapabilityEvidenceSnapshot {
-  return snapshot?.capability === "conversation" && kind === "agent-capability-probe" &&
-    Boolean(reference?.trim());
-}
-
 function isExactCalendarSourceProbeEvidence(
   kind: string | null,
   reference: string | null,
@@ -961,16 +814,6 @@ function isExactCalendarSourceProbeEvidence(
   return snapshot?.capability === "calendar-source" &&
     kind === "calendar-source-probe" &&
     reference === `calendar-source:${snapshot.selectionFingerprint}:${snapshot.testedAt}`;
-}
-
-function isExactAgentCalendarConnectorProbeEvidence(
-  kind: string | null,
-  reference: string | null,
-  snapshot: OptionalCapabilityEvidenceSnapshot | null,
-): snapshot is AgentCalendarConnectorEvidenceSnapshot {
-  return snapshot?.capability === "agent-calendar-connector" &&
-    kind === "agent-calendar-connector-probe" &&
-    reference === `agent-calendar-connector:${snapshot.connectionRevision}:${snapshot.testedAt}`;
 }
 
 function isExactSharingTestShareEvidence(
@@ -1446,168 +1289,6 @@ export class HostStore {
       .run(connectionId);
   }
 
-  getAgentConnectionUnknownOutcomeFence(input: {
-    connectionId: string;
-    adapter: string;
-    capability: "conversation";
-    model: string;
-  }): AgentConnectionUnknownOutcomeFence | null {
-    const row = this.db.prepare(`
-      SELECT connection_id, adapter, capability, model, state, attempt_id, updated_at
-      FROM agent_connection_unknown_outcome_fences
-      WHERE connection_id = ? AND adapter = ? AND capability = ? AND model = ?
-    `).get(input.connectionId, input.adapter, input.capability, input.model) as {
-      connection_id: string;
-      adapter: string;
-      capability: "conversation";
-      model: string;
-      state: "unknown" | "probing" | "attempting";
-      attempt_id: string | null;
-      updated_at: string;
-    } | undefined;
-    return row ? {
-      connectionId: row.connection_id,
-      adapter: row.adapter,
-      capability: row.capability,
-      model: row.model,
-      state: row.state,
-      attemptId: row.attempt_id,
-      updatedAt: row.updated_at,
-    } : null;
-  }
-
-  recordAgentConnectionUnknownOutcomeFence(input: {
-    connectionId: string;
-    adapter: string;
-    capability: "conversation";
-    model: string;
-  }): AgentConnectionUnknownOutcomeFence {
-    this.db.prepare(`
-      INSERT INTO agent_connection_unknown_outcome_fences (
-        connection_id, adapter, capability, model, state, attempt_id, updated_at
-      ) VALUES (?, ?, ?, ?, 'unknown', NULL, ?)
-      ON CONFLICT(connection_id, adapter, capability, model) DO UPDATE SET
-        state = 'unknown', attempt_id = NULL, updated_at = excluded.updated_at
-      WHERE agent_connection_unknown_outcome_fences.state = 'unknown'
-    `).run(input.connectionId, input.adapter, input.capability, input.model, now());
-    return this.getAgentConnectionUnknownOutcomeFence(input)!;
-  }
-
-  beginAgentConnectionUnknownOutcomeAttempt(input: {
-    connectionId: string;
-    adapter: string;
-    capability: "conversation";
-    model: string;
-  }): string {
-    return this.db.transaction(() => {
-      const fence = this.getAgentConnectionUnknownOutcomeFence(input);
-      if (!fence) {
-        throw new Error("Conversation does not have an Unknown Outcome requiring a new probe attempt");
-      }
-      if (fence.state === "attempting") {
-        throw new Error("An explicit Conversation probe attempt is already in progress");
-      }
-      const attemptId = randomUUID();
-      const updated = this.db.prepare(`
-        UPDATE agent_connection_unknown_outcome_fences
-        SET state = 'attempting', attempt_id = ?, updated_at = ?
-        WHERE connection_id = ? AND adapter = ? AND capability = ? AND model = ?
-          AND state = 'unknown' AND attempt_id IS NULL
-      `).run(
-        attemptId,
-        now(),
-        input.connectionId,
-        input.adapter,
-        input.capability,
-        input.model,
-      );
-      if (updated.changes !== 1) {
-        throw new Error("An explicit Conversation probe attempt is already in progress");
-      }
-      return attemptId;
-    })();
-  }
-
-  beginAgentConnectionProbe(input: {
-    connectionId: string;
-    adapter: string;
-    capability: "conversation";
-    model: string;
-  }): string {
-    return this.db.transaction(() => {
-      const fence = this.getAgentConnectionUnknownOutcomeFence(input);
-      if (fence?.state === "unknown") {
-        throw new Error(
-          "Conversation Capability Probe has an Unknown Outcome; create an explicit new attempt before testing again",
-        );
-      }
-      if (fence) throw new Error("A Conversation probe is already in progress");
-      const attemptId = randomUUID();
-      this.db.prepare(`
-        INSERT INTO agent_connection_unknown_outcome_fences (
-          connection_id, adapter, capability, model, state, attempt_id, updated_at
-        ) VALUES (?, ?, ?, ?, 'probing', ?, ?)
-      `).run(
-        input.connectionId,
-        input.adapter,
-        input.capability,
-        input.model,
-        attemptId,
-        now(),
-      );
-      return attemptId;
-    })();
-  }
-
-  finishAgentConnectionProbe(input: {
-    connectionId: string;
-    adapter: string;
-    capability: "conversation";
-    model: string;
-    attemptId: string;
-    outcome: "terminal" | "unknown";
-  }): void {
-    this.db.transaction(() => {
-      if (input.outcome === "unknown") {
-        this.db.prepare(`
-          UPDATE agent_connection_unknown_outcome_fences
-          SET state = 'unknown', attempt_id = NULL, updated_at = ?
-          WHERE connection_id = ? AND adapter = ? AND capability = ? AND model = ?
-            AND attempt_id = ? AND state IN ('probing', 'attempting')
-        `).run(
-          now(),
-          input.connectionId,
-          input.adapter,
-          input.capability,
-          input.model,
-          input.attemptId,
-        );
-      } else {
-        this.db.prepare(`
-          DELETE FROM agent_connection_unknown_outcome_fences
-          WHERE connection_id = ? AND adapter = ? AND capability = ? AND model = ?
-            AND attempt_id = ? AND state IN ('probing', 'attempting')
-        `).run(
-          input.connectionId,
-          input.adapter,
-          input.capability,
-          input.model,
-          input.attemptId,
-        );
-      }
-    })();
-  }
-
-  resolveAgentConnectionUnknownOutcomeAttempt(input: {
-    connectionId: string;
-    adapter: string;
-    capability: "conversation";
-    model: string;
-    attemptId: string;
-  }): void {
-    this.finishAgentConnectionProbe({ ...input, outcome: "terminal" });
-  }
-
   getAgentConnectionDisclosure(
     connectionId: string,
     capability: AgentConnectionDataPathDisclosure["capability"],
@@ -1653,53 +1334,6 @@ export class HostStore {
   clearAgentConnectionDisclosures(connectionId: string): void {
     this.db.prepare("DELETE FROM agent_connection_disclosures WHERE connection_id = ?")
       .run(connectionId);
-  }
-
-  getAgentCalendarConnectorSelection(): PersistedAgentCalendarConnectorSelection | null {
-    const row = this.db.prepare(`
-      SELECT connection_id, connector, selected_at
-      FROM agent_calendar_connector_selection
-      WHERE id = 1
-    `).get() as {
-      connection_id: string;
-      connector: string;
-      selected_at: string;
-    } | undefined;
-    if (
-      !row || !row.connection_id || row.connection_id.length > 200 ||
-      !/^[a-z0-9][a-z0-9._-]{0,99}$/.test(row.connector) ||
-      Number.isNaN(Date.parse(row.selected_at))
-    ) return null;
-    return {
-      connectionId: row.connection_id,
-      connector: row.connector,
-      selectedAt: row.selected_at,
-    };
-  }
-
-  selectAgentCalendarConnector(input: {
-    connectionId: string;
-    connector: string;
-  }): PersistedAgentCalendarConnectorSelection {
-    const connectionId = input.connectionId.trim();
-    const connector = boundedIdentity(input.connector, "Agent Calendar Connector");
-    const connection = this.db.prepare("SELECT kind FROM agent_connections WHERE id = ?")
-      .get(connectionId) as { kind: PersistedAgentConnection["kind"] } | undefined;
-    if (connection?.kind !== "supported-agent") {
-      throw new Error("Agent Calendar Connector requires a Supported Agent Connection");
-    }
-    const current = this.getAgentCalendarConnectorSelection();
-    if (current?.connectionId === connectionId && current.connector === connector) return current;
-    const selectedAt = now();
-    this.db.prepare(`
-      INSERT INTO agent_calendar_connector_selection (id, connection_id, connector, selected_at)
-      VALUES (1, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        connection_id = excluded.connection_id,
-        connector = excluded.connector,
-        selected_at = excluded.selected_at
-    `).run(connectionId, connector, selectedAt);
-    return this.getAgentCalendarConnectorSelection()!;
   }
 
   getSharingConfiguration(): PersistedSharingConfiguration | null {
@@ -3311,17 +2945,10 @@ export class HostStore {
       if (row.outcome === "deferred" && (
         row.evidence_kind !== null || row.evidence_reference !== null || row.evidence_snapshot_json !== null
       )) return [];
+      if (RETIRED_OPTIONAL_CAPABILITIES.has(row.capability)) return [];
       const snapshot = readOptionalCapabilityEvidenceSnapshot(row.evidence_snapshot_json);
-      if (row.capability === "conversation" && row.outcome === "adopted" &&
-          !isExactConversationProbeEvidence(row.evidence_kind, row.evidence_reference, snapshot)) {
-        return [];
-      }
       if (row.capability === "calendar-source" && row.outcome === "adopted" &&
           !isExactCalendarSourceProbeEvidence(row.evidence_kind, row.evidence_reference, snapshot)) {
-        return [];
-      }
-      if (row.capability === "agent-calendar-connector" && row.outcome === "adopted" &&
-          !isExactAgentCalendarConnectorProbeEvidence(row.evidence_kind, row.evidence_reference, snapshot)) {
         return [];
       }
       if (row.capability === "sharing" && row.outcome === "adopted" &&
@@ -3362,6 +2989,9 @@ export class HostStore {
     const onboardingVersion = boundedIdentity(input.onboardingVersion, "Onboarding version");
     const capability = boundedIdentity(input.capability, "Optional capability");
     const contractVersion = boundedIdentity(input.contractVersion, "Optional capability contract version");
+    if (RETIRED_OPTIONAL_CAPABILITIES.has(capability)) {
+      throw new Error(`Optional capability ${capability} is retired`);
+    }
     const evidenceKind = input.evidence?.kind.trim() || null;
     const evidenceReference = input.evidence?.reference.trim() || null;
     const evidenceSnapshot = input.evidence?.snapshot
@@ -3370,10 +3000,6 @@ export class HostStore {
     if (input.outcome === "adopted" && (!evidenceKind || !evidenceReference)) {
       throw new Error("An adopted Optional Capability Outcome requires durable evidence");
     }
-    if (input.capability === "conversation" && input.outcome === "adopted" &&
-        !isExactConversationProbeEvidence(evidenceKind, evidenceReference, evidenceSnapshot)) {
-      throw new Error("An adopted Conversation outcome requires a complete exact evidence snapshot");
-    }
     if (capability === "calendar-source" && input.outcome === "adopted" &&
         evidenceSnapshot?.capability !== "calendar-source") {
       throw new Error("An adopted Calendar Source outcome requires a complete exact evidence snapshot");
@@ -3381,10 +3007,6 @@ export class HostStore {
     if (capability === "calendar-source" && input.outcome === "adopted" &&
         !isExactCalendarSourceProbeEvidence(evidenceKind, evidenceReference, evidenceSnapshot)) {
       throw new Error("An adopted Calendar Source outcome requires exact probe evidence");
-    }
-    if (capability === "agent-calendar-connector" && input.outcome === "adopted" &&
-        !isExactAgentCalendarConnectorProbeEvidence(evidenceKind, evidenceReference, evidenceSnapshot)) {
-      throw new Error("An adopted Agent Calendar Connector outcome requires exact probe evidence");
     }
     if (capability === "sharing" && input.outcome === "adopted" &&
         !isExactSharingTestShareEvidence(evidenceKind, evidenceReference, evidenceSnapshot)) {
@@ -3404,10 +3026,7 @@ export class HostStore {
       throw new Error("Optional Capability Evidence is too long");
     }
     const commit = this.db.transaction(() => {
-      if (
-        capability === "conversation" || capability === "calendar-source" ||
-        capability === "agent-calendar-connector" || capability === "sharing"
-      ) {
+      if (capability === "calendar-source" || capability === "sharing") {
         const existing = this.db.prepare(`
           SELECT outcome, evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
           FROM optional_capability_outcomes
@@ -3428,23 +3047,11 @@ export class HostStore {
               existing?.evidence_reference ?? null,
               existingSnapshot,
             )
-          : capability === "agent-calendar-connector"
-            ? !isExactAgentCalendarConnectorProbeEvidence(
-                existing?.evidence_kind ?? null,
-                existing?.evidence_reference ?? null,
-                existingSnapshot,
-              )
-            : capability === "sharing"
-              ? !isExactSharingTestShareEvidence(
-                  existing?.evidence_kind ?? null,
-                  existing?.evidence_reference ?? null,
-                  existingSnapshot,
-                )
-              : !isExactConversationProbeEvidence(
-                  existing?.evidence_kind ?? null,
-                  existing?.evidence_reference ?? null,
-                  existingSnapshot,
-                );
+          : !isExactSharingTestShareEvidence(
+              existing?.evidence_kind ?? null,
+              existing?.evidence_reference ?? null,
+              existingSnapshot,
+            );
         const existingDeferralInvalid = existing?.outcome === "deferred" && (
           existing.evidence_kind !== null || existing.evidence_reference !== null ||
           existing.evidence_snapshot_json !== null
@@ -3571,21 +3178,6 @@ export class HostStore {
     return { acknowledged: result.changes === 1, state: this.getOnboardingEntryState() };
   }
 
-  hasOnboardingOutcomeMigration(id: string): boolean {
-    const normalized = boundedIdentity(id, "Onboarding outcome migration");
-    const row = this.db.prepare(`
-      SELECT completed_at FROM onboarding_outcome_migrations WHERE id = ?
-    `).get(normalized) as { completed_at: string } | undefined;
-    return exactIsoTimestamp(row?.completed_at);
-  }
-
-  recordOnboardingOutcomeMigration(id: string): void {
-    const normalized = boundedIdentity(id, "Onboarding outcome migration");
-    this.db.prepare(`
-      INSERT OR IGNORE INTO onboarding_outcome_migrations (id, completed_at) VALUES (?, ?)
-    `).run(normalized, now());
-  }
-
   getCloudTranscriptionConsent(): CloudTranscriptionConsent | null {
     const row = this.db.prepare(`
       SELECT disclosure_version, accepted_at
@@ -3662,6 +3254,64 @@ export class HostStore {
   clearSummaryDataPathDisclosure(provider: string): void {
     this.db.prepare("DELETE FROM summary_data_path_disclosures WHERE provider = ?")
       .run(provider.trim().toLowerCase());
+  }
+
+  getDictationTextDisclosure(provider: string): DictationTextDisclosure | null {
+    const row = this.db.prepare(`
+      SELECT provider, disclosure_version, decision, decided_at
+      FROM dictation_text_disclosures WHERE provider = ?
+    `).get(provider.trim().toLowerCase()) as {
+      provider: string;
+      disclosure_version: string;
+      decision: string;
+      decided_at: string;
+    } | undefined;
+    return row && row.decision === "accepted" ? {
+      provider: row.provider,
+      disclosureVersion: row.disclosure_version,
+      decision: "accepted",
+      decidedAt: row.decided_at,
+    } : null;
+  }
+
+  recordDictationTextDisclosure(provider: string, disclosureVersion: string): DictationTextDisclosure {
+    const identity = dictationDisclosureIdentity(provider, disclosureVersion);
+    this.db.prepare(`
+      INSERT INTO dictation_text_disclosures (provider, disclosure_version, decision, decided_at)
+      VALUES (?, ?, 'accepted', ?)
+      ON CONFLICT(provider) DO UPDATE SET
+        disclosure_version = excluded.disclosure_version,
+        decision = excluded.decision,
+        decided_at = excluded.decided_at
+    `).run(identity.provider, identity.disclosureVersion, now());
+    return this.getDictationTextDisclosure(identity.provider)!;
+  }
+
+  clearDictationTextDisclosure(provider: string): void {
+    this.db.prepare("DELETE FROM dictation_text_disclosures WHERE provider = ?")
+      .run(provider.trim().toLowerCase());
+  }
+
+  /**
+   * Copy the accepted direct-xAI Conversation receipt of the retired capability
+   * as the xAI dictation text receipt, keeping its version and decision time.
+   * Dictated text was sent under that receipt before ADR-010; an existing
+   * dictation receipt is never replaced.
+   */
+  carryOverRetiredXaiConversationDisclosure(retiredDisclosureVersion: string): DictationTextDisclosure | null {
+    const row = this.db.prepare(`
+      SELECT disclosure_version, decision, decided_at
+      FROM agent_connection_disclosures
+      WHERE connection_id = 'direct-xai' AND capability = 'conversation'
+    `).get() as { disclosure_version: string; decision: string; decided_at: string } | undefined;
+    if (!row || row.decision !== "accepted" || row.disclosure_version !== retiredDisclosureVersion) {
+      return null;
+    }
+    this.db.prepare(`
+      INSERT OR IGNORE INTO dictation_text_disclosures (provider, disclosure_version, decision, decided_at)
+      VALUES ('xai', ?, 'accepted', ?)
+    `).run(row.disclosure_version, row.decided_at);
+    return this.getDictationTextDisclosure("xai");
   }
 
   recordCoreActivationEvidence(
@@ -4615,6 +4265,7 @@ export class HostStore {
         automatic_entry_acknowledged_at TEXT
       );
 
+      -- Its only migration adopted Conversation outcomes (retired by ADR-010); kept, never read.
       CREATE TABLE IF NOT EXISTS onboarding_outcome_migrations (
         id TEXT PRIMARY KEY,
         completed_at TEXT NOT NULL
@@ -4627,6 +4278,13 @@ export class HostStore {
       );
 
       CREATE TABLE IF NOT EXISTS summary_data_path_disclosures (
+        provider TEXT PRIMARY KEY,
+        disclosure_version TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('accepted', 'declined')),
+        decided_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS dictation_text_disclosures (
         provider TEXT PRIMARY KEY,
         disclosure_version TEXT NOT NULL,
         decision TEXT NOT NULL CHECK(decision IN ('accepted', 'declined')),
@@ -4682,6 +4340,9 @@ export class HostStore {
           connection_id, capability, status, model, tested_at DESC, id DESC
         );
 
+      -- Retired with Yulu-owned conversation (ADR-010). The table and the
+      -- 'conversation' values below are kept so existing databases and an
+      -- Application Update rollback see an unchanged schema; nothing reads them.
       CREATE TABLE IF NOT EXISTS agent_connection_unknown_outcome_fences (
         connection_id TEXT NOT NULL,
         adapter TEXT NOT NULL,
@@ -4718,6 +4379,7 @@ export class HostStore {
         updated_at TEXT NOT NULL
       );
 
+      -- Retired with the Agent Calendar Connector (ADR-010); kept, never read.
       CREATE TABLE IF NOT EXISTS agent_calendar_connector_selection (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         connection_id TEXT NOT NULL REFERENCES agent_connections(id) ON DELETE CASCADE,
@@ -4929,38 +4591,6 @@ export class HostStore {
     this.db.exec(`
       UPDATE agent_tasks SET summary_provider = agent_provider
       WHERE summary_provider = 'agent'
-    `);
-    this.db.exec(`
-      DELETE FROM agent_connection_unknown_outcome_fences
-      WHERE state IN ('probing', 'attempting')
-        AND EXISTS (
-          SELECT 1 FROM agent_connection_readiness_history AS terminal
-          WHERE terminal.connection_id = agent_connection_unknown_outcome_fences.connection_id
-            AND terminal.capability = agent_connection_unknown_outcome_fences.capability
-            AND terminal.model = agent_connection_unknown_outcome_fences.model
-            AND terminal.reason IS NOT 'unknown_outcome'
-            AND terminal.tested_at >= agent_connection_unknown_outcome_fences.updated_at
-        );
-      UPDATE agent_connection_unknown_outcome_fences
-      SET state = 'unknown', attempt_id = NULL, updated_at = CURRENT_TIMESTAMP
-      WHERE state IN ('probing', 'attempting');
-      INSERT OR IGNORE INTO agent_connection_unknown_outcome_fences (
-        connection_id, adapter, capability, model, state, attempt_id, updated_at
-      )
-      SELECT history.connection_id, connections.adapter, history.capability, history.model,
-        'unknown', NULL, history.tested_at
-      FROM agent_connection_readiness_history AS history
-      JOIN agent_connections AS connections ON connections.id = history.connection_id
-      WHERE history.capability = 'conversation'
-        AND history.reason = 'unknown_outcome'
-        AND NOT EXISTS (
-          SELECT 1 FROM agent_connection_readiness_history AS later
-          WHERE later.connection_id = history.connection_id
-            AND later.capability = history.capability
-            AND later.model = history.model
-            AND (later.tested_at > history.tested_at OR
-              (later.tested_at = history.tested_at AND later.id > history.id))
-        );
     `);
     this.db.pragma(`user_version = ${YULU_HOST_DATABASE_SCHEMA_VERSION}`);
   }

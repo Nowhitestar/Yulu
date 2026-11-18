@@ -120,10 +120,10 @@ describe("configRouter", () => {
         detail: "ready",
         credentialSource: "oauth",
       }],
-      ["conversation", {
-        capability: "conversation",
+      ["transcription", {
+        capability: "transcription",
         status: "ready",
-        model: "grok-conversation",
+        model: "speech-to-text",
         testedAt: "2026-08-25T04:00:00.000Z",
         detail: "ready",
         credentialSource: "oauth",
@@ -136,7 +136,7 @@ describe("configRouter", () => {
         value: { provider: "xai", model: "grok-new" },
       });
       expect(ctx.xaiReadiness.has("summary")).toBe(false);
-      expect(ctx.xaiReadiness.has("conversation")).toBe(true);
+      expect(ctx.xaiReadiness.has("transcription")).toBe(true);
     } finally { cleanup(); }
   });
 
@@ -237,21 +237,57 @@ describe("configRouter", () => {
       expect((await caller.get()).transcription.dictation.prompt_slug).toBe("dictation-tight");
     } finally { cleanup(); }
   });
-  it("persists the cleanup model without changing other model selections or accepting unknown models", async () => {
+  it("persists the dictation text model without changing other selections or accepting an invalid model", async () => {
     const { ctx, cleanup } = makeCtx();
     try {
       const caller = createCaller(configRouter, ctx);
       const before = await caller.get();
-      expect(before.transcription.dictation.cleanup_model).toBe("conversation");
-      const result = await caller.update({ key: "transcription.dictation.cleanup_model", value: "grok-4.20-0309-non-reasoning" });
+      expect(before.transcription.dictation.text_model).toBe("grok-4.6");
+      expect(before.transcription.dictation.text_provider).toBe("none");
+      const result = await caller.update({ key: "transcription.dictation.text_model", value: "grok-4.20-0309-non-reasoning" });
       expect(result.daemonsNeedingRestart).toEqual([]);
       expect(result.daemonsNeedingSighup).toEqual([]);
       const after = await caller.get();
-      expect(after.transcription.dictation.cleanup_model).toBe("grok-4.20-0309-non-reasoning");
+      expect(after.transcription.dictation.text_model).toBe("grok-4.20-0309-non-reasoning");
+      expect(after.transcription.dictation.text_provider).toBe("none");
       expect(after.intelligence).toEqual(before.intelligence);
       expect(after.transcription.dictation.style).toBe(before.transcription.dictation.style);
-      await expect(caller.update({ key: "transcription.dictation.cleanup_model", value: "unknown-fast-model" })).rejects.toThrow();
-      expect((await caller.get()).transcription.dictation.cleanup_model).toBe("grok-4.20-0309-non-reasoning");
+      await expect(caller.update({ key: "transcription.dictation.text_model", value: "" })).rejects.toThrow();
+      await expect(caller.update({ key: "transcription.dictation.text_provider", value: "codex" })).rejects.toThrow();
+      expect((await caller.get()).transcription.dictation.text_model).toBe("grok-4.20-0309-non-reasoning");
+    } finally { cleanup(); }
+  });
+
+  it.each([
+    ["intelligence.conversation", { provider: "xai", model: "grok-4.6" }],
+    ["transcription.dictation.cleanup_model", "conversation"],
+    ["transcription.dictation.voice_chat_scope", "meetings"],
+    ["status_agent.hotkeys.voice_chat", { key: "Space", modifiers: ["fn"] }],
+    ["agent_console.plugins.added", ["summary"]],
+  ])("refuses to write the retired conversation setting %s", async (key, value) => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const before = JSON.stringify(await caller.get());
+      await expect(caller.update({ key, value })).rejects.toThrow(/retired because Yulu no longer owns conversation/);
+      expect(JSON.stringify(await caller.get())).toBe(before);
+    } finally { cleanup(); }
+  });
+
+  it("refuses a whole-section write that would reintroduce a retired conversation setting", async () => {
+    const { ctx, cleanup } = makeCtx();
+    try {
+      const caller = createCaller(configRouter, ctx);
+      const dictation = (await caller.get()).transcription.dictation;
+      await expect(caller.update({
+        key: "transcription.dictation",
+        value: { ...dictation, voice_chat_scope: "general" },
+      })).rejects.toThrow(/retired because Yulu no longer owns conversation/);
+      await expect(caller.update({
+        key: "transcription.dictation",
+        value: { ...dictation, style: "formal" },
+      })).resolves.toBeDefined();
+      expect((await caller.get()).transcription.dictation.style).toBe("formal");
     } finally { cleanup(); }
   });
 });

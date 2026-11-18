@@ -532,6 +532,9 @@ function connectionRuntime(connection: PersistedAgentConnection, workDir: string
   }
   const executable = boundedString(connection.settings.executablePath, 1_000);
   if (!executable) throw new Error(`${connection.label} has no executable path`);
+  // The connector model is persisted under its historical key. Renaming it
+  // would change the connection revision that verified Test Shares are bound
+  // to (ADR-010); it is never replaced by the Summary model.
   const model = boundedString(connection.settings.conversationModel, 200);
   const command = connection.adapter === "codex"
     ? [executable, "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--model", model]
@@ -539,16 +542,17 @@ function connectionRuntime(connection: PersistedAgentConnection, workDir: string
       ? [executable, "--print", "--output-format", "stream-json", "--verbose", "--model", model]
       : [];
   const provider = connection.adapter === "claude-code" ? "claude" : connection.adapter;
-  if (connection.adapter === "openclaw") {
-    throw new Error("OpenClaw is Conversation-only and cannot be selected for Sharing connectors");
-  }
   if (connection.adapter === "hermes") {
     throw new Error("Hermes does not provide the required Sharing pre-tool authorization boundary");
   }
   if (command.length === 0 || !["codex", "claude"].includes(provider)) {
     throw new Error(`${connection.label} does not have a supported Sharing connector adapter`);
   }
-  if (!model) throw new Error(`Choose an explicit Conversation model for ${connection.label} in Settings > Agent Connections before configuring Sharing`);
+  if (!model) {
+    throw new Error(
+      `${connection.label} has no connector model; remove and re-add it in Settings > Agent Connections before configuring Sharing`,
+    );
+  }
   return {
     provider: provider as AgentRuntime["provider"],
     label: connection.label,

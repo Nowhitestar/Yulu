@@ -83,7 +83,7 @@ export class CodexRuntimePreDispatchError extends Error {
   }
 }
 
-export class CodexConversationError extends Error {
+export class CodexRunError extends Error {
   readonly nativeSessionId?: string;
   readonly evidence: CodexRuntimeEvidence;
   readonly unknownOutcome: boolean;
@@ -97,7 +97,7 @@ export class CodexConversationError extends Error {
     },
   ) {
     super(message);
-    this.name = "CodexConversationError";
+    this.name = "CodexRunError";
     this.nativeSessionId = options.nativeSessionId;
     this.evidence = options.evidence;
     this.unknownOutcome = options.unknownOutcome;
@@ -179,13 +179,11 @@ function authorizationRemediation(
 function identityMatches(
   result: CodexRuntimeTurnResult,
   model: string,
-  nativeSessionId?: string,
 ): boolean {
   return result.actualProvider === CODEX_PROVIDER &&
     result.actualModel === model &&
     result.fallbackOccurred === false &&
-    Boolean(result.nativeSessionId) &&
-    (!nativeSessionId || result.nativeSessionId === nativeSessionId);
+    Boolean(result.nativeSessionId);
 }
 
 export class CodexAgentAdapter {
@@ -225,20 +223,10 @@ export class CodexAgentAdapter {
     };
   }
 
-  async probe(input: { model: string }): Promise<CodexProbeResult> {
-    return this.runProbe(input, "Conversation", false);
-  }
-
+  /** The tool-free Capability Probe for Summary, the only Agent Capability. */
   async probeSummary(input: { model: string }): Promise<CodexProbeResult> {
-    return this.runProbe(input, "Summary", true);
-  }
-
-  private async runProbe(
-    input: { model: string },
-    capability: "Conversation" | "Summary",
-    toolFree: boolean,
-  ): Promise<CodexProbeResult> {
-    const status = await this.status({ toolFree });
+    const capability = "Summary";
+    const status = await this.status({ toolFree: true });
     if (!status.supported) {
       return {
         status: "failed",
@@ -270,7 +258,7 @@ export class CodexAgentAdapter {
         model: input.model,
         prompt: PROBE_PROMPT,
         probe: true,
-        ...(toolFree ? { toolFree: true } : {}),
+        toolFree: true,
         timeoutMs: 30_000,
       });
     } catch (error) {
@@ -382,7 +370,7 @@ export class CodexAgentAdapter {
       result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",
     );
     if (result.terminalStatus !== "completed") {
-      throw new CodexConversationError(
+      throw new CodexRunError(
         result.terminalStatus === "unknown"
           ? "Codex Summary outcome is unknown; do not retry automatically or commit staged output"
           : "Codex Summary failed before a terminal successful result",
@@ -406,78 +394,6 @@ export class CodexAgentAdapter {
     return {
       summary,
       nativeSessionId: result.nativeSessionId,
-      evidence: runtimeEvidence,
-    };
-  }
-
-  async converse(input: {
-    model: string;
-    prompt: string;
-    nativeSessionId?: string;
-  }) {
-    const status = await this.status();
-    if (!status.supported) throw new Error(status.remediation ?? "Codex runtime is unsupported");
-    if (!status.authorized) {
-      throw new Error(authorizationRemediation(
-        this.executable,
-        status.authorizationClass,
-        "retry this same conversation input",
-      ));
-    }
-    if (!status.availableModels.includes(input.model)) {
-      throw new Error(`Codex model ${input.model} is not available; restore the pinned model, then retry this same input`);
-    }
-    const result = await this.client.runTurn({
-      model: input.model,
-      prompt: input.prompt,
-      probe: false,
-      timeoutMs: 300_000,
-      ...(input.nativeSessionId ? { nativeSessionId: input.nativeSessionId } : {}),
-    });
-    const runtimeEvidence = evidence(
-      status.runtimeVersion,
-      status.authorizationClass,
-      input.model,
-      result,
-      result.terminalStatus === "unknown" ? "unknown" : result.terminalStatus === "failed" ? "failed" : "ready",
-    );
-    if (result.terminalStatus !== "completed") {
-      throw new CodexConversationError(
-        result.terminalStatus === "unknown"
-          ? "Codex conversation outcome is unknown; inspect the pinned thread and do not retry automatically"
-          : "Codex conversation failed; restore the pinned connection and retry this same input explicitly",
-        {
-          ...(result.nativeSessionId ? { nativeSessionId: result.nativeSessionId } : {}),
-          evidence: runtimeEvidence,
-          unknownOutcome: result.terminalStatus === "unknown",
-        },
-      );
-    }
-    if (!identityMatches(result, input.model, input.nativeSessionId)) {
-      throw new CodexConversationError(
-        "Codex returned a different provider, model, or thread; fallback was rejected",
-        {
-          ...(result.nativeSessionId ? { nativeSessionId: result.nativeSessionId } : {}),
-          evidence: runtimeEvidence,
-          unknownOutcome: false,
-        },
-      );
-    }
-    const answer = result.answer.trim();
-    if (!answer) {
-      throw new CodexConversationError(
-        "Codex returned no Conversation answer; retry this same input explicitly",
-        {
-          ...(result.nativeSessionId ? { nativeSessionId: result.nativeSessionId } : {}),
-          evidence: runtimeEvidence,
-          unknownOutcome: false,
-        },
-      );
-    }
-    return {
-      answer,
-      nativeSessionId: result.nativeSessionId,
-      usedFallback: false as const,
       evidence: runtimeEvidence,
     };
   }

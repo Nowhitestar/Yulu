@@ -12,7 +12,8 @@ import { ConfigManager } from "./config.js";
 import { DictationCleanupSchema, DictationTranslationSchema, DictationTextService } from "./dictationText.js";
 import { DictationPreview } from "./dictationPreview.js";
 import { transcriptionFailureReason } from "./transcriptionErrors.js";
-import { hasCurrentXaiConversationDisclosure } from "./conversationDataDisclosure.js";
+import { carryOverRetiredConversationDisclosure, hasXaiDictationTextDisclosure } from "./dictationTextDisclosure.js";
+import { archiveRetiredConversationSessions } from "./retiredConversationData.js";
 import { LaunchctlClient } from "./launchctl.js";
 import { openDb } from "./db.js";
 import { appPubSub } from "./pubsub.js";
@@ -24,15 +25,7 @@ import { startLogTailer } from "./logTailer.js";
 import { serveStaticFile } from "./staticFile.js";
 import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
-import { resolveAgentRuntime } from "./agentRuntime.js";
-import { ConversationConnectionRequiredError } from "./routers/agentSessions.js";
 import { runAgentCliCommand } from "./agentCliRunner.js";
-import {
-  ensureBackgroundAgentSession,
-  recoverInterruptedAgentSessionInvocations,
-  retireAgentSessionsForConnection,
-} from "./agentSessionStore.js";
-import { createCaller } from "./trpc.js";
 import { handleMcpRequest, isAuthorizedToken, isMcpRequest } from "./mcp.js";
 import { HostStore } from "./hostStore.js";
 import { YULU_HOST_IPC_VERSION } from "./runtimeContract.js";
@@ -67,16 +60,13 @@ import { CodexAgentAdapter } from "./codexAgentAdapter.js";
 import { CodexAppServerRuntimeClient } from "./codexAppServerClient.js";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { ClaudeCodeCliRuntimeClient } from "./claudeCodeCliClient.js";
-import { ConversationOnlyAgentAdapter } from "./conversationOnlyAgentAdapter.js";
-import { ConversationOnlyCliRuntimeClient } from "./conversationOnlyCliClient.js";
 import { MacOsNativeAgentAuthorizationLauncher } from "./nativeAgentAuthorization.js";
 import { SharingConfiguration } from "./sharingConfiguration.js";
 import { AgentSharingConnectorAdapter } from "./sharingConnector.js";
 import { CalendarSourceManager } from "./calendarSources.js";
 import { createCalendarSourceAdapters } from "./calendarSourceAdapters.js";
 import { requireNativeHelpers, resolveNativeHelperPaths } from "./nativeHelpers.js";
-import { AgentCalendarConnector, AgentCalendarConnectorRuntimeAdapter } from "./agentCalendarConnector.js";
-import { migrateExistingOnboardingOutcomes } from "./routers/onboarding.js";
+import { reconcileOnboardingCompletion } from "./routers/onboarding.js";
 import { prepareHostDurableData } from "./hostDataMigration.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -230,21 +220,26 @@ async function startLockedServer(
   const configManager = new ConfigManager(runtimePaths.configFile);
   const hostStore = new HostStore(runtimePaths.hostDb);
   const databaseHealth = hostStore.runtimeDatabaseHealth();
-  const recoveredConversationIds = recoverInterruptedAgentSessionInvocations(runtimePaths.durableDataDir);
-  if (recoveredConversationIds.length > 0) {
-    console.warn(
-      `[yulu_ui] fenced ${recoveredConversationIds.length} interrupted Conversation invocation(s) as Unknown Outcome`,
-    );
+  // ADR-010: Yulu no longer owns conversation. Its session store is archived
+  // unread; a failure is retried on the next start and never blocks the Host.
+  try {
+    if (archiveRetiredConversationSessions(runtimePaths.durableDataDir)) {
+      console.warn("[yulu_ui] archived the retired conversation session store without reading it");
+    }
+  } catch (error) {
+    console.warn(`[yulu_ui] retired conversation session archive will retry next start: ${(error as Error).message}`);
+  }
+  try {
+    if (carryOverRetiredConversationDisclosure(hostStore, configManager)) {
+      console.warn("[yulu_ui] kept the accepted xAI disclosure for dictation text");
+    }
+  } catch (error) {
+    console.warn(`[yulu_ui] dictation text disclosure carry-over will retry next start: ${(error as Error).message}`);
   }
   const retiredGatewayTaskIds = hostStore.retireTasksForConnection(RETIRED_GATEWAY_CONNECTION_ID);
-  const retiredGatewaySessionIds = retireAgentSessionsForConnection(
-    runtimePaths.durableDataDir,
-    RETIRED_GATEWAY_CONNECTION_ID,
-  );
-  if (retiredGatewayTaskIds.length > 0 || retiredGatewaySessionIds.length > 0) {
+  if (retiredGatewayTaskIds.length > 0) {
     console.warn(
-      `[yulu_ui] retired obsolete Gateway state without replay: tasks=${retiredGatewayTaskIds.length} ` +
-      `sessions=${retiredGatewaySessionIds.length}`,
+      `[yulu_ui] retired obsolete Gateway state without replay: tasks=${retiredGatewayTaskIds.length}`,
     );
   }
   const artifactStore = new ArtifactStore(runtimePaths.moviesDir, runtimePaths.agentTasksDir);
@@ -302,7 +297,6 @@ async function startLockedServer(
   const agentConnections = new AgentConnectionCenter({
     config: configManager,
     host: hostStore,
-    configDir: runtimePaths.durableDataDir,
     credentials: xaiCredentials,
     audio: audioTranscription,
     text: xaiText,
@@ -322,28 +316,12 @@ async function startLockedServer(
         cwd: runtimePaths.moviesDir,
       }),
     }),
-    conversationOnlyAdapter: (adapter, executable) => new ConversationOnlyAgentAdapter({
-      adapter,
-      executable,
-      client: new ConversationOnlyCliRuntimeClient({
-        adapter,
-        executable,
-        cwd: runtimePaths.moviesDir,
-      }),
-    }),
     nativeAuthorization: (input) => nativeAgentAuthorization.launch(input),
   });
   const supportedAgentSummaryAdapter = agentConnections.summaryAdapter();
   const sharing = new SharingConfiguration({
     host: hostStore,
     adapter: new AgentSharingConnectorAdapter({
-      scriptDir: runtimePaths.scriptDir,
-      configDir: runtimePaths.durableDataDir,
-    }),
-  });
-  const agentCalendarConnector = new AgentCalendarConnector({
-    host: hostStore,
-    adapter: new AgentCalendarConnectorRuntimeAdapter({
       scriptDir: runtimePaths.scriptDir,
       configDir: runtimePaths.durableDataDir,
     }),
@@ -393,7 +371,7 @@ async function startLockedServer(
     config: configManager,
     text: xaiText,
     credentialSource: () => agentConnections.selectedXaiCredentialSource(),
-    hasDisclosure: () => hasCurrentXaiConversationDisclosure(hostStore),
+    hasDisclosure: () => hasXaiDictationTextDisclosure(hostStore),
     glossary: (text) => loadGlossaryContract(dbProxy.vocab, text),
   });
   const dictationPreview = new DictationPreview(dictationText);
@@ -452,30 +430,13 @@ async function startLockedServer(
     agentConnections,
     sharing,
     calendarSources,
-    agentCalendarConnector,
     db:        dbProxy,
   };
 
   try {
-    await migrateExistingOnboardingOutcomes(ctx);
+    reconcileOnboardingCompletion(ctx);
   } catch (error) {
-    console.warn(`[yulu_ui] Onboarding outcome migration will retry next start: ${(error as Error).message}`);
-  }
-
-  try {
-    const config = ctx.config.read();
-    const runtime = resolveAgentRuntime(config, {
-      scriptDir: runtimePaths.scriptDir,
-      moviesDir: runtimePaths.moviesDir,
-    });
-    if (runtime.provider !== "none") {
-      ensureBackgroundAgentSession(runtimePaths.durableDataDir, {
-        agent: runtime.provider,
-        runtimeLabel: runtime.label,
-      });
-    }
-  } catch (exc) {
-    console.warn(`[yulu_ui] background Agent session not initialized: ${(exc as Error).message}`);
+    console.warn(`[yulu_ui] Onboarding completion check will retry next start: ${(error as Error).message}`);
   }
 
   const app = new Hono();
@@ -689,125 +650,6 @@ async function startLockedServer(
       }
       return c.json({ ok: false, error: "audio_transcription_failed", detail: (error as Error).message, failureReason }, 502);
     }
-  });
-
-  const activeVoiceQuestions = new Set<string>();
-  app.post("/api/voice-chat/ask", async (c) => {
-    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
-      return c.json({ ok: false, error: "unauthorized" }, 401);
-    }
-    let body: unknown;
-    try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ ok: false, error: "invalid_json" }, 400);
-    }
-    const parsed = z.object({
-      question: z.string().trim().min(1).max(2_000),
-      sessionId: z.string().trim().min(1).max(200).optional(),
-      scope: z.enum(["general", "meetings"]).optional(),
-      defer: z.boolean().optional(),
-    }).strict().safeParse(body);
-    if (!parsed.success) return c.json({ ok: false, error: "invalid_voice_question" }, 400);
-    const input = parsed.data;
-    const question = input.question;
-
-    const caller = createCaller(appRouter, { ...ctx, uiMutationAuthorized: true });
-    const existingSessionId = typeof input.sessionId === "string" && input.sessionId.trim()
-      ? input.sessionId.trim()
-      : "";
-    const defer = input.defer === true;
-    let session;
-    if (existingSessionId) {
-      session = await caller.agentSessions.get({ id: existingSessionId });
-      if (!session || session.purpose !== "ask") return c.json({ ok: false, error: "session_unavailable" }, 404);
-      if (input.scope && input.scope !== session.scope) {
-        return c.json({ ok: false, error: "conversation_scope_changed", detail: "Start a new conversation to change its scope" }, 409);
-      }
-    } else {
-      try {
-        session = await caller.agentSessions.create({
-          title: question.slice(0, 48),
-          scope: input.scope ?? configManager.read().transcription.dictation.voice_chat_scope,
-        });
-      } catch (error) {
-        const readinessError = error instanceof ConversationConnectionRequiredError
-          ? error
-          : error && typeof error === "object" && "cause" in error &&
-              error.cause instanceof ConversationConnectionRequiredError
-            ? error.cause
-            : null;
-        if (!readinessError) throw error;
-        return c.json({
-          ok: false,
-          error: "conversation_connection_required",
-          detail: readinessError.message,
-          remediation: "/settings/llm?capability=conversation",
-        }, 409);
-      }
-    }
-    const sessionId = String(session?.id ?? existingSessionId);
-    if (!sessionId) return c.json({ ok: false, error: "session_unavailable" }, 500);
-    if (activeVoiceQuestions.has(sessionId) || session.status === "paused" || session.pendingInvocation || session.unknownOutcome) {
-      return c.json({ ok: false, error: "conversation_unavailable", detail: "Finish or resolve the current answer before asking again" }, 409);
-    }
-
-    activeVoiceQuestions.add(sessionId);
-    try {
-      await caller.agentSessions.append({ sessionId, message: { role: "user", text: question } });
-    } catch (error) {
-      activeVoiceQuestions.delete(sessionId);
-      throw error;
-    }
-    const answerAndAppend = async () => {
-      try {
-        const answer = await caller.ask.ask({ question, limit: 8, sessionId, stream: true });
-        const assistantMessage = {
-          role: "assistant" as const,
-          text: String(answer.answer ?? ""),
-          sources: answer.sources,
-          remoteSources: answer.remoteSources,
-          ...(answer.llmError ? { error: String(answer.llmError) } : {}),
-        };
-        await caller.agentSessions.append({ sessionId, message: assistantMessage });
-        return {
-          answer: assistantMessage.text,
-          llmStatus: answer.llmStatus,
-          usedFallback: answer.usedFallback,
-        };
-      } catch (exc) {
-        await caller.agentSessions.append({
-          sessionId,
-          message: { role: "assistant", text: "", error: (exc as Error).message },
-        });
-        throw exc;
-      } finally {
-        activeVoiceQuestions.delete(sessionId);
-      }
-    };
-    if (defer) {
-      void answerAndAppend().catch((exc) => {
-        console.error(`[voice-chat] deferred answer failed: ${(exc as Error).message}`);
-      });
-      return c.json({
-        ok: true,
-        deferred: true,
-        sessionId,
-        question,
-        answer: "",
-        url: `/voice-chat?session=${encodeURIComponent(sessionId)}`,
-      });
-    }
-    const answer = await answerAndAppend();
-    return c.json({
-      ok: true,
-      sessionId,
-      question,
-      answer: answer.answer,
-      url: `/voice-chat?session=${encodeURIComponent(sessionId)}`,
-      llmStatus: answer.llmStatus,
-      usedFallback: answer.usedFallback,
-    });
   });
 
   app.all("/trpc/*", (c) => fetchRequestHandler({

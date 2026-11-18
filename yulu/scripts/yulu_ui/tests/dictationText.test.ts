@@ -11,7 +11,8 @@ const cleaned = "明天下午四点，讨论 AgentKey 的下一步。";
 function setup() {
   const config = defaultYuluConfig();
   config.transcription.engine = "xai";
-  config.intelligence.conversation = { provider: "xai", model: "selected-model" };
+  config.transcription.dictation.text_provider = "xai";
+  config.transcription.dictation.text_model = "selected-model";
   const request = vi.fn(async (_input: XaiTextRequest): Promise<XaiTextResult> => ({ text: cleaned, model: "selected-model", credentialSource: "oauth" }));
   const disclosure = vi.fn(() => true);
   const service = new DictationTextService({
@@ -60,23 +61,48 @@ describe("dictation cleanup", () => {
     expect(request.mock.calls[0]![0].input[0]!.content).not.toContain("Keep paragraph breaks.");
   });
 
-  it.each(["local", "disabled", "no_prompt", "none", "disclosure", "agent"])("does not send text when %s", async (reason) => {
+  it.each(["local", "disabled", "no_prompt", "none", "disclosure", "provider_off"])("does not send text when %s", async (reason) => {
     const { config, request, disclosure, service } = setup();
     if (reason === "local") config.transcription.engine = "local";
     if (reason === "disabled") config.transcription.dictation.cleanup_enabled = false;
     if (reason === "no_prompt") config.transcription.dictation.prompt_slug = "none";
     if (reason === "none") config.transcription.dictation.cleanup_level = "none";
     if (reason === "disclosure") disclosure.mockReturnValue(false);
-    if (reason === "agent") config.intelligence.conversation = { provider: "agent", model: "runtime-managed" };
+    if (reason === "provider_off") config.transcription.dictation.text_provider = "none";
     const text = original;
     await expect(service.clean({ text, context: "", timeoutMs: 500 }))
       .resolves.toMatchObject({ text, status: "unchanged" });
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("keeps dictated text on the Mac by default and never borrows the Summary selection", async () => {
+    const config = defaultYuluConfig();
+    expect(config.transcription.dictation).toMatchObject({ text_provider: "none", text_model: "grok-4.6" });
+    config.transcription.engine = "xai";
+    config.intelligence.summary = { provider: "xai", model: "summary-model" };
+    const request = vi.fn();
+    const service = new DictationTextService({
+      config: { read: () => config }, text: { request }, hasDisclosure: () => true,
+      credentialSource: () => "oauth", glossary: () => buildGlossaryContract([]),
+    });
+    await expect(service.clean({ text: original, context: "", timeoutMs: 500 }))
+      .resolves.toMatchObject({ text: original, status: "unchanged", reason: "provider_unavailable" });
+    await expect(service.translate({ text: original, targetLanguage: "English", timeoutMs: 500 }))
+      .rejects.toThrow(/尚未就绪/);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not translate without the accepted dictation disclosure or a credential source", async () => {
+    const { disclosure, request, service } = setup();
+    disclosure.mockReturnValue(false);
+    await expect(service.translate({ text: original, targetLanguage: "English", timeoutMs: 500 }))
+      .rejects.toThrow(/尚未就绪/);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("defaults to medium and casual while honoring an existing cleanup opt-out", () => {
     const { config } = setup();
-    expect(config.transcription.dictation).toMatchObject({ cleanup_level: "medium", style: "casual", cleanup_model: "conversation" });
+    expect(config.transcription.dictation).toMatchObject({ cleanup_level: "medium", style: "casual" });
     expect(dictationCleanupLevel({ cleanup_enabled: false })).toBe("none");
     expect(dictationCleanupLevel({ prompt_slug: "none" })).toBe("none");
   });
@@ -105,10 +131,10 @@ describe("dictation cleanup", () => {
     }
   });
 
-  it("pins an explicitly selected fast model independently of conversation, summary and cleanup level", async () => {
+  it("pins an explicitly selected fast model independently of summary and cleanup level", async () => {
     const { config, request, service } = setup();
     const before = structuredClone(config.intelligence);
-    config.transcription.dictation.cleanup_model = FAST_DICTATION_MODEL;
+    config.transcription.dictation.text_model = FAST_DICTATION_MODEL;
     for (const level of ["light", "medium", "heavy"] as const) {
       config.transcription.dictation.cleanup_level = level;
       request.mockResolvedValueOnce({ text: cleaned, model: FAST_DICTATION_MODEL, credentialSource: "oauth" });
@@ -119,9 +145,9 @@ describe("dictation cleanup", () => {
     expect(config.intelligence).toEqual(before);
   });
 
-  it.each(["failure", "model_changed", "credential_changed"])("keeps the original on fast model %s without trying the conversation model", async (reason) => {
+  it.each(["failure", "model_changed", "credential_changed"])("keeps the original on fast model %s without trying another model", async (reason) => {
     const { config, request, service } = setup();
-    config.transcription.dictation.cleanup_model = FAST_DICTATION_MODEL;
+    config.transcription.dictation.text_model = FAST_DICTATION_MODEL;
     if (reason === "failure") request.mockRejectedValueOnce(new Error("unavailable"));
     else if (reason === "model_changed") request.mockResolvedValueOnce({ text: cleaned, model: "other-model", credentialSource: "oauth" });
     else request.mockResolvedValueOnce({ text: cleaned, model: FAST_DICTATION_MODEL, credentialSource: "api-key" });

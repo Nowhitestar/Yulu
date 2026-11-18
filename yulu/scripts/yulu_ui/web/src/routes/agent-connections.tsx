@@ -11,12 +11,10 @@ export function LegacyAgentConnectionsRedirect() {
   return <Navigate to={`/settings/llm${search}`} replace />;
 }
 
-type Capability = "transcription" | "summary" | "conversation";
-/** Yulu no longer has a conversation surface, so only these are offered here. */
-type UsedCapability = Exclude<Capability, "conversation">;
-const USED_CAPABILITIES = ["transcription", "summary"] as const;
-const isUsed = (capability: string): capability is UsedCapability =>
-  (USED_CAPABILITIES as readonly string[]).includes(capability);
+const CAPABILITIES = ["transcription", "summary"] as const;
+type Capability = typeof CAPABILITIES[number];
+const isCapability = (capability: string): capability is Capability =>
+  (CAPABILITIES as readonly string[]).includes(capability);
 
 const SUPPORTED_RUNTIME_GUIDANCE = [
   { adapter: "codex", label: "Codex", command: "codex" },
@@ -64,7 +62,7 @@ function actionFailureReason(error: unknown): string {
 
 function readinessFailure(
   t: ReturnType<typeof useT>,
-  capability: UsedCapability,
+  capability: Capability,
   readiness: {
     model: string;
     credentialSource?: "oauth" | "api-key" | null;
@@ -147,7 +145,7 @@ export function AgentConnections() {
   const deletionImpact = trpc.agentConnections.deletionImpact.useMutation();
   const remove = trpc.agentConnections.remove.useMutation();
   const [apiKey, setApiKeyValue] = useState("");
-  const [modelDrafts, setModelDrafts] = useState<Partial<Record<UsedCapability, string>>>({});
+  const [modelDrafts, setModelDrafts] = useState<Partial<Record<Capability, string>>>({});
   const [agentModelDrafts, setAgentModelDrafts] = useState<Record<string, string>>({});
   const [acceptedSupportedDisclosures, setAcceptedSupportedDisclosures] = useState<Set<string>>(() => new Set());
   const [nativeLoginStarted, setNativeLoginStarted] = useState<string | null>(null);
@@ -159,7 +157,7 @@ export function AgentConnections() {
   const focusedRemediation = useRef<string | null>(null);
   const remediationConnection = searchParams.get("connection");
   const requestedCapability = searchParams.get("capability") ?? "";
-  const remediationCapability = isUsed(requestedCapability) ? requestedCapability : null;
+  const remediationCapability = isCapability(requestedCapability) ? requestedCapability : null;
   const remediationTargetId = remediationConnection && remediationCapability
     ? `agent-connection-${remediationConnection}-${remediationCapability}`
     : remediationConnection ? `agent-connection-${remediationConnection}`
@@ -253,12 +251,11 @@ export function AgentConnections() {
     ConnectionView,
     { adapter: "direct-xai" }
   > => item.adapter === "direct-xai");
-  // Conversation-only runtimes (Hermes, OpenClaw) have nothing to configure here.
   const supportedAgentConnections = view.data.connections.filter((item): item is Extract<
     ConnectionView,
     { adapter: "codex" | "claude-code" }
   > => item.adapter === "codex" || item.adapter === "claude-code");
-  const candidates = view.data.candidates.filter((candidate) => candidate.capabilities.some(isUsed));
+  const candidates = view.data.candidates;
   const deletionConnection = impact
     ? view.data.connections.find((item) => item.id === impact.connectionId)
     : undefined;
@@ -293,7 +290,7 @@ export function AgentConnections() {
       </header>
 
       <div className="agent-usage-list" aria-label={t("agentConnections.usage")}>
-        {USED_CAPABILITIES.map((capability) => {
+        {CAPABILITIES.map((capability) => {
           const selection = view.data.selections[capability];
           const selected = view.data.connections.find((item) => item.id === selection.connectionId);
           const readiness = selected?.capabilities.find((item) => item.capability === capability)?.currentReadiness;
@@ -496,7 +493,6 @@ export function AgentConnections() {
           <div className="agent-connection-capabilities">
             {connection.capabilities.map((item) => {
               const capability = item.capability;
-              if (!isUsed(capability)) return null;
               const testing = probe.isPending && probe.variables?.capability === capability;
               const history = item.readinessHistory[0];
               const model = modelDrafts[capability] ?? item.currentReadiness.model;
@@ -699,9 +695,8 @@ export function AgentConnections() {
             <div className="agent-connection-capabilities">
               {agent.capabilities.map((item) => {
                 const capability = item.capability;
-                if (!isUsed(capability)) return null;
                 const modelKey = `${agent.id}:${capability}`;
-                const configuredModel = agent.settings.summaryModel ?? agent.settings.conversationModel;
+                const configuredModel = agent.settings.summaryModel;
                 const model = agentModelDrafts[modelKey] ?? configuredModel;
                 const testing = probe.isPending && probe.variables?.connectionId === agent.id &&
                   probe.variables.capability === capability;
@@ -833,7 +828,7 @@ export function AgentConnections() {
             <p>{t("agentConnections.candidates.notReady")}</p>
             <dl>
               <div><dt>{t("agentConnections.detectedPath")}</dt><dd><code>{candidate.detectedPath ?? t("agentConnections.migrated")}</code></dd></div>
-              <div><dt>{t("agentConnections.declaredCapabilities")}</dt><dd>{candidate.capabilities.filter(isUsed).map((item) => capabilityLabel(t, item)).join(" · ")}</dd></div>
+              <div><dt>{t("agentConnections.declaredCapabilities")}</dt><dd>{candidate.capabilities.map((item) => capabilityLabel(t, item)).join(" · ")}</dd></div>
             </dl>
             {(candidate.adapter === "codex" || candidate.adapter === "claude-code") && candidate.detectedPath && (
               <div className="agent-connection-candidate-action">
@@ -921,7 +916,7 @@ export function AgentConnections() {
             <h2 id="delete-agent-connection-title">{t("agentConnections.delete.title", { name: deletionConnection.label })}</h2>
             <p id="delete-agent-connection-body">{t("agentConnections.delete.body")}</p>
             <p>{t("agentConnections.delete.selected", {
-              capabilities: impact.selectedCapabilities.filter(isUsed).map((item) => capabilityLabel(t, item)).join(" · ") || t("agentConnections.none"),
+              capabilities: impact.selectedCapabilities.map((item) => capabilityLabel(t, item)).join(" · ") || t("agentConnections.none"),
             })}</p>
             {impact.pinnedTasks.length > 0 && <>
               <h3>{t("agentConnections.delete.tasks")}</h3>

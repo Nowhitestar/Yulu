@@ -14,7 +14,8 @@ function setup() {
   let clock = 0;
   const config = defaultYuluConfig();
   config.transcription.engine = "xai";
-  config.intelligence.conversation = { provider: "xai", model: "chosen" };
+  config.transcription.dictation.text_provider = "xai";
+  config.transcription.dictation.text_model = "chosen";
   const request = vi.fn(async (_request: XaiTextRequest): Promise<XaiTextResult> => ({ text: edited, model: "chosen", credentialSource: "oauth" }));
   const disclosure = vi.fn(() => true);
   const glossary = vi.fn(() => buildGlossaryContract([]));
@@ -149,7 +150,7 @@ describe("pause-time dictation cleanup", () => {
   it.each(["model", "style", "level", "glossary", "disabled", "disclosure"])("invalidates the preview after %s changes", async (change) => {
     const { preview, observe, clean, request, config, glossary, disclosure } = setup();
     observe();
-    if (change === "model") config.transcription.dictation.cleanup_model = "grok-4.20-0309-non-reasoning";
+    if (change === "model") config.transcription.dictation.text_model = "grok-4.20-0309-non-reasoning";
     if (change === "style") config.transcription.dictation.style = "formal";
     if (change === "level") config.transcription.dictation.cleanup_level = "heavy";
     if (change === "glossary") glossary.mockReturnValue(buildGlossaryContract([{ term: "方案", canonical: "提案", scope: "both" }]));

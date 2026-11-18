@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CLAUDE_CODE_MINIMUM_VERSION,
   ClaudeCodeAdapter,
-  ClaudeCodeConversationError,
+  ClaudeCodeRunError,
   type ClaudeCodeRuntimeClient,
 } from "../src/claudeCodeAdapter.js";
 
@@ -93,7 +93,7 @@ describe("Claude Code adapter conformance", () => {
         authorizationClass: "api-key" as const,
         authorizationMethod: "api_key",
         apiProvider: "firstParty",
-        features: [...SUPPORTED_FEATURES],
+        features: [...SUMMARY_SUPPORTED_FEATURES],
       })),
     });
     const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
@@ -103,19 +103,19 @@ describe("Claude Code adapter conformance", () => {
       authorizationClass: "api-key",
       remediation: "Claude Code API-key login cannot be used as Runtime-owned OAuth; run /fake/claude auth login and choose a Claude subscription, then refresh this connection",
     });
-    await expect(adapter.probe({ model: "claude-sonnet-5" })).resolves.toEqual({
+    await expect(adapter.probeSummary({ model: "claude-sonnet-5" })).resolves.toEqual({
       status: "failed",
       reason: "authorization_required",
-      remediation: "Claude Code API-key login cannot be used as Runtime-owned OAuth; run /fake/claude auth login and choose a Claude subscription, then test Conversation again",
+      remediation: "Claude Code API-key login cannot be used as Runtime-owned OAuth; run /fake/claude auth login and choose a Claude subscription, then test Summary again",
     });
     expect(runtime.runConversation).not.toHaveBeenCalled();
   });
 
-  it("runs a bounded tool-free Conversation probe and returns exact redacted Runtime Evidence", async () => {
+  it("runs a bounded tool-free Summary probe and returns exact redacted Runtime Evidence", async () => {
     const runtime = client();
     const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
 
-    await expect(adapter.probe({ model: "claude-sonnet-5" })).resolves.toEqual({
+    await expect(adapter.probeSummary({ model: "claude-sonnet-5" })).resolves.toEqual({
       status: "ready",
       reason: null,
       remediation: null,
@@ -124,9 +124,9 @@ describe("Claude Code adapter conformance", () => {
         transport: "claude-code-print-stream-json",
         runtimeVersion: "2.1.169",
         authorizationClass: "claude-subscription",
-        requestedProvider: null,
+        requestedProvider: "firstParty",
         requestedModel: "claude-sonnet-5",
-        actualProvider: null,
+        actualProvider: "firstParty",
         actualModel: "claude-sonnet-5",
         requestId: "request-136",
         sessionId: "019f0000-0000-7000-8000-000000000136",
@@ -140,6 +140,7 @@ describe("Claude Code adapter conformance", () => {
       model: "claude-sonnet-5",
       prompt: "Reply with exactly YULU_CLAUDE_PROBE_OK and do not use tools.",
       probe: true,
+      toolFree: true,
       timeoutMs: 30_000,
     });
   });
@@ -152,12 +153,12 @@ describe("Claude Code adapter conformance", () => {
     });
     const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
 
-    await expect(adapter.probe({ model: "claude-sonnet-5" })).resolves.toMatchObject({
+    await expect(adapter.probeSummary({ model: "claude-sonnet-5" })).resolves.toMatchObject({
       status: "failed",
       reason: "unknown_outcome",
       evidence: {
         adapter: "claude-code",
-        requestedProvider: null,
+        requestedProvider: "firstParty",
         requestedModel: "claude-sonnet-5",
         actualProvider: null,
         actualModel: null,
@@ -251,7 +252,7 @@ describe("Claude Code adapter conformance", () => {
     expect(runConversation).not.toHaveBeenCalled();
   });
 
-  it("supports Claude 2.1.210 Conversation without --max-turns when single-result print is proven", async () => {
+  it("supports Claude 2.1.210 without --max-turns when single-result print is proven", async () => {
     const runtime = client({
       inspect: vi.fn(async () => ({
         runtimeVersion: "2.1.210",
@@ -355,6 +356,8 @@ describe("Claude Code adapter conformance", () => {
     ["missing terminal result identity", { requestId: null }, /result identity/i],
     ["tool use", { toolCalls: ["Bash"] }, /tool call/i],
     ["model fallback", { actualModel: "claude-fallback", fallbackOccurred: true }, /fallback identity/i],
+    ["missing model identity", { actualModel: "" }, /model, session, or fallback identity/i],
+    ["missing session identity", { nativeSessionId: "" }, /model, session, or fallback identity/i],
     ["invalid output", { answer: "bad\0summary" }, /invalid output/i],
   ])("rejects Summary %s before output can be committed", async (_label, overrides, error) => {
     const runtime = client({
@@ -404,41 +407,6 @@ describe("Claude Code adapter conformance", () => {
     });
   });
 
-  it("creates and resumes only the exact pinned Claude session without fallback", async () => {
-    const runtime = client();
-    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
-
-    await expect(adapter.converse({
-      model: "claude-sonnet-5",
-      prompt: "First turn",
-    })).resolves.toMatchObject({
-      answer: "Pinned answer",
-      nativeSessionId: "019f0000-0000-7000-8000-000000000136",
-      usedFallback: false,
-      evidence: {
-        requestedModel: "claude-sonnet-5",
-        actualModel: "claude-sonnet-5",
-        sessionId: "019f0000-0000-7000-8000-000000000136",
-        fallbackOccurred: false,
-      },
-    });
-    await expect(adapter.converse({
-      model: "claude-sonnet-5",
-      prompt: "Second turn",
-      nativeSessionId: "019f0000-0000-7000-8000-000000000136",
-    })).resolves.toMatchObject({
-      nativeSessionId: "019f0000-0000-7000-8000-000000000136",
-    });
-    expect(runtime.runConversation).toHaveBeenNthCalledWith(2, {
-      model: "claude-sonnet-5",
-      prompt: "Second turn",
-      probe: false,
-      timeoutMs: 300_000,
-      nativeSessionId: "019f0000-0000-7000-8000-000000000136",
-    });
-    expect(ClaudeCodeConversationError).toBeTypeOf("function");
-  });
-
   it.each([
     ["unsupported_runtime", "2.1.168", true],
     ["authorization_required", "2.1.169", false],
@@ -451,13 +419,13 @@ describe("Claude Code adapter conformance", () => {
         authorizationClass: authorized ? "claude-subscription" as const : null,
         authorizationMethod: authorized ? "claude.ai" : null,
         apiProvider: authorized ? "firstParty" : null,
-        features: [...SUPPORTED_FEATURES],
+        features: [...SUMMARY_SUPPORTED_FEATURES],
       })),
       runConversation,
     });
     const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
 
-    await expect(adapter.probe({ model: "claude-sonnet-5" })).resolves.toMatchObject({
+    await expect(adapter.probeSummary({ model: "claude-sonnet-5" })).resolves.toMatchObject({
       status: "failed",
       reason,
     });
@@ -475,14 +443,14 @@ describe("Claude Code adapter conformance", () => {
           authorizationClass: "claude-subscription" as const,
           authorizationMethod: "claude.ai",
           apiProvider: "firstParty",
-          features: SUPPORTED_FEATURES.filter((feature) => feature !== missingFeature),
+          features: SUMMARY_SUPPORTED_FEATURES.filter((feature) => feature !== missingFeature),
         })),
         runConversation,
       });
       const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
 
       await expect(adapter.status()).resolves.toMatchObject({ supported: false });
-      await expect(adapter.probe({ model: "claude-sonnet-5" })).resolves.toMatchObject({
+      await expect(adapter.probeSummary({ model: "claude-sonnet-5" })).resolves.toMatchObject({
         status: "failed",
         reason: "unsupported_runtime",
       });
@@ -490,38 +458,7 @@ describe("Claude Code adapter conformance", () => {
     },
   );
 
-  it.each([
-    ["model fallback", { actualModel: "claude-fallback", fallbackOccurred: true }],
-    ["missing model identity", { actualModel: "" }],
-    ["different resumed session", { nativeSessionId: "019f0000-0000-7000-8000-000000000999" }],
-  ])("rejects %s instead of accepting a Conversation fallback", async (_label, overrides) => {
-    const runtime = client({
-      runConversation: vi.fn(async () => ({
-        runtimeVersion: "2.1.169",
-        answer: "must be rejected",
-        nativeSessionId: "019f0000-0000-7000-8000-000000000136",
-        actualModel: "claude-sonnet-5",
-        requestId: "request-136",
-        fallbackOccurred: false,
-        toolCalls: [],
-        terminalStatus: "completed" as const,
-        ...overrides,
-      })),
-    });
-    const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
-
-    await expect(adapter.converse({
-      model: "claude-sonnet-5",
-      prompt: "Continue",
-      nativeSessionId: "019f0000-0000-7000-8000-000000000136",
-    })).rejects.toMatchObject({
-      name: "ClaudeCodeConversationError",
-      unknownOutcome: false,
-      evidence: { fallbackOccurred: "fallbackOccurred" in overrides ? overrides.fallbackOccurred : false },
-    });
-  });
-
-  it("preserves exact evidence and native session when a Conversation outcome is unknown", async () => {
+  it("preserves exact evidence and native session when a Summary outcome is unknown", async () => {
     const nativeSessionId = "019f0000-0000-7000-8000-000000000888";
     const runtime = client({
       runConversation: vi.fn(async () => ({
@@ -529,9 +466,11 @@ describe("Claude Code adapter conformance", () => {
         answer: "",
         nativeSessionId,
         actualModel: "claude-sonnet-5",
+        actualProvider: "firstParty",
         requestId: "request-unknown-136",
         fallbackOccurred: false,
         toolCalls: [],
+        isolationProven: true,
         terminalStatus: "unknown" as const,
         cancellationRequested: true,
         cancellationConfirmed: false,
@@ -539,11 +478,14 @@ describe("Claude Code adapter conformance", () => {
     });
     const adapter = new ClaudeCodeAdapter({ executable: "/fake/claude", client: runtime });
 
-    await expect(adapter.converse({
+    const summary = adapter.summarize({
       model: "claude-sonnet-5",
-      prompt: "First turn",
-    })).rejects.toMatchObject({
-      name: "ClaudeCodeConversationError",
+      instructions: "Selected instructions.",
+      transcript: "Committed transcript.",
+    });
+    await expect(summary).rejects.toBeInstanceOf(ClaudeCodeRunError);
+    await expect(summary).rejects.toMatchObject({
+      name: "ClaudeCodeRunError",
       nativeSessionId,
       unknownOutcome: true,
       evidence: {

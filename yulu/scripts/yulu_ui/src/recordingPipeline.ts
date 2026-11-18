@@ -54,8 +54,8 @@ import {
   type SupportedAgentSummaryAdapter,
   type SupportedAgentSummaryGateway,
 } from "./summaryProviderReadiness.js";
-import { CodexConversationError } from "./codexAgentAdapter.js";
-import { ClaudeCodeConversationError } from "./claudeCodeAdapter.js";
+import { CodexRunError } from "./codexAgentAdapter.js";
+import { ClaudeCodeRunError } from "./claudeCodeAdapter.js";
 
 const REC_FILE_RE = /^(.+?)_(\d{8})_(\d{6})\.wav$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -984,14 +984,14 @@ export class RecordingPipeline {
         }
         this.publish(task, "failed", unknown.error ?? error.message);
         return true;
-      } else if (error instanceof ClaudeCodeConversationError && error.unknownOutcome) {
+      } else if (error instanceof ClaudeCodeRunError && error.unknownOutcome) {
         const unknown = this.options.store.markSummaryUnknownOutcome(task.id, leaseToken, {
           nativeSessionId: error.nativeSessionId,
           runtimeEvidence: error.evidence,
         });
         this.publish(task, "failed", unknown.error ?? error.message);
         return true;
-      } else if (error instanceof CodexConversationError && error.unknownOutcome) {
+      } else if (error instanceof CodexRunError && error.unknownOutcome) {
         const unknown = this.options.store.markSummaryUnknownOutcome(task.id, leaseToken, {
           nativeSessionId: error.nativeSessionId,
           runtimeEvidence: error.evidence,

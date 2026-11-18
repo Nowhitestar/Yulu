@@ -12,7 +12,7 @@ import type { XaiCredentialSource } from "../xaiCredentials.js";
 import type { AppContext } from "../trpc.js";
 import { publicProcedure, router, uiMutationProcedure } from "../trpc.js";
 
-export type XaiCapability = "transcription" | "summary" | "conversation";
+export type XaiCapability = "transcription" | "summary";
 export type XaiReadinessStatus = "untested" | "testing" | "ready" | "failed";
 export type XaiReadinessFailureReason =
   | "invalid_model"
@@ -53,7 +53,7 @@ function services(ctx: AppContext) {
 
 function configuredModel(ctx: AppContext, capability: XaiCapability): string {
   if (capability === "transcription") return "speech-to-text";
-  const selection = ctx.config.read().intelligence[capability];
+  const selection = ctx.config.read().intelligence.summary;
   return selection.provider === "xai" ? selection.model : XAI_TEXT_MODEL_DEFAULT;
 }
 
@@ -73,7 +73,7 @@ function projection(
   readiness: XaiProviderReadiness,
   source: XaiCredentialSource | null,
 ): Record<XaiCapability, XaiReadinessResult> {
-  return Object.fromEntries((["transcription", "summary", "conversation"] as const).map((capability) => {
+  return Object.fromEntries((["transcription", "summary"] as const).map((capability) => {
     const model = configuredModel(ctx, capability);
     const current = readiness.get(capability);
     const result = current?.model === model && current.credentialSource === source
@@ -88,7 +88,7 @@ function clearReadiness(ctx: AppContext): void {
 }
 
 const ProbeInput = z.object({
-  capability: z.enum(["transcription", "summary", "conversation"]),
+  capability: z.enum(["transcription", "summary"]),
 }).strict();
 
 const DataPathDisclosureInput = z.object({
@@ -223,15 +223,10 @@ export const providersRouter = router({
         const result = await text.request({
           capability,
           model,
-          input: capability === "summary"
-            ? [
-                { role: "system", content: "Return one short acknowledgement." },
-                { role: "user", content: "Yulu xAI summary capability probe." },
-              ]
-            : [
-                { role: "system", content: "Return one short acknowledgement." },
-                { role: "user", content: "Yulu xAI conversation capability probe." },
-              ],
+          input: [
+            { role: "system", content: "Return one short acknowledgement." },
+            { role: "user", content: "Yulu xAI summary capability probe." },
+          ],
           maxOutputTokens: 32,
         });
         credentialSource = result.credentialSource;

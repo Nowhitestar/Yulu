@@ -2,7 +2,6 @@ import type { XaiCredentialManager, XaiCredentialSource } from "./xaiCredentials
 
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
 const SUMMARY_REQUEST_TIMEOUT_MS = 180_000;
-const CONVERSATION_REQUEST_TIMEOUT_MS = 30_000;
 export const DICTATION_TEXT_TIMEOUT_MS = 20_000;
 const MAX_INPUT_BYTES = 1_000_000;
 const MAX_INPUT_MESSAGES = 64;
@@ -11,7 +10,7 @@ const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_OUTPUT_CHARS = 131_072;
 const OUTPUT_LIMIT_ERROR = "xAI text response exceeded the output limit";
 
-export type XaiTextCapability = "summary" | "conversation" | "dictation";
+export type XaiTextCapability = "summary" | "dictation";
 
 export interface XaiTextMessage {
   role: "system" | "user" | "assistant";
@@ -212,8 +211,8 @@ export class XaiTextClient {
 
   async request(request: XaiTextRequest): Promise<XaiTextResult> {
     const { model, maxOutputTokens } = validateRequest(request);
-    const defaultTimeout = request.capability === "summary" ? SUMMARY_REQUEST_TIMEOUT_MS
-      : request.capability === "dictation" ? DICTATION_TEXT_TIMEOUT_MS : CONVERSATION_REQUEST_TIMEOUT_MS;
+    const defaultTimeout = request.capability === "summary"
+      ? SUMMARY_REQUEST_TIMEOUT_MS : DICTATION_TEXT_TIMEOUT_MS;
     const timeoutMs = request.timeoutMs ?? defaultTimeout;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > defaultTimeout) {
       throw new Error("xAI text timeout is invalid");

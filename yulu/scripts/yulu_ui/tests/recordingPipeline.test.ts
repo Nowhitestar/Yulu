@@ -10,8 +10,8 @@ import { RecordingPipeline, agentRetryDelayMs } from "../src/recordingPipeline.j
 import { AgentUnavailableError, type RecordingAgentGateway } from "../src/agentGateway.js";
 import { ClaudeCodeSummaryUnknownOutcomeError } from "../src/summaryProviderReadiness.js";
 import { paths } from "../src/paths.js";
-import { CodexConversationError } from "../src/codexAgentAdapter.js";
-import { ClaudeCodeConversationError } from "../src/claudeCodeAdapter.js";
+import { CodexRunError } from "../src/codexAgentAdapter.js";
+import { ClaudeCodeRunError } from "../src/claudeCodeAdapter.js";
 import { XaiTextUnknownOutcomeError } from "../src/xaiText.js";
 import { activationRouter } from "../src/routers/activation.js";
 import { createCaller, type AppContext } from "../src/trpc.js";
@@ -124,7 +124,6 @@ describe("RecordingPipeline", () => {
       ...(opts.supportedAgentAdapter ? {
         intelligence: {
           summary: { provider: "agent", connectionId: supportedAgentProvider, model: "runtime-managed" },
-          conversation: { provider: "agent", model: "runtime-managed" },
         },
       } : {}),
       llm: { enabled: true, agent: { provider: "hermes" } },
@@ -236,7 +235,7 @@ describe("RecordingPipeline", () => {
       provider: supportedAgentProvider,
       runArtifactWorkflow: async (input: Parameters<RecordingAgentGateway["runArtifactWorkflow"]>[0]) => {
         if (opts.supportedAgentUnknownWithoutSession) {
-          throw new ClaudeCodeConversationError(
+          throw new ClaudeCodeRunError(
             "Claude Code Summary outcome is unknown without an observable native session",
             {
               unknownOutcome: true,
@@ -261,7 +260,7 @@ describe("RecordingPipeline", () => {
         }
         if (opts.supportedAgentUnknownOutcome) {
           if (supportedAgentProvider === "codex") {
-            throw new CodexConversationError(
+            throw new CodexRunError(
               "Codex Summary entered Unknown Outcome; inspect the native session before a new attempt",
               {
                 nativeSessionId: "unknown-thread-141",

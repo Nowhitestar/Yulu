@@ -10,11 +10,8 @@ import { logsRouter }       from "./logs.js";
 import { recordingRouter }  from "./recording.js";
 import { systemRouter }     from "./system.js";
 import { integrationsRouter } from "./integrations.js";
-import { askRouter }          from "./ask.js";
 import { doctorRouter }       from "./doctor.js";
 import { schedulerRouter }    from "./scheduler.js";
-import { agentConsoleRouter } from "./agentConsole.js";
-import { agentSessionsRouter } from "./agentSessions.js";
 import { agentTasksRouter } from "./agentTasks.js";
 import { localCaptionRouter } from "./localCaption.js";
 import { xaiAudioRouter } from "./xaiAudio.js";
@@ -23,7 +20,7 @@ import { activationRouter } from "./activation.js";
 import { agentConnectionsRouter } from "./agentConnections.js";
 import { sharingRouter } from "./sharing.js";
 import { onboardingRouter } from "./onboarding.js";
-import { agentCalendarConnectorRouter } from "./agentCalendarConnector.js";
+import { dictationTextRouter } from "./dictationText.js";
 import { permissionsRouter } from "./permissions.js";
 import { mcpAgentsRouter } from "./mcpAgents.js";
 
@@ -39,11 +36,8 @@ export const appRouter = router({
   recording:    recordingRouter,
   system:       systemRouter,
   integrations: integrationsRouter,
-  ask:          askRouter,
   doctor:       doctorRouter,
   scheduler:    schedulerRouter,
-  agentConsole: agentConsoleRouter,
-  agentSessions: agentSessionsRouter,
   agentTasks: agentTasksRouter,
   localCaption: localCaptionRouter,
   xaiAudio: xaiAudioRouter,
@@ -52,7 +46,7 @@ export const appRouter = router({
   agentConnections: agentConnectionsRouter,
   sharing: sharingRouter,
   onboarding: onboardingRouter,
-  agentCalendarConnector: agentCalendarConnectorRouter,
+  dictationText: dictationTextRouter,
   permissions: permissionsRouter,
   mcpAgents: mcpAgentsRouter,
 });

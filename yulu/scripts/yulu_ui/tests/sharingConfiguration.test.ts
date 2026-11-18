@@ -238,9 +238,9 @@ describe("SharingConfiguration", () => {
 
     expect(sharing.view().connections.map((connection) => connection.id)).toEqual(["codex"]);
     expect(() => sharing.select({ connectionId: "openclaw", connector: "notion" }))
-      .toThrow(/Conversation-only/);
+      .toThrow(/cannot be selected for Sharing connectors/);
     expect(() => sharing.select({ connectionId: "hermes", connector: "notion" }))
-      .toThrow(/Conversation-only/);
+      .toThrow(/cannot be selected for Sharing connectors/);
   });
 
   it("keeps destination discovery distinct from a bounded Connector Readiness probe", async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_MINIMUM_VERSION,
   CodexAgentAdapter,
-  CodexConversationError,
+  CodexRunError,
   CodexRuntimePreDispatchError,
   type CodexRuntimeClient,
 } from "../src/codexAgentAdapter.js";
@@ -323,7 +323,7 @@ describe("Codex Agent adapter conformance", () => {
       instructions: "Only selected instructions.",
       transcript: "Only committed transcript.",
     })).rejects.toMatchObject({
-      name: "CodexConversationError",
+      name: "CodexRunError",
       nativeSessionId: undefined,
       unknownOutcome: true,
       evidence: expect.objectContaining({
@@ -415,7 +415,7 @@ describe("Codex Agent adapter conformance", () => {
     const adapter = new CodexAgentAdapter({ executable: "/fake/codex", client: runtime });
 
     await expect(adapter.converse({ model: "gpt-5.6-sol", prompt: "first" })).rejects.toMatchObject({
-      name: "CodexConversationError",
+      name: "CodexRunError",
       nativeSessionId: "019f0000-0000-7000-8000-000000000777",
       unknownOutcome: true,
       evidence: expect.objectContaining({
@@ -425,6 +425,6 @@ describe("Codex Agent adapter conformance", () => {
         cancellationConfirmed: false,
       }),
     });
-    expect(CodexConversationError).toBeTypeOf("function");
+    expect(CodexRunError).toBeTypeOf("function");
   });
 });

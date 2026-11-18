@@ -6,9 +6,7 @@ import type {
 
 export type OnboardingReadinessState = "ready" | "needs_attention" | "not_tested" | "unavailable";
 export type OnboardingCapabilityId =
-  | "conversation"
   | "calendar-source"
-  | "agent-calendar-connector"
   | "sharing";
 
 export interface OnboardingCapabilityReadiness {
@@ -27,21 +25,14 @@ export interface OnboardingManifest {
 
 export const CURRENT_ONBOARDING_MANIFEST: OnboardingManifest = {
   version: "phase-13-v1",
+  // Conversation and the Agent Calendar Connector were retired by ADR-010.
+  // The version is unchanged: nothing was added, so existing completions stand
+  // and a user who had only the retired steps left is now complete.
   optionalCapabilities: [
-    {
-      id: "conversation",
-      contractVersion: "conversation-v1",
-      href: "/settings/llm?capability=conversation",
-    },
     {
       id: "calendar-source",
       contractVersion: "calendar-source-v1",
       href: "/settings/integrations",
-    },
-    {
-      id: "agent-calendar-connector",
-      contractVersion: "agent-calendar-connector-v1",
-      href: "/settings/integrations#agent-calendar-connector",
     },
     {
       id: "sharing",

@@ -138,7 +138,8 @@ describe("RealtimeTranscriptionCoordinator", () => {
     const raw = "嗯，明天四点讨论方案。";
     const config = defaultYuluConfig();
     config.transcription.engine = "xai";
-    config.intelligence.conversation = { provider: "xai", model: "selected" };
+    config.transcription.dictation.text_provider = "xai";
+    config.transcription.dictation.text_model = "selected";
     const request = vi.fn(async () => ({ text: "明天四点讨论方案。", model: "selected", credentialSource: "oauth" as const }));
     const preview = new DictationPreview(new DictationTextService({ config: { read: () => config }, text: { request },
       credentialSource: () => "oauth", hasDisclosure: () => true, glossary: () => buildGlossaryContract([]) }));

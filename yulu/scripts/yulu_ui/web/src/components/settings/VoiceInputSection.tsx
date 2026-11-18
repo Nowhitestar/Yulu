@@ -16,6 +16,9 @@ export interface VoiceInputSectionProps {
 export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
   const { data: cfg } = trpc.config.get.useQuery();
   const { data: daemons } = trpc.daemons.health.useQuery(undefined, { refetchInterval: 5_000 });
+  const dictationText = trpc.dictationText.status.useQuery();
+  const acceptDictationTextDisclosure = trpc.dictationText.acceptDisclosure.useMutation();
+  const utils = trpc.useUtils();
   const { commit, isBlocked } = useConfigField(tracker);
   const t = useT();
   const { showError } = useUndoToast();
@@ -98,8 +101,12 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
         <div className="row-status" />
       </div>
       <DictationSettings preferences={dictation}
-        available={cfg.transcription.engine === "xai" && cfg.intelligence?.conversation?.provider === "xai"}
-        onCommit={(path, value) => commit(path)(value)} />
+        text={dictationText.data}
+        onCommit={async (path, value) => {
+          await commit(path)(value);
+          await utils.dictationText.status.invalidate();
+        }}
+        onAcceptDisclosure={() => acceptDictationTextDisclosure.mutateAsync()} />
     </section>
   );
 }

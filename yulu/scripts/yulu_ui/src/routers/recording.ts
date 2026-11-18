@@ -13,8 +13,6 @@ interface StatusReply {
   launcher_pid?: number;
   dictation_active?: boolean;
   dictation_intent?: string;
-  voice_chat_window_visible?: boolean;
-  voice_chat_window_url?: string;
 }
 interface ToggleReply { ok: boolean; error?: string; state_before?: string; state_after?: string; }
 
@@ -232,8 +230,6 @@ export const recordingRouter = router({
         launcherPid: r.launcher_pid,
         dictationActive: Boolean(r.dictation_active),
         dictationIntent: r.dictation_intent,
-        voiceChatWindowVisible: Boolean(r.voice_chat_window_visible),
-        voiceChatWindowUrl: r.voice_chat_window_url,
       };
     } catch {
       return {
@@ -243,8 +239,6 @@ export const recordingRouter = router({
         launcherPid: undefined,
         dictationActive: false,
         dictationIntent: undefined,
-        voiceChatWindowVisible: false,
-        voiceChatWindowUrl: undefined,
       };
     }
   }),
@@ -268,11 +262,6 @@ export const recordingRouter = router({
       });
       return commandResult(ctx, r);
     }),
-
-  voiceChat: publicProcedure.mutation(async ({ ctx }) => {
-    const r = await ipcSend<ToggleReply>(ctx.paths.statusAgentSock, { action: "voice_chat" });
-    return commandResult(ctx, r);
-  }),
 
   previewSound: publicProcedure.mutation(async ({ ctx }) => {
     const r = await ipcSend<{ ok: boolean; enabled?: boolean }>(ctx.paths.statusAgentSock, { action: "preview_sound" });

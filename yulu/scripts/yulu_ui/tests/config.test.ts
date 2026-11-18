@@ -4,6 +4,7 @@ import {
   ConfigSchema,
   XAI_TEXT_MODEL_DEFAULT,
   migrateLegacyTranscriptionConfig,
+  migrateRetiredConversationConfig,
   migrateRetiredGatewaySelections,
 } from "../src/config.js";
 import * as fs from "node:fs";
@@ -64,9 +65,10 @@ describe("ConfigManager", () => {
       expect(cfg.audio.output_dir).toBe("~/Movies/Yulu");
       expect(cfg.transcription.language).toBe("zh");
       expect(cfg.transcription.engine).toBe("local");
-      expect(cfg.intelligence.summary).toEqual({ provider: "agent", model: "runtime-managed" });
-      expect(cfg.intelligence.conversation).toEqual({ provider: "agent", model: "runtime-managed" });
+      expect(cfg.intelligence).toEqual({ summary: { provider: "agent", model: "runtime-managed" } });
       expect(XAI_TEXT_MODEL_DEFAULT).toBe("grok-4.6");
+      expect(cfg.transcription.dictation.text_provider).toBe("none");
+      expect(cfg.transcription.dictation.text_model).toBe(XAI_TEXT_MODEL_DEFAULT);
       expect(cfg.transcription.dictation.prompt_slug).toBe("dictation-cleanup");
       expect(cfg.transcription.dictation.timeout_sec).toBe(30);
       expect(cfg.transcription.dictation.deadline_sec).toBe(30);
@@ -103,8 +105,8 @@ describe("ConfigManager", () => {
       const cfg = new ConfigManager(path).read();
       expect(cfg.agent_pipeline).not.toHaveProperty("auto_send_notion");
       expect(cfg.agent_pipeline.notion_destination).toBe("Meetings DB");
-      expect(cfg.agent_console.destinations.hermes?.notion.target).toBe("Meetings DB");
       const raw = JSON.parse(readFileSync(path, "utf8"));
+      expect(raw.agent_console).toBeUndefined();
       expect(raw.output).toBeUndefined();
       expect(raw.connectors.notion).toBeUndefined();
       expect(raw.connectors.zulip).toBeUndefined();
@@ -158,7 +160,6 @@ describe("ConfigManager", () => {
       audio: { output_dir: "~/Movies/Yulu" },
       intelligence: {
         summary: { provider: "agent", connectionId: "cliproxyapi", model: "retired-model" },
-        conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
       },
     }));
     try {
@@ -170,11 +171,7 @@ describe("ConfigManager", () => {
         model: "runtime-managed",
         disabled: true,
       });
-      expect(active.intelligence.conversation).toEqual({
-        provider: "agent",
-        connectionId: "codex",
-        model: "gpt-5.6-sol",
-      });
+      expect(active.intelligence).toEqual({ summary: active.intelligence.summary });
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -293,7 +290,7 @@ describe("ConfigManager", () => {
     } finally { cleanup(); }
   });
 
-  it("updates summary and conversation selections independently", () => {
+  it("updates the summary selection without touching audio or dictation text", () => {
     const { mgr, cleanup } = makeCfg();
     try {
       expect(mgr.update("intelligence.summary", {
@@ -303,7 +300,7 @@ describe("ConfigManager", () => {
 
       const cfg = mgr.read();
       expect(cfg.intelligence.summary).toEqual({ provider: "xai", model: "grok-4.6-fast" });
-      expect(cfg.intelligence.conversation).toEqual({ provider: "agent", model: "runtime-managed" });
+      expect(cfg.transcription.dictation.text_provider).toBe("none");
       expect(cfg.transcription.engine).toBe("local");
     } finally { cleanup(); }
   });
