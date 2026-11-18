@@ -29,32 +29,23 @@ function activationEvidence() {
   };
 }
 
-function conversationEvidence() {
+function calendarSourceEvidence() {
   return {
-    kind: "agent-capability-probe",
-    reference: "conversation-proof-1",
+    kind: "calendar-source-probe",
+    reference: `calendar-source:${"d".repeat(64)}:2026-08-29T02:00:00.000Z`,
     snapshot: {
-      capability: "conversation" as const,
-      connectionId: "codex",
-      adapter: "codex",
-      provider: "codex",
-      model: "gpt-5.6-sol",
-      credentialSource: "runtime-oauth" as const,
-      testedAt: "2026-08-29T00:10:00.000Z",
-      runtimeEvidence: {
-        adapter: "codex",
-        transport: "codex-app-server-stdio",
-        runtimeVersion: "0.144.4",
-        authorizationClass: "chatgpt" as const,
-        requestedProvider: "openai",
-        requestedModel: "gpt-5.6-sol",
-        actualProvider: "openai",
-        actualModel: "gpt-5.6-sol",
-        requestId: "turn-154",
-        sessionId: "thread-154",
-        terminalStatus: "ready" as const,
-        fallbackOccurred: false,
+      capability: "calendar-source" as const,
+      source: "macos" as const,
+      adapter: "eventkit" as const,
+      selectionFingerprint: "d".repeat(64),
+      accessGranted: true as const,
+      enumerationSucceeded: true as const,
+      eventCount: 0,
+      window: {
+        start: "2026-08-29T02:00:00.000Z",
+        end: "2026-08-30T02:00:00.000Z",
       },
+      testedAt: "2026-08-29T02:00:00.000Z",
     },
   };
 }
@@ -72,10 +63,8 @@ describe("onboarding router", () => {
   function setup() {
     root = mkdtempSync(join(tmpdir(), "yulu-onboarding-router-"));
     host = new HostStore(join(root, "host.sqlite"));
-    let conversationStatus: "ready" | "failed" | "untested" = "ready";
     let sharingStatus: "ready" | "failed" | "untested" | "unknown" = "ready";
     let calendarStatus: "ready" | "failed" | "untested" = "untested";
-    let connectorStatus: "ready" | "failed" | "untested" = "untested";
     const sharingAdoptionEvidence = vi.fn(() => ({
       kind: "sharing-test-share" as const,
       reference: "sharing-test-share:00000000-0000-4000-8000-000000000157",
@@ -111,47 +100,6 @@ describe("onboarding router", () => {
     const ctx = {
       uiMutationAuthorized: true,
       host,
-      agentConnections: {
-        view: vi.fn(async () => ({
-          selections: { conversation: { connectionId: "codex", model: "gpt-5.6-sol" } },
-          connections: [{
-            id: "codex",
-            label: "Codex",
-            capabilities: [{
-              capability: "conversation",
-              currentReadiness: {
-                status: conversationStatus,
-                model: "gpt-5.6-sol",
-                detail: conversationStatus === "ready" ? "Current probe passed" : "Current probe needs attention",
-              },
-            }],
-          }],
-        })),
-        conversationAdoptionEvidence: vi.fn(async () => ({
-          kind: "agent-capability-probe" as const,
-          reference: "readiness-proof-154",
-          connectionId: "codex",
-          adapter: "codex",
-          provider: "codex",
-          model: "gpt-5.6-sol",
-          credentialSource: null,
-          testedAt: "2026-08-29T00:10:00.000Z",
-          runtimeEvidence: {
-            adapter: "codex",
-            transport: "codex-app-server-stdio",
-            runtimeVersion: "0.144.4",
-            authorizationClass: "chatgpt",
-            requestedProvider: "openai",
-            requestedModel: "gpt-5.6-sol",
-            actualProvider: "openai",
-            actualModel: "gpt-5.6-sol",
-            requestId: "turn-154",
-            sessionId: "thread-154",
-            terminalStatus: "ready",
-            fallbackOccurred: false,
-          },
-        })),
-      },
       sharing: {
         view: vi.fn(() => ({
           sharingReadiness: {
@@ -178,50 +126,12 @@ describe("onboarding router", () => {
           snapshot: calendarSnapshot,
         })),
       },
-      agentCalendarConnector: {
-        view: vi.fn(() => ({
-          readiness: {
-            status: connectorStatus,
-            failure: connectorStatus === "failed" ? "authorization" : null,
-            detail: connectorStatus === "ready"
-              ? "Calendar connector read access verified"
-              : connectorStatus === "failed"
-                ? "Calendar connector authorization was denied"
-                : "Calendar connector has not been tested",
-            remediation: connectorStatus === "failed" ? "Reauthorize through the Agent native flow" : "",
-            evidence: connectorStatus === "ready" ? {
-              capability: "agent-calendar-connector",
-              connectionId: "codex",
-              adapter: "codex",
-              connector: "google_calendar",
-              connectionRevision: "e".repeat(64),
-              operation: "list_calendars",
-              testedAt: "2026-08-29T04:00:00.000Z",
-            } : null,
-          },
-        })),
-        adoptionEvidence: vi.fn(() => ({
-          kind: "agent-calendar-connector-probe",
-          reference: `agent-calendar-connector:${"e".repeat(64)}:2026-08-29T04:00:00.000Z`,
-          snapshot: {
-            capability: "agent-calendar-connector",
-            connectionId: "codex",
-            adapter: "codex",
-            connector: "google_calendar",
-            connectionRevision: "e".repeat(64),
-            operation: "list_calendars",
-            testedAt: "2026-08-29T04:00:00.000Z",
-          },
-        })),
-      },
     } as unknown as AppContext;
     return {
       ctx,
       caller: () => createCaller(onboardingRouter, ctx),
-      setConversationStatus: (status: typeof conversationStatus) => { conversationStatus = status; },
       setSharingStatus: (status: typeof sharingStatus) => { sharingStatus = status; },
       setCalendarStatus: (status: typeof calendarStatus) => { calendarStatus = status; },
-      setConnectorStatus: (status: typeof connectorStatus) => { connectorStatus = status; },
       sharingAdoptionEvidence,
     };
   }
@@ -229,23 +139,22 @@ describe("onboarding router", () => {
   function completeCurrentOnboarding(store: HostStore) {
     store.recordCoreActivationEvidence(activationEvidence(), CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
     for (const capability of [
-      ["conversation", "conversation-v1"],
       ["calendar-source", "calendar-source-v1"],
-      ["agent-calendar-connector", "agent-calendar-connector-v1"],
       ["sharing", "sharing-v1"],
     ] as const) {
       store.recordOptionalCapabilityOutcome({
         onboardingVersion: "phase-13-v1",
         capability: capability[0],
         contractVersion: capability[1],
-        outcome: capability[0] === "conversation" ? "adopted" : "deferred",
-        evidence: capability[0] === "conversation" ? conversationEvidence() : null,
+        outcome: capability[0] === "calendar-source" ? "adopted" : "deferred",
+        evidence: capability[0] === "calendar-source" ? calendarSourceEvidence() : null,
       }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
     }
   }
 
   it("reports current readiness separately without revoking durable completion", async () => {
-    const { caller, setConversationStatus, setSharingStatus } = setup();
+    const { caller, setCalendarStatus, setSharingStatus } = setup();
+    setCalendarStatus("ready");
     completeCurrentOnboarding(host!);
 
     const ready = await caller().status();
@@ -255,16 +164,17 @@ describe("onboarding router", () => {
       currentVersionCompleted: true,
       version: "phase-13-v1",
     });
-    expect(readySteps.find((step) => step.id === "conversation")).toMatchObject({
+    expect(readySteps.map((step) => step.id)).toEqual(["calendar-source", "sharing"]);
+    expect(readySteps.find((step) => step.id === "calendar-source")).toMatchObject({
       outcome: { outcome: "adopted" },
-      readiness: { state: "ready", detail: "Current probe passed" },
+      readiness: { state: "ready", detail: "EventKit enumeration passed with 0 events" },
     });
     expect(readySteps.find((step) => step.id === "sharing")).toMatchObject({
       outcome: { outcome: "deferred" },
       readiness: { state: "ready", detail: "Current Test Share is ready" },
     });
 
-    setConversationStatus("failed");
+    setCalendarStatus("failed");
     setSharingStatus("untested");
     const degraded = await caller().status();
     const degradedSteps = degraded.optionalCapabilities as ProjectedOptionalCapability[];
@@ -273,7 +183,7 @@ describe("onboarding router", () => {
       currentVersionCompleted: true,
       version: "phase-13-v1",
     });
-    expect(degradedSteps.find((step) => step.id === "conversation")).toMatchObject({
+    expect(degradedSteps.find((step) => step.id === "calendar-source")).toMatchObject({
       outcome: { outcome: "adopted" },
       readiness: { state: "needs_attention" },
     });
@@ -283,42 +193,34 @@ describe("onboarding router", () => {
     });
   });
 
-  it("adopts Conversation only from exact production evidence and preserves it across restart", async () => {
-    const { ctx, caller, setConversationStatus } = setup();
+  it("completes onboarding on the last adopted step and preserves it across restart", async () => {
+    const { ctx, caller, setCalendarStatus } = setup();
     host!.recordCoreActivationEvidence(activationEvidence(), CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
-    for (const capability of ["calendar-source", "agent-calendar-connector", "sharing"] as const) {
-      await caller().deferOptionalCapability({ capability });
-    }
+    await caller().deferOptionalCapability({ capability: "sharing" });
+    await expect(caller().status()).resolves.toMatchObject({
+      completion: { completed: false, currentVersionCompleted: false },
+    });
 
-    await expect(caller().adoptConversation()).resolves.toMatchObject({
+    setCalendarStatus("ready");
+    await expect(caller().adoptCalendarSource()).resolves.toMatchObject({
       outcome: {
         onboardingVersion: "phase-13-v1",
-        capability: "conversation",
-        contractVersion: "conversation-v1",
+        capability: "calendar-source",
+        contractVersion: "calendar-source-v1",
         outcome: "adopted",
-        evidence: { kind: "agent-capability-probe", reference: "readiness-proof-154" },
-      },
-      proof: {
-        connectionId: "codex",
-        provider: "codex",
-        model: "gpt-5.6-sol",
-        runtimeEvidence: {
-          authorizationClass: "chatgpt",
-          terminalStatus: "ready",
-          fallbackOccurred: false,
-        },
+        evidence: { kind: "calendar-source-probe" },
       },
     });
     await expect(caller().status()).resolves.toMatchObject({
       completion: { completed: true, currentVersionCompleted: true },
       optionalCapabilities: expect.arrayContaining([expect.objectContaining({
-        id: "conversation",
+        id: "calendar-source",
         outcome: expect.objectContaining({ outcome: "adopted" }),
-        readiness: { state: "ready", detail: "Current probe passed" },
+        readiness: { state: "ready", detail: "EventKit enumeration passed with 0 events" },
       })]),
     });
 
-    setConversationStatus("untested");
+    setCalendarStatus("untested");
     const dbPath = join(root, "host.sqlite");
     host!.close();
     host = new HostStore(dbPath);
@@ -326,12 +228,26 @@ describe("onboarding router", () => {
     const restarted = await caller().status();
     expect(restarted.completion).toMatchObject({ completed: true, currentVersionCompleted: true });
     expect(restarted.optionalCapabilities.find((capability: ProjectedOptionalCapability) =>
-      capability.id === "conversation"))
+      capability.id === "calendar-source"))
       .toMatchObject({
         outcome: { outcome: "adopted" },
         readiness: { state: "not_tested" },
       });
     expect(JSON.stringify(restarted)).not.toMatch(/oauth.*token|access_token|refresh_token/i);
+  });
+
+  it("no longer offers or accepts the retired Conversation and Agent Calendar Connector steps", async () => {
+    const { caller } = setup();
+
+    const status = await caller().status();
+    expect((status.optionalCapabilities as ProjectedOptionalCapability[]).map((step) => step.id))
+      .toEqual(["calendar-source", "sharing"]);
+    for (const capability of ["conversation", "agent-calendar-connector"]) {
+      await expect(caller().deferOptionalCapability({ capability })).rejects.toThrow(/invalid_enum_value/);
+    }
+    await expect(caller().adoptConversation()).rejects.toThrow(/No procedure found/);
+    await expect(caller().adoptAgentCalendarConnector()).rejects.toThrow(/No procedure found/);
+    expect(host!.listOptionalCapabilityOutcomes()).toEqual([]);
   });
 
   it("defers exact current steps and resumes the same Activation Attempt after restart", async () => {
@@ -395,49 +311,6 @@ describe("onboarding router", () => {
         readiness: { state: "not_tested", detail: "Calendar needs attention" },
       })]),
     });
-  });
-
-  it("keeps Calendar Source and Agent Calendar Connector readiness and adoption independent", async () => {
-    const { caller, setCalendarStatus, setConnectorStatus } = setup();
-    setCalendarStatus("ready");
-
-    let current = await caller().status();
-    expect(current.optionalCapabilities).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "calendar-source", readiness: expect.objectContaining({ state: "ready" }) }),
-      expect.objectContaining({ id: "agent-calendar-connector", readiness: expect.objectContaining({ state: "not_tested" }) }),
-    ]));
-
-    setCalendarStatus("failed");
-    setConnectorStatus("ready");
-    current = await caller().status();
-    expect(current.optionalCapabilities).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "calendar-source", readiness: expect.objectContaining({ state: "needs_attention" }) }),
-      expect.objectContaining({ id: "agent-calendar-connector", readiness: expect.objectContaining({ state: "ready" }) }),
-    ]));
-
-    await expect(caller().adoptAgentCalendarConnector()).resolves.toMatchObject({
-      outcome: {
-        capability: "agent-calendar-connector",
-        contractVersion: "agent-calendar-connector-v1",
-        outcome: "adopted",
-        evidence: {
-          kind: "agent-calendar-connector-probe",
-          snapshot: {
-            connectionId: "codex",
-            connector: "google_calendar",
-            operation: "list_calendars",
-          },
-        },
-      },
-    });
-    current = await caller().status();
-    expect(current.optionalCapabilities).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "calendar-source", outcome: null }),
-      expect.objectContaining({
-        id: "agent-calendar-connector",
-        outcome: expect.objectContaining({ outcome: "adopted" }),
-      }),
-    ]));
   });
 
   it("adopts Sharing only from the authoritative verified Test Share evidence", async () => {

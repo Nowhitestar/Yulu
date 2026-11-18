@@ -8,18 +8,15 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 import { HostStore } from "../../../src/hostStore.js";
-import { CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS } from "../../../src/onboarding.js";
 import {
-  migrateExistingOnboardingOutcomes,
   onboardingRouter,
+  reconcileOnboardingCompletion,
 } from "../../../src/routers/onboarding.js";
 import { createCaller, type AppContext } from "../../../src/trpc.js";
 
 const onboarding = vi.hoisted(() => ({
   data: undefined as Awaited<ReturnType<ReturnType<typeof createCaller>["status"]>> | undefined,
-  adoptConversation: vi.fn(),
   adoptCalendarSource: vi.fn(),
-  adoptAgentCalendarConnector: vi.fn(),
   adoptSharing: vi.fn(),
   deferOptional: vi.fn(),
   deferActivation: vi.fn(),
@@ -33,14 +30,8 @@ vi.mock("../../../web/src/trpc.js", () => ({
       deferOptionalCapability: {
         useMutation: () => ({ mutateAsync: onboarding.deferOptional, isPending: false }),
       },
-      adoptConversation: {
-        useMutation: () => ({ mutateAsync: onboarding.adoptConversation, isPending: false }),
-      },
       adoptCalendarSource: {
         useMutation: () => ({ mutateAsync: onboarding.adoptCalendarSource, isPending: false }),
-      },
-      adoptAgentCalendarConnector: {
-        useMutation: () => ({ mutateAsync: onboarding.adoptAgentCalendarConnector, isPending: false }),
       },
       adoptSharing: {
         useMutation: () => ({ mutateAsync: onboarding.adoptSharing, isPending: false }),
@@ -83,72 +74,41 @@ describe("upgraded Onboarding user journey", () => {
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
-  it("renders preserved, migrated, attention, completion, and non-blocking outcomes from one upgraded Host", async () => {
+  it("renders preserved outcomes and completion from one upgraded Host without the retired steps", async () => {
     root = mkdtempSync(join(tmpdir(), "yulu-onboarding-upgrade-route-"));
     const dbPath = join(root, "host.sqlite");
     const legacy = new Database(dbPath);
     legacy.exec("CREATE TABLE legacy_install_marker (id INTEGER PRIMARY KEY)");
     legacy.close();
     host = new HostStore(dbPath);
-    host.recordCoreActivationEvidence(
-      activationEvidence(),
-      CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS,
-    );
-    for (const capability of ["calendar-source", "agent-calendar-connector", "sharing"] as const) {
+    // The previous version waited for four outcomes; this user never decided
+    // Conversation, so that version had not recorded a completion.
+    const previousRequirements = {
+      version: "phase-13-v1",
+      optionalCapabilities: ["conversation", "calendar-source", "agent-calendar-connector", "sharing"]
+        .map((capability) => ({ capability, contractVersion: `${capability}-v1` })),
+    };
+    host.recordCoreActivationEvidence(activationEvidence(), previousRequirements);
+    for (const capability of ["calendar-source", "sharing"] as const) {
       host.recordOptionalCapabilityOutcome({
         onboardingVersion: "phase-13-v1",
         capability,
         contractVersion: `${capability}-v1`,
         outcome: "deferred",
         evidence: null,
-      }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
+      }, previousRequirements);
     }
-    const ctx = {
-      uiMutationAuthorized: true,
-      host,
-      agentConnections: {
-        conversationAdoptionEvidence: vi.fn(async () => ({
-          kind: "agent-capability-probe" as const,
-          reference: "00000000-0000-4000-8000-000000000158",
-          connectionId: "codex",
-          adapter: "codex",
-          provider: "codex",
-          model: "gpt-5.6-sol",
-          credentialSource: null,
-          testedAt: "2026-08-29T00:10:00.000Z",
-          runtimeEvidence: {
-            adapter: "codex" as const,
-            transport: "codex-app-server-stdio" as const,
-            runtimeVersion: "0.144.4",
-            authorizationClass: "chatgpt" as const,
-            requestedProvider: "openai",
-            requestedModel: "gpt-5.6-sol",
-            actualProvider: "openai",
-            actualModel: "gpt-5.6-sol",
-            requestId: "turn-158",
-            sessionId: "thread-158",
-            terminalStatus: "ready" as const,
-            fallbackOccurred: false,
-          },
-        })),
-        view: vi.fn(async () => ({
-          selections: { conversation: { connectionId: "codex", model: "gpt-5.6-sol" } },
-          connections: [{
-            id: "codex",
-            capabilities: [{
-              capability: "conversation",
-              currentReadiness: {
-                status: "failed",
-                model: "gpt-5.6-sol",
-                detail: "The selected runtime is currently unavailable",
-              },
-            }],
-          }],
-        })),
-      },
-    } as unknown as AppContext;
+    host.db.prepare(`
+      INSERT INTO optional_capability_outcomes (
+        onboarding_version, capability, contract_version, outcome,
+        evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
+      ) VALUES ('phase-13-v1', 'agent-calendar-connector', 'agent-calendar-connector-v1', 'deferred',
+        NULL, NULL, NULL, '2026-08-29T00:10:00.000Z')
+    `).run();
+    expect(host.getLatestOnboardingCompletion()).toBeNull();
+    const ctx = { uiMutationAuthorized: true, host } as unknown as AppContext;
 
-    await migrateExistingOnboardingOutcomes(ctx);
+    reconcileOnboardingCompletion(ctx);
     onboarding.data = await createCaller(onboardingRouter, ctx).status();
     expect(onboarding.data).toMatchObject({
       entry: { installationKind: "returning", shouldAutoEnter: false },
@@ -169,9 +129,7 @@ describe("upgraded Onboarding user journey", () => {
 
     expect(screen.getByText("Onboarding complete for this version")).toBeInTheDocument();
     expect(screen.getByTestId("onboarding-core-activation")).toHaveTextContent("Complete");
-    // The Host still reports the adopted Conversation; the UI no longer offers that step.
-    expect(screen.queryByTestId("onboarding-capability-conversation")).toBeNull();
-    expect(screen.queryByTestId("onboarding-capability-agent-calendar-connector")).toBeNull();
+    expect(screen.getAllByTestId(/^onboarding-capability-/)).toHaveLength(2);
     for (const capability of ["calendar-source", "sharing"]) {
       expect(within(screen.getByTestId(`onboarding-capability-${capability}`)).getByText("Deferred"))
         .toBeInTheDocument();

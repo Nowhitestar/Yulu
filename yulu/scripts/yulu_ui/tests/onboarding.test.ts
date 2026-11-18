@@ -9,7 +9,7 @@ import { onboardingHome, type OnboardingManifest } from "../src/onboarding.js";
 const V1: OnboardingManifest = {
   version: "phase-13-v1",
   optionalCapabilities: [
-    { id: "conversation", contractVersion: "conversation-v1", href: "/settings/llm?capability=conversation" },
+    { id: "calendar-source", contractVersion: "calendar-source-v1", href: "/settings/integrations" },
     { id: "sharing", contractVersion: "sharing-v1", href: "/settings/sharing" },
   ],
 };
@@ -35,36 +35,6 @@ function activationEvidence() {
       summary: { sha256: "c".repeat(64), bytes: 30 },
     },
     completedAt: "2026-08-29T00:05:00.000Z",
-  };
-}
-
-function conversationEvidence(reference = "conversation-proof-1") {
-  return {
-    kind: "agent-capability-probe",
-    reference,
-    snapshot: {
-      capability: "conversation" as const,
-      connectionId: "codex",
-      adapter: "codex",
-      provider: "codex",
-      model: "gpt-5.6-sol",
-      credentialSource: "runtime-oauth" as const,
-      testedAt: "2026-08-29T00:10:00.000Z",
-      runtimeEvidence: {
-        adapter: "codex",
-        transport: "codex-app-server-stdio",
-        runtimeVersion: "0.144.4",
-        authorizationClass: "chatgpt" as const,
-        requestedProvider: "openai",
-        requestedModel: "gpt-5.6-sol",
-        actualProvider: "openai",
-        actualModel: "gpt-5.6-sol",
-        requestId: "turn-154",
-        sessionId: "thread-154",
-        terminalStatus: "ready" as const,
-        fallbackOccurred: false,
-      },
-    },
   };
 }
 
@@ -130,10 +100,10 @@ describe("Onboarding durable state", () => {
     const store = createHost();
     const adopted = store.recordOptionalCapabilityOutcome({
       onboardingVersion: "phase-13-v1",
-      capability: "conversation",
-      contractVersion: "conversation-v1",
+      capability: "calendar-source",
+      contractVersion: "calendar-source-v1",
       outcome: "adopted",
-      evidence: conversationEvidence(),
+      evidence: calendarSourceEvidence(),
     });
     const deferred = store.recordOptionalCapabilityOutcome({
       onboardingVersion: "phase-13-v1",
@@ -144,10 +114,10 @@ describe("Onboarding durable state", () => {
     });
 
     expect(adopted).toMatchObject({
-      capability: "conversation",
-      contractVersion: "conversation-v1",
+      capability: "calendar-source",
+      contractVersion: "calendar-source-v1",
       outcome: "adopted",
-      evidence: { reference: "conversation-proof-1" },
+      evidence: { reference: `calendar-source:${"d".repeat(64)}:2026-08-29T02:00:00.000Z` },
       decidedAt: expect.any(String),
     });
     expect(deferred).toMatchObject({
@@ -160,8 +130,8 @@ describe("Onboarding durable state", () => {
 
     expect(store.recordOptionalCapabilityOutcome({
       onboardingVersion: "phase-13-v1",
-      capability: "conversation",
-      contractVersion: "conversation-v1",
+      capability: "calendar-source",
+      contractVersion: "calendar-source-v1",
       outcome: "deferred",
       evidence: null,
     })).toEqual(adopted);
@@ -360,10 +330,10 @@ describe("Onboarding durable state", () => {
     store.recordCoreActivationEvidence(activationEvidence(), V1_COMPLETION);
     store.recordOptionalCapabilityOutcome({
       onboardingVersion: V1.version,
-      capability: "conversation",
-      contractVersion: "conversation-v1",
+      capability: "calendar-source",
+      contractVersion: "calendar-source-v1",
       outcome: "adopted",
-      evidence: conversationEvidence(),
+      evidence: calendarSourceEvidence(),
     }, V1_COMPLETION);
     expect(store.getLatestOnboardingCompletion()).toBeNull();
     store.recordOptionalCapabilityOutcome({
@@ -376,7 +346,7 @@ describe("Onboarding durable state", () => {
     expect(store.getLatestOnboardingCompletion()).toMatchObject({ version: V1.version });
 
     const completed = onboardingHome(store, V1, {
-      conversation: { state: "ready", detail: "Current probe passed" },
+      "calendar-source": { state: "ready", detail: "Current probe passed" },
       sharing: { state: "needs_attention", detail: "Connector is offline" },
     });
     expect(completed.completion).toMatchObject({
@@ -399,17 +369,17 @@ describe("Onboarding durable state", () => {
     const dbPath = join(root, "host.sqlite");
     store.close();
     host = new HostStore(dbPath);
+    // A later manifest asks again through a new contract version of Sharing.
     const V2: OnboardingManifest = {
       version: "phase-13-v2",
       optionalCapabilities: [
-        ...V1.optionalCapabilities,
-        { id: "calendar-source", contractVersion: "calendar-source-v1", href: "/settings/integrations" },
+        V1.optionalCapabilities[0]!,
+        { id: "sharing", contractVersion: "sharing-v2", href: "/settings/sharing" },
       ],
     };
     const upgraded = onboardingHome(host, V2, {
-      conversation: { state: "needs_attention", detail: "Current probe expired" },
+      "calendar-source": { state: "needs_attention", detail: "Current probe expired" },
       sharing: { state: "not_tested", detail: "Current Host has not tested Sharing" },
-      "calendar-source": { state: "not_tested", detail: "Not tested" },
     });
 
     expect(upgraded.completion).toMatchObject({
@@ -419,8 +389,12 @@ describe("Onboarding durable state", () => {
       completedAt: completed.completion.completedAt,
     });
     expect(upgraded.optionalCapabilities.filter((step) => step.isNew).map((step) => step.id))
-      .toEqual(["calendar-source"]);
-    expect(upgraded.optionalCapabilities.find((step) => step.id === "conversation")).toMatchObject({
+      .toEqual(["sharing"]);
+    expect(upgraded.optionalCapabilities.find((step) => step.id === "sharing")).toMatchObject({
+      contractVersion: "sharing-v2",
+      outcome: null,
+    });
+    expect(upgraded.optionalCapabilities.find((step) => step.id === "calendar-source")).toMatchObject({
       outcome: { outcome: "adopted" },
       readiness: { state: "needs_attention" },
     });
@@ -447,15 +421,15 @@ describe("Onboarding durable state", () => {
     expect(store.getLatestOnboardingCompletion()).toBeNull();
   });
 
-  it("does not project a stored current completion whose Conversation adoption snapshot is invalid", () => {
+  it("does not project a stored current completion whose Calendar Source adoption snapshot is invalid", () => {
     const store = createHost();
     store.recordCoreActivationEvidence(activationEvidence(), V1_COMPLETION);
     store.db.prepare(`
       INSERT INTO optional_capability_outcomes (
         onboarding_version, capability, contract_version, outcome,
         evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
-      ) VALUES (?, 'conversation', 'conversation-v1', 'adopted', ?, ?, NULL, ?)
-    `).run(V1.version, "agent-capability-probe", "legacy-mutable-pointer", "2026-08-28T00:00:00.000Z");
+      ) VALUES (?, 'calendar-source', 'calendar-source-v1', 'adopted', ?, ?, NULL, ?)
+    `).run(V1.version, "calendar-source-probe", "legacy-mutable-pointer", "2026-08-28T00:00:00.000Z");
     store.recordOptionalCapabilityOutcome({
       onboardingVersion: V1.version,
       capability: "sharing",
@@ -469,7 +443,7 @@ describe("Onboarding durable state", () => {
 
     expect(onboardingHome(store, V1, {})).toMatchObject({
       optionalCapabilities: expect.arrayContaining([
-        expect.objectContaining({ id: "conversation", outcome: null }),
+        expect.objectContaining({ id: "calendar-source", outcome: null }),
       ]),
       completion: { completed: false, currentVersionCompleted: false, version: null },
     });
