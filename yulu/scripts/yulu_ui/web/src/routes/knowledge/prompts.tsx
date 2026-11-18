@@ -11,8 +11,6 @@ import { useT } from "../../i18n/LanguageProvider.js";
 import type { Category } from "../../components/PromptReader.js";
 import "./prompts.css";
 
-export const handle = { breadcrumb: "breadcrumb.prompts", filters: null };
-
 interface Row {
   id: string;
   slug: string;
@@ -42,7 +40,7 @@ export function Prompts() {
   }, [data, activeFilters]);
 
   const list = rows.length === 0 && !isPending ? (
-    <EmptyState icon={<FileText size={32} strokeWidth={1.5} />} label={t("prompts.empty")} />
+    <EmptyState icon={<FileText size={28} strokeWidth={1.4} />} label={t("prompts.empty")} />
   ) : (
     rows.map((p) => (
       <NavLink
@@ -69,7 +67,7 @@ export function Prompts() {
         <>
           <div className="prompt-filterbar">
             <FilterChips chips={FILTER_CHIPS} activeIds={activeFilters} onChange={setActiveFilters} />
-            <Link to="new" className="prompt-new-btn">{t("prompts.new")}</Link>
+            <Link to="new" className="prompt-new link">{t("prompts.new")}</Link>
           </div>
           <div className="prompt-list">{list}</div>
         </>

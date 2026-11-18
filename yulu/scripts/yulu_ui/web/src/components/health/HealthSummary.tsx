@@ -43,26 +43,26 @@ export function HealthSummary() {
   const rank = { attention: 0, unconfigured: 1, unchecked: 2, ready: 3, off: 4 };
   const sorted = [...features].sort((a, b) => rank[a.state] - rank[b.state]);
   return <section className="runtime-overview" data-testid="health-summary">
-    <header className="runtime-heading">
-      <div><h1>{t("runtime.title")}</h1><p>{t("runtime.intro")}</p></div>
-      <button type="button" className="control-btn runtime-refresh" disabled={refreshing} onClick={() => void Promise.allSettled(queries.map((query) => query.refetch()))}><RefreshCw size={14} />{t(refreshing ? "runtime.refreshing" : "common.refresh")}</button>
+    <header className="page-head runtime-heading">
+      <div><h1 className="page-title">{t("runtime.title")}</h1><p className="page-sub">{t("runtime.intro")}</p></div>
+      <button type="button" className="btn runtime-refresh" disabled={refreshing} onClick={() => void Promise.allSettled(queries.map((query) => query.refetch()))}><RefreshCw size={13} strokeWidth={1.8} aria-hidden="true" />{t(refreshing ? "runtime.refreshing" : "common.refresh")}</button>
     </header>
     <div className={`runtime-verdict ${attention ? "attention" : incomplete ? "unchecked" : "ready"}`} role="status">
-      {attention ? <HeartPulse size={22} /> : incomplete ? <CircleHelp size={22} /> : <CheckCircle2 size={22} />}
+      {attention ? <HeartPulse size={20} strokeWidth={1.8} aria-hidden="true" /> : incomplete ? <CircleHelp size={20} strokeWidth={1.8} aria-hidden="true" /> : <CheckCircle2 size={20} strokeWidth={1.8} aria-hidden="true" />}
       <div><strong>{t(attention ? "runtime.attention" : incomplete ? "runtime.incomplete" : "runtime.ready", { n: attention || incomplete })}</strong>
         <span>{checkedAt ? t("runtime.checkedAt", { time: new Date(checkedAt).toLocaleTimeString(locale, { hour12: false }) }) : t("runtime.waiting")}</span></div>
     </div>
-    <div className="runtime-features">
+    <div className="runtime-features group">
       {sorted.map((feature) => {
         const Icon = ICONS[feature.id as keyof typeof ICONS];
         return <article key={feature.id} className="runtime-feature" data-feature={feature.id} data-state={feature.state}>
-          <Icon size={19} className="runtime-feature-icon" />
+          <Icon size={17} strokeWidth={1.7} className="runtime-feature-icon" aria-hidden="true" />
           <div className="runtime-feature-copy"><h2>{t(`runtime.feature.${feature.id}`)}</h2><p>{t(`runtime.detail.${feature.detail}`, { time: feature.time ? new Date(feature.time).toLocaleString(locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) : "" })}</p></div>
           <span className={`runtime-state ${feature.state}`}><i aria-hidden="true" />{t(`runtime.state.${feature.state}`)}</span>
-          <Link to={feature.href} className="runtime-feature-action" aria-label={`${t(`runtime.feature.${feature.id}`)}：${t(`runtime.action.${feature.action ?? "details"}`)}`}>{t(`runtime.action.${feature.action ?? "details"}`)}<ArrowUpRight size={13} /></Link>
+          <Link to={feature.href} className="runtime-feature-action" aria-label={`${t(`runtime.feature.${feature.id}`)}：${t(`runtime.action.${feature.action ?? "details"}`)}`}>{t(`runtime.action.${feature.action ?? "details"}`)}<ArrowUpRight size={13} strokeWidth={1.8} aria-hidden="true" /></Link>
         </article>;
       })}
     </div>
-    <Link className="runtime-task-link" to="/health#queue"><FileText size={17} /><span>{activity ? activity.attention ? t("assistant.activity.attention", { n: activity.attention }) : activity.active ? t("assistant.activity.active", { n: activity.active }) : t("runtime.tasks.empty") : t("runtime.tasks.unavailable")}</span><span>{t("runtime.tasks.open")} →</span></Link>
+    <Link className="runtime-task-link" to="/health#queue"><FileText size={16} strokeWidth={1.7} aria-hidden="true" /><span>{activity ? activity.attention ? t("assistant.activity.attention", { n: activity.attention }) : activity.active ? t("assistant.activity.active", { n: activity.active }) : t("runtime.tasks.empty") : t("runtime.tasks.unavailable")}</span><span>{t("runtime.tasks.open")} →</span></Link>
   </section>;
 }

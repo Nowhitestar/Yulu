@@ -1,30 +1,14 @@
-.logtail {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  background: var(--surface-solid);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-panel);
-  overflow: hidden;
-  box-shadow: var(--edge-shadow);
-}
+.logtail { min-width: 0; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--bg); overflow: hidden; }
 .logtail-pre {
-  flex: 1;
-  overflow-y: auto;
+  height: min(52vh, 480px);
   margin: 0;
   padding: 12px 14px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
+  overflow-y: auto;
   color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-all;
 }
-.logtail-line { padding: 0; }
-.logtail-empty {
-  padding: 40px;
-  text-align: center;
-  color: var(--fg-3);
-  font-size: 12px;
-}
+.logtail-empty { padding: 36px 16px; color: var(--fg-3); font-size: 12.5px; text-align: center; }

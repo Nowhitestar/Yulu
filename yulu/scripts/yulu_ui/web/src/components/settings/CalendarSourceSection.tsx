@@ -67,7 +67,7 @@ export function CalendarSourceSection() {
 
   if (sources.isPending) return <section className="settings-section"><p role="status">{t("settings.calendarSource.loading")}</p></section>;
   if (sources.isError || !sources.data) {
-    return <section className="settings-section"><p role="alert">{t("settings.calendarSource.unavailable")}</p><button className="settings-action" onClick={() => void sources.refetch()}>{t("settings.retry")}</button></section>;
+    return <section className="settings-section"><p role="alert">{t("settings.calendarSource.unavailable")}</p><button className="btn" onClick={() => void sources.refetch()}>{t("settings.retry")}</button></section>;
   }
 
   const status = busy ? "checking" : readiness?.status ?? "untested";
@@ -86,14 +86,15 @@ export function CalendarSourceSection() {
       <h2 className="settings-section-h" id="calendar-source-heading">{t("settings.calendarSource.heading")}</h2>
       <p className="settings-section-sub">{t("settings.calendarSource.sub")}</p>
 
+      <div className="group settings-group">
       <div className="calendar-connection" data-status={status}>
-        <CalendarDays size={24} strokeWidth={1.5} aria-hidden="true" />
+        <CalendarDays size={20} strokeWidth={1.6} aria-hidden="true" />
         <div className="calendar-connection-copy">
           <strong>{sourceLabel}</strong>
           {selection?.account && <span className="calendar-account">{selection.account}</span>}
           <span className="calendar-status" role="status"><i aria-hidden="true" />{selection ? t(`settings.calendarSource.status.${status}`) : t("settings.calendarSource.chooseHint")}</span>
         </div>
-        {selection && <button className="settings-action" disabled={busy} onClick={() => void connect(selection, readiness?.reason === "service_activation_failed")}>{t("settings.calendarSource.test")}</button>}
+        {selection && <button className="btn" disabled={busy} onClick={() => void connect(selection, readiness?.reason === "service_activation_failed")}>{t("settings.calendarSource.test")}</button>}
       </div>
 
       {selection && <div className="calendar-sync" aria-live="polite">
@@ -115,7 +116,7 @@ export function CalendarSourceSection() {
       {(!selection || pickerOpen) && <div className="calendar-source-picker">
         <div className="calendar-source-option">
           <div><strong>{t("settings.calendarSource.macos.title")}</strong><p>{t("settings.calendarSource.macos.detail")}</p></div>
-          <button className="settings-action primary" disabled={busy} onClick={() => void connect({ source: "macos", account: null }, true)}>{t("settings.calendarSource.macos.use")}</button>
+          <button className="btn btn-primary" disabled={busy} onClick={() => void connect({ source: "macos", account: null }, true)}>{t("settings.calendarSource.macos.use")}</button>
         </div>
         <button className="settings-text-link" aria-expanded={googleOpen} disabled={busy} onClick={() => setGoogleOpen((open) => !open)}>
           {t("settings.calendarSource.advanced.show")}<ChevronDown size={14} aria-hidden="true" />
@@ -125,12 +126,12 @@ export function CalendarSourceSection() {
           {accounts.isPending ? <p role="status">{t("settings.calendarSource.accounts.loading")}</p> : accounts.data?.ok ? <>
             {accounts.data.accounts.length ? <label className="calendar-account-picker">
               {t("settings.calendarSource.gog.account")}
-              <select disabled={busy} value={account} onChange={(event) => setAccount(event.currentTarget.value)}>
+              <select className="field" disabled={busy} value={account} onChange={(event) => setAccount(event.currentTarget.value)}>
                 <option value="">{t("settings.calendarSource.gog.choose")}</option>
                 {accounts.data.accounts.map((item) => <option key={item.email} value={item.email}>{item.email}</option>)}
               </select>
             </label> : <div className="calendar-source-oauth-guidance"><p>{t("settings.calendarSource.gog.authorize")}</p><code>{t("settings.calendarSource.gog.authorize.command")}</code></div>}
-            <button className="settings-action primary" disabled={busy || !account} onClick={() => void connect({ source: "gog", account }, true)}>{t("settings.calendarSource.gog.use")}</button>
+            <button className="btn btn-primary" disabled={busy || !account} onClick={() => void connect({ source: "gog", account }, true)}>{t("settings.calendarSource.gog.use")}</button>
           </> : <p>{t("settings.calendarSource.gog.install")}</p>}
           <button className="settings-text-link" disabled={busy || accounts.isFetching} onClick={() => void accounts.refetch()}>{t("settings.calendarSource.accounts.refresh")}</button>
         </div>}
@@ -142,6 +143,7 @@ export function CalendarSourceSection() {
         {error && <p className="calendar-source-error">{error}</p>}
         <p>{t("settings.calendarSource.connector.detail")} <Link to="/settings/connections#agent-calendar-connector">{t("settings.calendarSource.connector.open")}</Link></p>
       </AdvancedDisclosure>
+      </div>
     </section>
   );
 }

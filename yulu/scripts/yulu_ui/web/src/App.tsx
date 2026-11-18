@@ -7,21 +7,20 @@ import { LanguageConfigSync, LanguageProvider, useT } from "./i18n/LanguageProvi
 import { UndoToastProvider, useUndoToast } from "./components/UndoToast.js";
 import { WsProvider } from "./ws.js";
 import { RootLayout } from "./routes/root.js";
-import { InboxLayout, handle as inboxLayoutHandle } from "./routes/inbox/_layout.js";
-import { RecordingsList, handle as recordingsHandle } from "./routes/inbox/recordings.js";
-import { RecordingReader, handle as recordingReaderHandle } from "./routes/inbox/recordings.$stem.js";
-import { Prompts,    handle as promptsHandle    } from "./routes/knowledge/prompts.js";
+import { InboxLayout } from "./routes/inbox/_layout.js";
+import { RecordingsList } from "./routes/inbox/recordings.js";
+import { RecordingReader } from "./routes/inbox/recordings.$stem.js";
+import { Prompts } from "./routes/knowledge/prompts.js";
 import { PromptsIndex } from "./routes/knowledge/prompts.index.js";
-import { PromptReaderRoute, handle as promptReaderHandle } from "./routes/knowledge/prompts.$id.js";
-import { Glossary,   handle as glossaryHandle   } from "./routes/knowledge/glossary.js";
-import { SettingsLayout, SettingsIndex, handle as settingsHandle } from "./routes/settings.js";
+import { PromptReaderRoute } from "./routes/knowledge/prompts.$id.js";
+import { Glossary } from "./routes/knowledge/glossary.js";
+import { SettingsLayout } from "./routes/settings.js";
 import { SettingsCategory } from "./routes/settings.$category.js";
-import { categoryLabelKey } from "./components/settings/categories.js";
-import { Health, handle as healthHandle } from "./routes/health.js";
-import { AgentConsole, handle as agentConsoleHandle } from "./routes/agent-console.js";
-import { VoiceInput, handle as voiceInputHandle } from "./routes/voice-input.js";
-import { Activate, handle as activateHandle } from "./routes/activate.js";
-import { OnboardingHome, handle as onboardingHandle } from "./routes/onboarding.js";
+import { Health } from "./routes/health.js";
+import { AgentConsole } from "./routes/agent-console.js";
+import { VoiceInput } from "./routes/voice-input.js";
+import { Activate } from "./routes/activate.js";
+import { OnboardingHome } from "./routes/onboarding.js";
 import { LegacyAgentConnectionsRedirect } from "./routes/agent-connections.js";
 
 function RecordingRedirect() {
@@ -40,23 +39,21 @@ const router = createBrowserRouter([
     Component: RootLayout,
     children: [
       { index: true, element: <Navigate to="/agent-console" replace /> },
-      { path: "agent-console", Component: AgentConsole, handle: agentConsoleHandle },
-      { path: "voice-chat", Component: AgentConsole, handle: agentConsoleHandle },
-      { path: "voice-input", Component: VoiceInput, handle: voiceInputHandle },
-      { path: "activate", Component: Activate, handle: activateHandle },
-      { path: "onboarding", Component: OnboardingHome, handle: onboardingHandle },
+      { path: "agent-console", Component: AgentConsole },
+      { path: "voice-chat", Component: AgentConsole },
+      { path: "voice-input", Component: VoiceInput },
+      { path: "activate", Component: Activate },
+      { path: "onboarding", Component: OnboardingHome },
       { path: "agent-connections", Component: LegacyAgentConnectionsRedirect },
       {
         path: "inbox",
         Component: InboxLayout,
-        handle: inboxLayoutHandle,
         children: [
           {
             Component: RecordingsList,
-            handle: recordingsHandle,
             children: [
               { index: true, element: null },
-              { path: ":stem", Component: RecordingReader, handle: recordingReaderHandle },
+              { path: ":stem", Component: RecordingReader },
             ],
           },
         ],
@@ -68,27 +65,21 @@ const router = createBrowserRouter([
       {
         path: "knowledge/prompts",
         Component: Prompts,
-        handle: promptsHandle,
         children: [
           { index: true, Component: PromptsIndex },
-          { path: ":id", Component: PromptReaderRoute, handle: promptReaderHandle },
+          { path: ":id", Component: PromptReaderRoute },
         ],
       },
-      { path: "knowledge/glossary",   Component: Glossary,             handle: glossaryHandle },
+      { path: "knowledge/glossary",   Component: Glossary },
       {
         path: "settings",
         Component: SettingsLayout,
-        handle: settingsHandle,
         children: [
-          { index: true, Component: SettingsIndex },
-          {
-            path: ":category",
-            Component: SettingsCategory,
-            handle: { breadcrumb: (p: Record<string, string | undefined>) => categoryLabelKey(p.category ?? ""), filters: null },
-          },
+          { index: true, element: <Navigate to="/settings/general" replace /> },
+          { path: ":category", Component: SettingsCategory },
         ],
       },
-      { path: "health",                 Component: Health,                handle: healthHandle },
+      { path: "health",                 Component: Health },
       { path: "health/doctor",          element: <Navigate to="/health#doctor" replace /> },
       { path: "health/queue",           element: <Navigate to="/health#queue" replace /> },
       { path: "health/scheduler",       element: <Navigate to="/health#scheduler" replace /> },

@@ -1,6 +1,6 @@
 // web/src/components/Pill.tsx
 import { useEffect, useState } from "react";
-import { Mic } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 import { trpc } from "../trpc.js";
 import { useWsChannel } from "../ws.js";
 import { useT } from "../i18n/LanguageProvider.js";
@@ -84,10 +84,9 @@ export function Pill() {
     switch (state) {
       case "idle":
         return (
-          <button className="pill pill-idle" disabled={toggle.isPending} onClick={() => toggle.mutate()} aria-label={t("pill.recordAria")}>
-            <span className="pill-mic"><Mic size={12} strokeWidth={1.75} /></span>
+          <button className="pill pill-idle" disabled={toggle.isPending} onClick={() => toggle.mutate()} aria-label={t("pill.recordAria")} title={hotkey}>
+            <span className="pill-dot" />
             <span className="pill-label">{t("pill.record")}</span>
-            <span className="pill-hotkey">{hotkey}</span>
           </button>
         );
 
@@ -97,7 +96,7 @@ export function Pill() {
             <span className="pill-dot pulse" />
             <span className="pill-time">{formatElapsed(elapsed)}</span>
             <Meter level={level} />
-            <button className="pill-stop" disabled={toggle.isPending} onClick={() => toggle.mutate()} aria-label={t("pill.stopAria")}>■</button>
+            <button className="pill-stop" disabled={toggle.isPending} onClick={() => toggle.mutate()} aria-label={t("pill.stopAria")} title={t("pill.stopAria")} />
           </div>
         );
 
@@ -120,7 +119,7 @@ export function Pill() {
       case "daemonDown":
         return (
           <a className="pill pill-down" href="/health/daemons" role="alert">
-            <span className="pill-warn">⚠</span>
+            <TriangleAlert className="pill-warn" size={13} strokeWidth={2} aria-hidden="true" />
             <span>{t("pill.daemonDown")}</span>
           </a>
         );
@@ -128,7 +127,7 @@ export function Pill() {
       case "unknown":
         return (
           <div className="pill pill-down" role="alert">
-            <span className="pill-warn">⚠</span>
+            <TriangleAlert className="pill-warn" size={13} strokeWidth={2} aria-hidden="true" />
             <span>{t("pill.statusUnavailable")}</span>
           </div>
         );

@@ -27,11 +27,11 @@ export function PermissionsPanel() {
   return <section className="permissions-panel" id="permissions" aria-labelledby="permissions-title">
     <header className="permissions-heading">
       <div><h2 id="permissions-title"><ShieldCheck size={19} aria-hidden="true" />{t("permissions.title")}</h2><p>{t("permissions.intro")}</p></div>
-      <button type="button" className="permissions-action" disabled={status.isFetching} onClick={() => void status.refetch()}>
+      <button type="button" className="btn btn-quiet" disabled={status.isFetching} onClick={() => void status.refetch()}>
         <RefreshCw size={14} aria-hidden="true" />{t("permissions.refresh")}
       </button>
     </header>
-    <div className="permissions-list">
+    <div className="group permissions-list">
       {PERMISSIONS.map((permission) => {
         const observed = status.isError ? "check_failed" : status.data?.[permission] ?? "unknown";
         const ready = observed === "ready" || observed === "granted";
@@ -51,7 +51,7 @@ export function PermissionsPanel() {
             {permission === "notifications" && observed === "denied" && <p>{t("permissions.notifications.ownerHint")}</p>}
           </div>
           <span className="permissions-state">{ready && <CheckCircle2 size={14} aria-hidden="true" />}{t(`permissions.state.${label}`)}</span>
-          <button type="button" className="permissions-action" disabled={open.isPending} onClick={() => void openSettings(permission)}>
+          <button type="button" className="btn" disabled={open.isPending} onClick={() => void openSettings(permission)}>
             {t(ready ? "permissions.manage" : permission === "notifications" && observed === "not_determined" ? "permissions.enable" : "permissions.open")}
           </button>
         </article>;
@@ -74,7 +74,7 @@ export function PermissionReminder() {
   return <aside className="permission-reminder" role="status">
     <ShieldCheck size={17} aria-hidden="true" />
     <span>{t(inputMissing ? "permissions.reminder.input" : "permissions.reminder.audio")}</span>
-    <Link to="/onboarding#permissions">{t("permissions.reminder.open")}</Link>
-    <button type="button" onClick={() => setDismissed(true)} aria-label={t("permissions.reminder.dismiss")}><X size={15} aria-hidden="true" /></button>
+    <Link className="link" to="/onboarding#permissions">{t("permissions.reminder.open")}</Link>
+    <button type="button" className="icon-btn" onClick={() => setDismissed(true)} aria-label={t("permissions.reminder.dismiss")}><X size={15} aria-hidden="true" /></button>
   </aside>;
 }

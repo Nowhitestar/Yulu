@@ -28,7 +28,7 @@ export function DoctorSection() {
           <p>{t("health.doctor.sub")}</p>
         </div>
         <div className="control-actions">
-          <button type="button" className="control-btn" onClick={() => refetch()}>{t("common.refresh")}</button>
+          <button type="button" className="btn" onClick={() => refetch()}>{t("common.refresh")}</button>
         </div>
       </div>
 

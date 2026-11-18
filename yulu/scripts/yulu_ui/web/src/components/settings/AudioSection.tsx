@@ -31,6 +31,7 @@ export function AudioSection({ tracker }: AudioSectionProps) {
     <section id="audio" className="settings-section">
       <h2 className="settings-section-h">{t("settings.audio.heading")}</h2>
       <p className="settings-section-sub">{t("settings.audio.sub")}</p>
+      <div className="group settings-group">
       <InlineEditRow label={t("settings.audio.micDevice.label")} type="select" value={micValue} options={micOptions} help={devices?.error ? t("settings.audio.micDevice.unavailable", { error: devices.error }) : t("settings.audio.micDevice.help")} onCommit={commit("audio.mic_device") as (v: string) => void} disabled={isBlocked("audio.mic_device")} status={tracker.statusFor("audio.mic_device")} />
       <InlineEditRow label={t("settings.audio.systemAudio.label")} type="readonly" value={t("settings.audio.nativeSystem")} help={t("settings.audio.systemAudio.help")} />
       <InlineEditRow label={t("settings.audio.outputDir.label")} type="path" mode="folder" value={cfg.audio.output_dir} onCommit={commit("audio.output_dir") as (v: string) => void} disabled={isBlocked("audio.output_dir")} status={tracker.statusFor("audio.output_dir")} />
@@ -39,6 +40,7 @@ export function AudioSection({ tracker }: AudioSectionProps) {
       <InlineEditRow label={t("settings.audio.silenceDuration.label")} type="number" min={1} max={3600} step={1} value={cfg.audio.silence_duration_sec} help={t("settings.audio.silenceDuration.help")} onCommit={commit("audio.silence_duration_sec") as (v: number) => void} disabled={isBlocked("audio.silence_duration_sec")} status={tracker.statusFor("audio.silence_duration_sec")} />
       <InlineEditRow label={t("settings.audio.backend.label")} type="readonly" value={cfg.audio.backend ?? "daemon"} help={t("settings.audio.backend.help")} />
       </AdvancedDisclosure>
+      </div>
     </section>
   );
 }

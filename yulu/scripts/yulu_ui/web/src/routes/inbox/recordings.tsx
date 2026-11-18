@@ -1,17 +1,17 @@
 import { useContext, useEffect, useState } from "react";
-import type { CSSProperties, MouseEvent } from "react";
+import type { MouseEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { QueryClientContext } from "@tanstack/react-query";
-import { Clock, FileText, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { useWsChannel } from "../../ws.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
+import { EmptyState } from "../../components/EmptyState.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
-import { useT } from "../../i18n/LanguageProvider.js";
+import { useLang, useT } from "../../i18n/LanguageProvider.js";
 import "./recordings.css";
 
-export const handle = { breadcrumb: "breadcrumb.recordings", filters: null };
 
 interface Row {
   stem: string;
@@ -25,19 +25,13 @@ interface Row {
   firstWords: string | null;
   status: string;
   statusError?: string;
-  depth?: number;
-  indentLevel?: number;
 }
 
-function fmtTs(iso: string | null): string {
+function fmtTs(iso: string | null, locale: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.valueOf())) return "";
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${mm}-${dd} ${hh}:${min}`;
+  return d.toLocaleString(locale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function fmtDuration(seconds: number | null | undefined): string {
@@ -50,16 +44,11 @@ function fmtDuration(seconds: number | null | undefined): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-function rowDepth(row: Row): number {
-  const raw = row.indentLevel ?? row.depth ?? 0;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(4, Math.trunc(n)));
-}
-
 export function RecordingsList() {
   const { data, isPending } = trpc.recordings.list.useQuery({});
   const t = useT();
+  const { lang } = useLang();
+  const locale = lang === "zh" ? "zh-CN" : "en-US";
   const confirm = useConfirm();
   const navigate = useNavigate();
   const location = useLocation();
@@ -150,86 +139,40 @@ export function RecordingsList() {
 
   const listSlot = (
     <>
-      <div className="recordings-list-head">
-        <h2>{t("breadcrumb.inbox")}</h2>
-        <button type="button" aria-label={t("common.more")}>•••</button>
-      </div>
       <div className="recordings-list">
-        {rows.map((r) => {
-          const depth = rowDepth(r);
-          const tags = r.tags ?? [];
-          return (
-          <div
+        {rows.length === 0 && <EmptyState label={t("inbox.empty")} />}
+        {rows.map((r) => (
+          <NavLink
             key={r.stem}
-            className="recording-row-wrap"
-            data-depth={depth}
-            style={{ "--recording-indent": `${depth * 14}px` } as CSSProperties}
+            to={`/inbox/${r.stem}`}
+            data-testid="recording-row"
+            className={({ isActive }) => "recording-row" + (isActive ? " active" : "")}
             onContextMenu={(event) => openMenu(event, r)}
           >
-            <NavLink
-              to={`/inbox/${r.stem}`}
-              data-testid="recording-row"
-              className={({ isActive }) => "recording-row" + (isActive ? " active" : "")}
-            >
-              <div className="recording-row-top">
-                <span className="recording-row-title">{r.title ?? r.stem}</span>
-              </div>
-              <div className="recording-row-time">
-                <span className="recording-row-time-part">
-                  <Clock size={12} strokeWidth={1.9} />
-                  {fmtDuration(r.durationSeconds)}
-                </span>
-                <span aria-hidden="true">•</span>
-                <span>{fmtTs(r.recordedAt)}</span>
-              </div>
-              <div className="recording-row-footer">
-                <div className="recording-row-tags">
-                  {tags.length > 0 ? (
-                    tags.map((tag) => (
-                      <span key={tag} className="recording-row-tag">{tag}</span>
-                    ))
-                  ) : (
-                    <span className="recording-row-add-tag" role="img" aria-label={t("tag.addAria")} title={t("tag.add")}>
-                      <Plus size={12} strokeWidth={2.1} />
-                    </span>
-                  )}
-                </div>
-                <div className="recording-row-icons" aria-label="Recording outputs">
-                  {r.hasTranscript && <FileText className="recording-row-output" size={13} strokeWidth={1.9} aria-label="Transcript ready" />}
-                  {r.hasSummary && <Sparkles className="recording-row-output" size={13} strokeWidth={1.9} aria-label="Summary ready" />}
-                  <RecordingStatusBadge state={r.status} error={r.statusError} compact />
-                </div>
-              </div>
-            </NavLink>
-          </div>
-          );
-        })}
+            <span className="recording-row-title">{r.title ?? r.stem}</span>
+            <span className="recording-row-meta">
+              <span>{fmtTs(r.recordedAt, locale)}</span>
+              <span>{fmtDuration(r.durationSeconds)}</span>
+              {(r.tags ?? []).map((tag) => <span key={tag} className="recording-row-tag">{tag}</span>)}
+              <RecordingStatusBadge state={r.status} error={r.statusError} compact />
+            </span>
+          </NavLink>
+        ))}
       </div>
       {menu && (
-        <div className="recording-context-menu" role="menu" style={menuStyle}>
-          <button type="button" role="menuitem" onClick={() => renameRow(menu.row)}>
-            <Pencil size={13} strokeWidth={1.8} />
+        <div className="recording-context-menu menu" role="menu" style={menuStyle}>
+          <button type="button" className="menu-item" role="menuitem" onClick={() => renameRow(menu.row)}>
+            <Pencil size={14} strokeWidth={1.75} />
             <span>{t("reader.context.rename")}</span>
           </button>
           <button
             type="button"
             role="menuitem"
-            onClick={() => {
-              closeMenu();
-              navigate(`/inbox/${menu.row.stem}`);
-            }}
-          >
-            <FileText size={13} strokeWidth={1.8} />
-            <span>{t("reader.action.openAtomic")}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="danger"
+            className="menu-item danger"
             disabled={isDeleteBlocked(menu.row)}
             onClick={() => deleteRow(menu.row)}
           >
-            <Trash2 size={13} strokeWidth={1.8} />
+            <Trash2 size={14} strokeWidth={1.75} />
             <span>{t("reader.context.delete")}</span>
           </button>
         </div>
@@ -244,6 +187,7 @@ export function RecordingsList() {
       listPending={isPending}
       listSlot={listSlot}
       detailSlot={<Outlet />}
+      emptyLabel={rows.length > 0 ? t("inbox.select") : undefined}
     />
   );
 }

@@ -1,69 +1,66 @@
-// web/src/components/Sidebar.tsx
-import { NavLink } from "react-router";
-import { Settings as SettingsIcon, HeartPulse, Mic, FileText, BookOpen, Bot, AudioLines, ListChecks } from "lucide-react";
-import type { ReactNode } from "react";
-import type { CSSProperties } from "react";
+import { Link, NavLink } from "react-router";
+import { ArrowLeft } from "lucide-react";
 import { Logo } from "./Logo.js";
+import { trpc } from "../trpc.js";
 import { useT } from "../i18n/LanguageProvider.js";
+import { MAIN_NAV, SETTINGS_ENTRY, SETTINGS_NAV, SETUP_ENTRY, type Destination } from "../navigation.js";
 import "./Sidebar.css";
 
-interface NavItem { to: string; labelKey: string; icon: ReactNode; showHealth?: boolean; depth?: number; }
-
-const TOP_SECTIONS: { headingKey: string; items: NavItem[] }[] = [
-  {
-    headingKey: "nav.section.workspace",
-    items: [
-      { to: "/agent-console", labelKey: "nav.agentConsole", icon: <Bot size={15} strokeWidth={1.8} />, depth: 1 },
-      { to: "/voice-input", labelKey: "nav.voiceInput", icon: <AudioLines size={15} strokeWidth={1.8} />, depth: 1 },
-      { to: "/inbox", labelKey: "nav.recordings", icon: <Mic size={15} strokeWidth={1.8} />, depth: 1 },
-      { to: "/knowledge/prompts",  labelKey: "nav.prompts",  icon: <FileText size={15} strokeWidth={1.8} />, depth: 1 },
-      { to: "/knowledge/glossary", labelKey: "nav.glossary", icon: <BookOpen size={15} strokeWidth={1.8} />, depth: 1 },
-    ],
-  },
-  {
-    headingKey: "nav.section.system",
-    items: [
-      { to: "/onboarding", labelKey: "nav.onboarding", icon: <ListChecks size={15} strokeWidth={1.8} />, depth: 1 },
-      { to: "/settings", labelKey: "nav.settings", icon: <SettingsIcon size={15} strokeWidth={1.8} />, depth: 1 },
-      { to: "/health", labelKey: "nav.health", icon: <HeartPulse size={15} strokeWidth={1.8} />, showHealth: true, depth: 1 },
-    ],
-  },
-];
-
-export function Sidebar() {
+function Item({ item, testId }: { item: Destination; testId?: string }) {
   const t = useT();
+  const Icon = item.icon;
+  return (
+    <NavLink to={item.to} data-testid={testId} className={({ isActive }) => "sidebar-item" + (isActive ? " active" : "")}>
+      <Icon size={16} strokeWidth={1.7} aria-hidden="true" />
+      <span className="sidebar-item-label">{t(item.labelKey)}</span>
+    </NavLink>
+  );
+}
+
+/**
+ * One sidebar, two modes. "main" holds the three places you work; "settings"
+ * replaces it with everything you configure, and a way back.
+ */
+export function Sidebar({ mode = "main", returnTo = "/agent-console" }: { mode?: "main" | "settings"; returnTo?: string }) {
+  const t = useT();
+  const onboarding = trpc.onboarding.status.useQuery(undefined, { retry: false, enabled: mode === "main" });
+  // Setup only asks for attention while it is unfinished.
+  const setupPending = onboarding.data?.completion?.completed === false;
+
+  if (mode === "settings") {
+    return (
+      <aside className="sidebar">
+        <Link className="sidebar-back" to={returnTo}><ArrowLeft size={15} strokeWidth={1.8} aria-hidden="true" />{t("settings.returnToApp")}</Link>
+        <nav className="sidebar-nav" aria-label={t("settings.navigation")}>
+          {SETTINGS_NAV.map((group, index) => (
+            <div className="sidebar-group" key={index}>
+              {group.map((item) => <Item key={item.to} item={item} testId={index === 0 ? "settings-category" : undefined} />)}
+            </div>
+          ))}
+        </nav>
+      </aside>
+    );
+  }
+
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <Logo size={30} />
+        <Logo size={22} />
         <span className="sidebar-brand-text" aria-label={t("app.name")}>
           <span className="sidebar-brand-wordmark">Yulu</span>
           <span className="sidebar-brand-hanzi">语录</span>
         </span>
       </div>
-
-      {TOP_SECTIONS.map((section) => (
-        <div key={section.headingKey} className="sidebar-section">
-          <div className="sidebar-heading">{t(section.headingKey).toUpperCase()}</div>
-          {section.items.map((it) => (
-            <NavLink
-              key={it.to}
-              to={it.to}
-              title={t(it.labelKey)}
-              data-depth={it.depth ?? 0}
-              style={{ "--sidebar-indent": `${(it.depth ?? 0) * 12}px` } as CSSProperties}
-              className={({ isActive }) => "sidebar-item" + (isActive ? " active" : "")}
-            >
-              {it.icon}
-              <span className="sidebar-item-label">{t(it.labelKey)}</span>
-
-            </NavLink>
-          ))}
+      <nav className="sidebar-nav">
+        <div className="sidebar-group">
+          {MAIN_NAV.map((item) => <Item key={item.to} item={item} />)}
         </div>
-      ))}
-
+      </nav>
       <div className="sidebar-spacer" />
-
+      <div className="sidebar-group">
+        {setupPending && <Item item={SETUP_ENTRY} />}
+        <Item item={SETTINGS_ENTRY} />
+      </div>
     </aside>
   );
 }

@@ -1,12 +1,11 @@
 import { useState } from "react";
-import { CheckCircle2, Circle, Sparkles } from "lucide-react";
+import { CheckCircle2, Circle } from "lucide-react";
 import { Link } from "react-router";
 import { useT } from "../i18n/LanguageProvider.js";
 import { trpc } from "../trpc.js";
 import { PermissionsPanel } from "../components/PermissionsPanel.js";
 import "./onboarding.css";
 
-export const handle = { breadcrumb: "nav.onboarding", filters: null };
 
 const CAPABILITY_LABELS = {
   conversation: "onboarding.capability.conversation",
@@ -57,15 +56,13 @@ export function OnboardingHome() {
       : t("onboarding.completion.incomplete");
 
   return (
-    <section className="onboarding-page" aria-labelledby="onboarding-title">
+    <section className="onboarding-page page" aria-labelledby="onboarding-title">
       <header className="onboarding-header">
-        <span className="onboarding-eyebrow">{t("onboarding.eyebrow")}</span>
-        <h1 id="onboarding-title">{t("onboarding.title")}</h1>
-        <p>{t("onboarding.subtitle")}</p>
+        <h1 id="onboarding-title" className="page-title">{t("onboarding.title")}</h1>
+        <p className="page-sub">{t("onboarding.subtitle")}</p>
         <div className="onboarding-completion" data-current={data.completion.currentVersionCompleted}>
-          {data.completion.completed ? <CheckCircle2 size={18} aria-hidden="true" /> : <Circle size={18} aria-hidden="true" />}
+          {data.completion.completed ? <CheckCircle2 size={16} strokeWidth={1.8} aria-hidden="true" /> : <Circle size={16} strokeWidth={1.8} aria-hidden="true" />}
           <span>{completionText}</span>
-          <small>{data.version}</small>
         </div>
       </header>
 
@@ -77,7 +74,7 @@ export function OnboardingHome() {
             <span className="onboarding-step-kind">{t("onboarding.required")}</span>
             <h2>{t("onboarding.core.title")}</h2>
           </div>
-          <span className="onboarding-outcome" data-outcome={data.coreActivation.completed ? "adopted" : "pending"}>
+          <span className="onboarding-outcome badge" data-outcome={data.coreActivation.completed ? "adopted" : "pending"}>
             {data.coreActivation.completed ? t("onboarding.core.complete") : t("onboarding.core.incomplete")}
           </span>
         </div>
@@ -87,7 +84,7 @@ export function OnboardingHome() {
             ? t("onboarding.core.resumeBody")
             : t("onboarding.core.incompleteBody")}</p>
         <div className="onboarding-actions">
-          <Link className="onboarding-action primary" to={data.coreActivation.href}>
+          <Link className="btn btn-primary" to={data.coreActivation.href}>
             {data.coreActivation.completed
               ? t("onboarding.action.review")
               : data.coreActivation.attempt
@@ -97,7 +94,7 @@ export function OnboardingHome() {
           {!data.coreActivation.completed && (
             <button
               type="button"
-              className="onboarding-action"
+              className="btn btn-quiet"
               disabled={deferActivation.isPending}
               onClick={() => void run(() => deferActivation.mutateAsync())}
             >
@@ -121,9 +118,8 @@ export function OnboardingHome() {
                   <span className="onboarding-step-kind">{t("onboarding.optional")}</span>
                   <h2>{t(CAPABILITY_LABELS[capability.id])}</h2>
                 </div>
-                <span className="onboarding-outcome" data-outcome={durableState}>
-                  {capability.isNew && !capability.outcome && <Sparkles size={14} aria-hidden="true" />}
-                  {t(`onboarding.outcome.${durableState}`)}
+                <span className="onboarding-outcome badge" data-outcome={durableState}>
+                                    {t(`onboarding.outcome.${durableState}`)}
                 </span>
               </div>
 
@@ -136,14 +132,14 @@ export function OnboardingHome() {
 
               <div className="onboarding-actions">
                 {capability.href && (
-                  <Link className="onboarding-action primary" to={capability.href}>
+                  <Link className="btn btn-primary" to={capability.href}>
                     {t("onboarding.action.open")}
                   </Link>
                 )}
                 {capability.id === "conversation" && !capability.outcome && (
                   <button
                     type="button"
-                    className="onboarding-action"
+                    className="btn"
                     disabled={adoptConversation.isPending}
                     onClick={() => void run(() => adoptConversation.mutateAsync())}
                   >
@@ -153,7 +149,7 @@ export function OnboardingHome() {
                 {capability.id === "calendar-source" && !capability.outcome && (
                   <button
                     type="button"
-                    className="onboarding-action"
+                    className="btn"
                     disabled={capability.readiness.state !== "ready" || adoptCalendarSource.isPending}
                     onClick={() => void run(() => adoptCalendarSource.mutateAsync())}
                   >
@@ -163,7 +159,7 @@ export function OnboardingHome() {
                 {capability.id === "agent-calendar-connector" && !capability.outcome && (
                   <button
                     type="button"
-                    className="onboarding-action"
+                    className="btn"
                     disabled={
                       capability.readiness.state !== "ready" ||
                       adoptAgentCalendarConnector.isPending
@@ -176,7 +172,7 @@ export function OnboardingHome() {
                 {capability.id === "sharing" && !capability.outcome && (
                   <button
                     type="button"
-                    className="onboarding-action"
+                    className="btn"
                     disabled={capability.readiness.state !== "ready" || adoptSharing.isPending}
                     onClick={() => void run(() => adoptSharing.mutateAsync())}
                   >
@@ -186,7 +182,7 @@ export function OnboardingHome() {
                 {!capability.outcome && (
                   <button
                     type="button"
-                    className="onboarding-action"
+                    className="btn btn-quiet"
                     disabled={deferOptional.isPending}
                     onClick={() => void run(() => deferOptional.mutateAsync({ capability: capability.id }))}
                   >

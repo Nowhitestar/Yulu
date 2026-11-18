@@ -159,7 +159,7 @@ function SelectValue({ value, options, onCommit, emptyLabel, label }: SelectProp
     const rawLabel = options.find((o) => o.value === value)?.label ?? value;
     const isEmpty = rawLabel.trim().length === 0;
     return (
-      <button type="button" aria-label={label} className={"value-display" + (isEmpty ? " value-display--empty" : "")} onClick={() => setEditing(true)}>
+      <button type="button" aria-label={label} className={"value-display value-display--select" + (isEmpty ? " value-display--empty" : "")} onClick={() => setEditing(true)}>
         {displayOrUnset(rawLabel, t, emptyLabel)}
       </button>
     );
@@ -243,8 +243,8 @@ function PathValue({ value, mode, filter, onCommit, disabled, disabledNote, empt
   return (
     <div className="path-value">
       <span className="path-display" title={value || emptyLabel}>{value || emptyLabel || t("path.unset")}</span>
-      {!disabled && <button type="button" className="path-btn" onClick={choose} disabled={pickFile.isPending}>{t("path.choose")}</button>}
-      {value && <button type="button" className="path-btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>{t("path.reveal")}</button>}
+      {!disabled && <button type="button" className="btn" onClick={choose} disabled={pickFile.isPending}>{t("path.choose")}</button>}
+      {value && <button type="button" className="btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>{t("path.reveal")}</button>}
       {disabled && <span className="value-disabled-note">{disabledNote ?? t("settings.locked.recording")}</span>}
       {pending && <CloudWarn warning={pending} onAccept={acceptCloud} onCancel={cancelCloud} />}
     </div>
@@ -270,8 +270,8 @@ function CloudWarn({ warning, onAccept, onCancel }: { warning: CloudWarning; onA
         <div className="cloud-warn-note">{t("cloudWarn.note")}</div>
       </div>
       <div className="cloud-warn-actions">
-        <button type="button" className="path-btn cloud-warn-cancel" onClick={onCancel}>{t("cloudWarn.cancel")}</button>
-        <button type="button" className="path-btn cloud-warn-accept" onClick={onAccept}>{t("cloudWarn.useAnyway")}</button>
+        <button type="button" className="btn" onClick={onCancel}>{t("cloudWarn.cancel")}</button>
+        <button type="button" className="btn btn-danger" onClick={onAccept}>{t("cloudWarn.useAnyway")}</button>
       </div>
     </div>
   );
@@ -282,7 +282,7 @@ function ReadonlyValue({ value, revealInFinder }: ReadonlyProps) {
   return (
     <div className="path-value">
       <span className="path-display">{value}</span>
-      {revealInFinder && <button type="button" className="path-btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>Reveal</button>}
+      {revealInFinder && <button type="button" className="btn" onClick={() => openInFinder.mutate({ path: value, reveal: true })}>Reveal</button>}
     </div>
   );
 }

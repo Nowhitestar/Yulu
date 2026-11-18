@@ -93,33 +93,41 @@ export function PromptReader({ prompt, onSave, onDelete }: PromptReaderProps) {
     <div className="preader">
       <div className="preader-field">
         <label className="preader-label" htmlFor="prompt-name">{t("promptReader.name")}</label>
-        <input id="prompt-name" className="preader-input" value={name} onChange={(e) => setName(e.target.value)} />
+        <input id="prompt-name" className="preader-name" value={name} onChange={(e) => setName(e.target.value)} />
       </div>
-      <div className="preader-field">
-        <label className="preader-label" htmlFor="prompt-slug">{t("promptReader.slug")}</label>
-        <input id="prompt-slug" className="preader-input" value={slug} onChange={(e) => setSlug(e.target.value)} />
+      <div className="preader-meta">
+        <div className="preader-field">
+          <label className="preader-label" htmlFor="prompt-slug">{t("promptReader.slug")}</label>
+          <input id="prompt-slug" className="field preader-slug" value={slug} onChange={(e) => setSlug(e.target.value)} />
+        </div>
+        <div className="preader-field">
+          <label className="preader-label" htmlFor="prompt-category">{t("promptReader.category")}</label>
+          <select
+            id="prompt-category"
+            className="field"
+            value={category}
+            onChange={(e) => {
+              const next = e.target.value as Category;
+              setCategory(next);
+              if (next !== "summary") setIsAutoRun(false);
+            }}
+          >
+            {CATEGORIES.map((c) => <option key={c} value={c}>{t(`category.${c}`)}</option>)}
+          </select>
+        </div>
       </div>
-      <div className="preader-field">
-        <label className="preader-label" htmlFor="prompt-category">{t("promptReader.category")}</label>
-        <select
-          id="prompt-category"
-          className="preader-input"
-          value={category}
-          onChange={(e) => {
-            const next = e.target.value as Category;
-            setCategory(next);
-            if (next !== "summary") setIsAutoRun(false);
-          }}
-        >
-          {CATEGORIES.map((c) => <option key={c} value={c}>{t(`category.${c}`)}</option>)}
-        </select>
-      </div>
-      <div className="preader-field">
-        <label className="preader-label">{t("promptReader.autorun")}</label>
+      <div className="preader-autorun">
+        <div>
+          <span className="preader-autorun-title">{t("promptReader.autorun")}</span>
+          <span id="prompt-autorun-help" className="preader-help">
+            {t(autoRunAvailable ? "promptReader.autorunHelp" : "promptReader.autorunSummaryOnly")}
+          </span>
+        </div>
         <button
           type="button"
           role="switch"
           aria-checked={isAutoRun}
+          aria-label={t("promptReader.autorun")}
           aria-describedby="prompt-autorun-help"
           disabled={!autoRunAvailable}
           className={"preader-toggle" + (isAutoRun ? " on" : "")}
@@ -127,24 +135,22 @@ export function PromptReader({ prompt, onSave, onDelete }: PromptReaderProps) {
         >
           <span className="preader-toggle-knob" />
         </button>
-        <span id="prompt-autorun-help" className="preader-help">
-          {t(autoRunAvailable ? "promptReader.autorunHelp" : "promptReader.autorunSummaryOnly")}
-        </span>
       </div>
-      <div className="preader-field preader-field-content">
+      <div className="preader-field">
         <label className="preader-label" htmlFor="prompt-content">{t("promptReader.content")}</label>
         <textarea
           id="prompt-content"
-          className="preader-textarea"
+          className="field preader-textarea"
           value={content}
+          spellCheck={false}
           onChange={(e) => setContent(e.target.value)}
           rows={Math.max(15, content.split("\n").length + 2)}
         />
       </div>
       <div className="preader-actions">
-        <button type="button" className="preader-btn primary" disabled={!canSave} onClick={onSaveClick}>{t("promptReader.save")}</button>
+        <button type="button" className="btn btn-primary" disabled={!canSave} onClick={onSaveClick}>{t("promptReader.save")}</button>
         {!isCreate && (
-          <button type="button" className="preader-btn danger" onClick={onDeleteClick}>{t("promptReader.delete")}</button>
+          <button type="button" className="btn btn-danger" onClick={onDeleteClick}>{t("promptReader.delete")}</button>
         )}
       </div>
     </div>

@@ -5,7 +5,6 @@ import { trpc } from "../trpc.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./agent-connections.css";
 
-export const handle = { breadcrumb: "breadcrumb.agentConnections", filters: null };
 
 export function LegacyAgentConnectionsRedirect() {
   const { search } = useLocation();
@@ -132,7 +131,7 @@ function revealConnection(id: string) {
   target.scrollIntoView?.({ block: "nearest" });
 }
 
-export function AgentConnections({ embedded = false }: { embedded?: boolean } = {}) {
+export function AgentConnections() {
   const t = useT();
   const [searchParams] = useSearchParams();
   const view = trpc.agentConnections.view.useQuery();
@@ -224,7 +223,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   })();
   const nativeAuthorizationActions = (connectionId: string, label: string) => (
     <div className="agent-connection-actions">
-      <button
+      <button className="btn"
         type="button"
         disabled={startNativeAuthorization.isPending}
         onClick={() => launchNativeLogin(connectionId)}
@@ -232,7 +231,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
         {t("agentConnections.nativeAuthorization.open", { agent: label })}
       </button>
       {nativeLoginStarted === connectionId && (
-        <button
+        <button className="btn"
           type="button"
           disabled={refreshNativeAuthorizationStatus.isPending}
           onClick={() => refreshAfterNativeLogin(connectionId)}
@@ -250,7 +249,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   if (view.isError || !view.data) {
     return (
       <section className="agent-connections-page">
-        <h1>{t("agentConnections.title")}</h1>
+        <h2 className="settings-section-h">{t("agentConnections.title")}</h2>
         <p role="alert">{t("agentConnections.loadFailed")}</p>
       </section>
     );
@@ -292,18 +291,12 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
     });
   };
 
-  const Page = embedded ? "section" : "main";
-  const Title = embedded ? "h2" : "h1";
   return (
-    <Page className={`agent-connections-page${embedded ? " embedded" : ""}`} aria-labelledby="agent-connections-title">
-      <header className="agent-connections-hero">
-        <div>
-            <Title id="agent-connections-title">{t("agentConnections.title")}</Title>
-          <p>{t("agentConnections.subtitle")}</p>
-        </div>
-      </header>
+    <section className="agent-connections-page" aria-labelledby="agent-connections-title">
+      <h2 className="settings-section-h" id="agent-connections-title">{t("agentConnections.title")}</h2>
+      <p className="settings-section-sub">{t("agentConnections.subtitle")}</p>
 
-      <div className="agent-usage-list" aria-label={t("agentConnections.usage")}>
+      <div className="group agent-usage-list" aria-label={t("agentConnections.usage")}>
         {(["transcription", "summary", "conversation"] as const).map((capability) => {
           const selection = view.data.selections[capability];
           const selected = view.data.connections.find((item) => item.id === selection.connectionId);
@@ -321,9 +314,9 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
               </small>}
             </div>
             {capability === "transcription" ? (
-              <Link className="settings-text-link" to="/settings/recording#transcription">{t("agentConnections.change")}</Link>
+              <Link className="link" to="/settings/recording#transcription">{t("agentConnections.change")}</Link>
             ) : (
-              <button className="settings-text-link" type="button"
+              <button className="link" type="button"
                 aria-label={t("agentConnections.configureCapability", { capability: capabilityLabel(t, capability) })}
                 onClick={() => revealConnection(selected ? `agent-connection-${selected.id}-${capability}` : "agent-managed-connections")}>
                 {t("agentConnections.change")}
@@ -358,7 +351,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
           <p>{t("agentConnections.missing.pinned")}</p>
           <button
             type="button"
-            className="agent-connection-button"
+            className="btn"
             disabled={refreshCandidates.isPending}
             onClick={() => void run(() => refreshCandidates.mutateAsync())}
           >
@@ -382,7 +375,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
               <p>{t("agentConnections.xai.description")}</p>
             </div>
             <span
-              className={`agent-connection-state ${connection.authorization.connected ? "ready" : "muted"}`}
+              className={`badge agent-connection-state ${connection.authorization.connected ? "ready" : "muted"}`}
               role="status"
               aria-label={t("agentConnections.xai.statusAria")}
             >
@@ -398,22 +391,22 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             <summary>{t("agentConnections.accountSettings")}</summary>
           <div className="agent-connection-actions">
             {authorizing ? (
-              <button type="button" onClick={() => void run(() => cancelAuthorization.mutateAsync())}>
+              <button className="btn" type="button" onClick={() => void run(() => cancelAuthorization.mutateAsync())}>
                 {t("agentConnections.authorization.cancel")}
               </button>
             ) : connection.authorization.oauthReadSucceeded === false ? (
-              <button type="button" disabled={view.isFetching} onClick={() => void view.refetch()}>
+              <button className="btn" type="button" disabled={view.isFetching} onClick={() => void view.refetch()}>
                 {t("agentConnections.credentialAccess.retry")}
               </button>
             ) : (
-              <button type="button" onClick={startAuthorization}>
+              <button className="btn" type="button" onClick={startAuthorization}>
                 {connection.authorization.oauthConnected
                   ? t("agentConnections.authorization.reconnect")
                   : t("agentConnections.authorization.connect")}
               </button>
             )}
             {connection.authorization.oauthConnected && !authorizing && (
-              <button type="button" onClick={() => void run(() => logoutOAuth.mutateAsync())}>
+              <button className="btn" type="button" onClick={() => void run(() => logoutOAuth.mutateAsync())}>
                 {t("agentConnections.authorization.logout")}
               </button>
             )}
@@ -423,7 +416,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             <div className="agent-connection-guidance" role="alert" aria-label={t("agentConnections.credentialAccess.unavailable")}>
               {t("agentConnections.credentialAccess.help")}
               {connection.authorization.oauthReadSucceeded !== false && (
-                <button type="button" disabled={view.isFetching} onClick={() => void view.refetch()}>
+                <button className="btn" type="button" disabled={view.isFetching} onClick={() => void view.refetch()}>
                   {t("agentConnections.credentialAccess.retry")}
                 </button>
               )}
@@ -484,7 +477,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
           >
             <label htmlFor="agent-connection-xai-key">{t("agentConnections.apiKey.label")}</label>
             <div>
-              <input
+              <input className="field"
                 id="agent-connection-xai-key"
                 type="password"
                 autoComplete="new-password"
@@ -492,9 +485,9 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                 value={apiKey}
                 onChange={(event) => setApiKeyValue(event.target.value)}
               />
-              <button type="submit" disabled={!apiKey.trim()}>{t("agentConnections.apiKey.save")}</button>
+              <button className="btn" type="submit" disabled={!apiKey.trim()}>{t("agentConnections.apiKey.save")}</button>
               {connection.authorization.apiKeyConfigured && (
-                <button type="button" onClick={() => void run(() => clearApiKey.mutateAsync())}>
+                <button className="btn" type="button" onClick={() => void run(() => clearApiKey.mutateAsync())}>
                   {t("agentConnections.apiKey.remove")}
                 </button>
               )}
@@ -530,7 +523,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                       <p>{model}</p>
                     </div>
                     <span
-                      className={`agent-capability-state ${current}`}
+                      className={`badge agent-capability-state ${current}`}
                       role={current === "failed" ? "alert" : "status"}
                     >
                       {t(`agentConnections.readiness.${current}`)}
@@ -550,7 +543,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                   {capability !== "transcription" && (
                     <label className="agent-connection-model" htmlFor={`agent-connection-model-${capability}`}>
                       <span>{t("agentConnections.model", { capability: capabilityLabel(t, capability) })}</span>
-                      <input
+                      <input className="field"
                         id={`agent-connection-model-${capability}`}
                         type="text"
                         maxLength={128}
@@ -569,7 +562,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                         version: item.disclosure.disclosureVersion,
                       })}</strong>
                       <p>{t(`agentConnections.disclosure.${capability}`)}</p>
-                      <button
+                      <button className="btn"
                         type="button"
                         onClick={() => void run(() => acceptDisclosure.mutateAsync({ connectionId: connection.id, capability }))}
                       >
@@ -579,7 +572,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                   )}
                   <div className="agent-connection-actions">
                     {(capability !== "transcription" || !item.selected) && (
-                      <button
+                      <button className="btn"
                         type="button"
                         disabled={capability !== "transcription" && !model.trim()}
                         onClick={() => void run(() => select.mutateAsync({
@@ -593,7 +586,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                           : t("agentConnections.saveSelection", { capability: capabilityLabel(t, capability) })}
                       </button>
                     )}
-                    <button
+                    <button className="btn"
                       type="button"
                       disabled={!connection.authorization.connected || !item.selected || modelChanged ||
                         item.disclosure?.required === true || probe.isPending ||
@@ -620,7 +613,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
           <button
             ref={deleteButtonRef}
             type="button"
-            className="agent-connection-delete"
+            className="btn btn-quiet btn-danger agent-connection-delete"
             onClick={() => {
               setActionError(null);
               void deletionImpact.mutateAsync({ connectionId: connection.id })
@@ -640,7 +633,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
           <p>{t("agentConnections.restore.description")}</p>
           <button
             type="button"
-            className="agent-connection-button"
+            className="btn"
             disabled={restoreDirectXai.isPending}
             onClick={() => void run(() => restoreDirectXai.mutateAsync())}
           >
@@ -671,7 +664,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                 )}
               </div>
               <span
-                className={`agent-connection-state ${agent.authorization.connected ? "ready" : "muted"}`}
+                className={`badge agent-connection-state ${agent.authorization.connected ? "ready" : "muted"}`}
                 role="status"
                 aria-label={t(`${copy}.statusAria`)}
               >
@@ -754,7 +747,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                         <p>{model}</p>
                       </div>
                       <span
-                        className={`agent-capability-state ${current}`}
+                        className={`badge agent-capability-state ${current}`}
                         role={current === "failed" ? "alert" : "status"}
                       >
                         {t(`agentConnections.readiness.${current}`)}
@@ -767,7 +760,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     )}
                     <label className="agent-connection-model" htmlFor={`${agent.id}-${capability}-model`}>
                       <span>{t(`${copy}.model.${capability}`)}</span>
-                      <input
+                      <input className="field"
                         id={`${agent.id}-${capability}-model`}
                         type="text"
                         maxLength={128}
@@ -781,7 +774,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     {item.disclosure?.required && !disclosureAcceptedLocally && (
                       <div className="agent-connection-guidance" role="alert">
                         {t(`${copy}.disclosure.${capability}`)}
-                        <button
+                        <button className="btn"
                           type="button"
                           onClick={() => void run(async () => {
                             await acceptDisclosure.mutateAsync({ connectionId: agent.id, capability });
@@ -793,7 +786,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                       </div>
                     )}
                     <div className="agent-connection-actions">
-                      <button
+                      <button className="btn"
                         type="button"
                         disabled={!agent.authorization.connected || !model.trim() ||
                           item.currentReadiness.status !== "ready" || model !== item.currentReadiness.model}
@@ -805,7 +798,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                       >
                         {t(`${copy}.select.${capability}`)}
                       </button>
-                      <button
+                      <button className="btn"
                         type="button"
                         disabled={!agent.authorization.connected || probe.isPending ||
                           createConversationProbeAttempt.isPending ||
@@ -834,7 +827,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             </div>
             <button
               type="button"
-              className="agent-connection-delete"
+              className="btn btn-quiet btn-danger agent-connection-delete"
               onClick={(event) => {
                 deleteButtonRef.current = event.currentTarget;
                 setActionError(null);
@@ -855,7 +848,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
         <summary>{t("agentConnections.add")}</summary>
         <button
           type="button"
-          className="agent-connection-button"
+          className="btn"
           disabled={refreshCandidates.isPending}
           onClick={() => void run(() => refreshCandidates.mutateAsync())}
         >
@@ -886,7 +879,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
               <div className="agent-connection-candidate-action">
                 <label className="agent-connection-model" htmlFor={`${candidate.id}-conversation-model`}>
                   <span>{t(`${supportedAgentCopy(candidate.adapter)}.model`)}</span>
-                  <input
+                  <input className="field"
                     id={`${candidate.id}-conversation-model`}
                     type="text"
                     maxLength={128}
@@ -897,7 +890,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     }))}
                   />
                 </label>
-                <button
+                <button className="btn"
                   type="button"
                   disabled={confirmCandidate.isPending || !(agentModelDrafts[candidate.id] ?? candidateModel(candidate.adapter)).trim()}
                   onClick={() => void run(() => confirmCandidate.mutateAsync({
@@ -951,14 +944,6 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
         </details>
       )}
 
-      {!embedded && (
-        <nav className="agent-connections-backlinks" aria-label={t("agentConnections.backlinks") }>
-          <Link to="/activate">{t("breadcrumb.activate")}</Link>
-          <Link to="/settings/llm">{t("breadcrumb.settings")}</Link>
-          <Link to="/agent-console">{t("breadcrumb.agentConsole")}</Link>
-        </nav>
-      )}
-
       {impact && deletionConnection && (
         <div className="agent-connection-dialog-backdrop">
           <section
@@ -986,10 +971,10 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                 ? "agentConnections.delete.runtimeBoundary"
                 : "agentConnections.delete.oauthBoundary")}</p>
             <div className="agent-connection-actions">
-              <button type="button" onClick={closeDeletionImpact}>{t("agentConnections.delete.cancel")}</button>
+              <button className="btn" type="button" onClick={closeDeletionImpact}>{t("agentConnections.delete.cancel")}</button>
               <button
                 type="button"
-                className="agent-connection-delete"
+                className="btn btn-danger"
                 onClick={() => void run(async () => {
                   const deletedConnectionId = deletionConnection.id;
                   await remove.mutateAsync({ connectionId: deletedConnectionId, confirmed: true });
@@ -1005,6 +990,6 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
           </section>
         </div>
       )}
-    </Page>
+    </section>
   );
 }

@@ -46,6 +46,7 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
       <h2 className="settings-section-h">{t("settings.voice.heading")}</h2>
       <p className="settings-section-sub">{t("settings.voice.sub")}</p>
 
+      <div className="group settings-group">
       <InlineEditRow
         label={t("settings.voice.enabled")}
         help={agentHelp}
@@ -56,7 +57,7 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
         status={tracker.statusFor("status_agent.enabled")}
       />
 
-      {statusAgent && agentEnabled !== agentRunning && <Link className="settings-text-link" to="/settings/general#capabilities">{t("settings.voice.checkService")}</Link>}
+      {statusAgent && agentEnabled !== agentRunning && <div className="settings-group-note"><Link className="link" to="/settings/general#capabilities">{t("settings.voice.checkService")}</Link></div>}
       <InlineEditRow label={t("settings.voice.inputMode")} help={t("settings.voice.inputModeHelp")}
         type="select" value={cfg.status_agent.voice_input_mode ?? "toggle"}
         options={[{ value: "toggle", label: t("settings.voice.modeToggle") }, { value: "hold", label: t("settings.voice.modeHold") }]}
@@ -77,18 +78,20 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
       />
           <button
             type="button"
-            className="path-btn"
+            className="btn"
             disabled={!(cfg.status_agent.feedback_sounds ?? true) || !agentRunning || previewSound.isPending}
             onClick={() => previewSound.mutate()}
           >
             {t("settings.voice.preview")}
           </button>
       </div>
+      </div>
 
       <HotkeySettings hotkeys={cfg.status_agent.hotkeys}
         disabled={isBlocked("status_agent.hotkeys")}
         onCommit={(path, value) => commit(path)(value)} />
 
+      <div className="group settings-group">
       <InlineEditRow
         label={t("settings.voice.targetLanguage")}
         type="text"
@@ -98,8 +101,9 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
 
       <div className="row">
         <div className="row-label">{t("settings.voice.glossary")}</div>
-        <div className="row-value"><Link to="/knowledge/glossary">{t("settings.voice.openGlossary")}</Link></div>
+        <div className="row-value"><Link className="link" to="/knowledge/glossary">{t("settings.voice.openGlossary")}</Link></div>
         <div className="row-status" />
+      </div>
       </div>
       <DictationSettings preferences={dictation}
         available={cfg.transcription.engine === "xai" && cfg.intelligence?.conversation?.provider === "xai"}

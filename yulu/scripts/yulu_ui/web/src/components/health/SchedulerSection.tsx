@@ -46,8 +46,8 @@ export function SchedulerSection() {
           <p>{data?.schedulePath ?? t("health.scheduler.loading")}</p>
         </div>
         <div className="control-actions">
-          <button type="button" className="control-btn" onClick={() => refetch()}>{t("common.refresh")}</button>
-          <button type="button" className="control-btn" disabled={reloadMut.isPending} onClick={() => reloadMut.mutate()}>
+          <button type="button" className="btn" onClick={() => refetch()}>{t("common.refresh")}</button>
+          <button type="button" className="btn" disabled={reloadMut.isPending} onClick={() => reloadMut.mutate()}>
             {t("health.scheduler.reload")}
           </button>
         </div>

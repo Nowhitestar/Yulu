@@ -5,7 +5,6 @@ import { useCallback } from "react";
 import { useHotkeys } from "../../hooks/useHotkeys.js";
 import { trpc } from "../../trpc.js";
 
-export const handle = { breadcrumb: "breadcrumb.inbox", filters: null };
 
 /**
  * Wraps all /inbox/* routes. Registers keyboard shortcuts (j/k) once.

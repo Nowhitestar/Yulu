@@ -5,5 +5,5 @@ import { useT } from "../../i18n/LanguageProvider.js";
 
 export function PromptsIndex() {
   const t = useT();
-  return <EmptyState icon={<FileText size={32} strokeWidth={1.5} />} label={t("prompts.selectHint")} />;
+  return <EmptyState icon={<FileText size={28} strokeWidth={1.4} />} label={t("prompts.selectHint")} />;
 }

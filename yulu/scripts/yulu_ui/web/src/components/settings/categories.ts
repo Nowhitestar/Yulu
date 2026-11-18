@@ -32,16 +32,10 @@ export function settingsTarget(category: string, hash = "", path = "") {
   return { id: legacy?.id ?? category, hash: hash || legacy?.hash || "" };
 }
 
-export const CATEGORY_ORDER = CATEGORIES.map((category) => category.id);
-
 export function categoryMeta(id: string): CategoryMeta | undefined {
   return CATEGORIES.find((category) => category.id === settingsTarget(id).id);
 }
 
 export function categoryLabelKey(id: string): string {
   return categoryMeta(id)?.labelKey ?? id;
-}
-
-export function categoryDescKey(id: string): string {
-  return categoryMeta(id)?.descKey ?? "";
 }

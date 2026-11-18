@@ -81,7 +81,7 @@ export function CommandEditor({ value, onChange }: CommandEditorProps) {
         >
           <span className="cmd-grip" aria-hidden="true">⠿</span>
           <input
-            className="cmd-input"
+            className="cmd-input field"
             type="text"
             value={arg}
             onChange={(e) => updateAt(i, e.target.value)}
@@ -91,10 +91,10 @@ export function CommandEditor({ value, onChange }: CommandEditorProps) {
               if (e.key === "Escape") { setDirty(false); setDraft(cleanArgs(value)); }
             }}
           />
-          <button type="button" className="cmd-remove" onClick={() => removeAt(i)} aria-label={t("cmd.removeAria", { i })}>×</button>
+          <button type="button" className="icon-btn cmd-remove" onClick={() => removeAt(i)} aria-label={t("cmd.removeAria", { i })}>×</button>
         </div>
       ))}
-      <button type="button" className="cmd-add" onClick={add}>{t("cmd.add")}</button>
+      <button type="button" className="btn btn-quiet cmd-add" onClick={add}>{t("cmd.add")}</button>
     </div>
   );
 }

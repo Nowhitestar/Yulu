@@ -6,8 +6,6 @@ import { trpc } from "../../trpc.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import "./glossary.css";
 
-export const handle = { breadcrumb: "breadcrumb.glossary", filters: null };
-
 interface VocabRow {
   id: string;
   term: string;
@@ -84,58 +82,57 @@ export function Glossary() {
   };
 
   return (
-    <div className="glossary-page">
-      <div className="glossary-content">
-        <header className="glossary-intro">
-          <div>
-            <h1>{t("glossary.title")}</h1>
-            <p>{t("glossary.description")}</p>
-          </div>
-          <span className="glossary-count">{t("glossary.count", { n: termGroups.length })}</span>
-        </header>
-
-        <form className="glossary-add" onSubmit={(event) => void addTerm(event)}>
-          <Plus size={17} strokeWidth={1.9} aria-hidden="true" />
-          <input
-            autoComplete="off"
-            value={term}
-            onChange={(event) => {
-              setTerm(event.target.value);
-              if (error) setError(null);
-            }}
-            placeholder={t("glossary.input")}
-            aria-label={t("glossary.input")}
-          />
-          <button type="submit" disabled={!term.trim() || addMut.isPending}>
-            {t("glossary.add")}
-          </button>
-        </form>
-
-        {error && <div className="glossary-error" role="alert">{error}</div>}
-
-        <div className="glossary-terms" aria-live="polite" aria-busy={isPending}>
-          {termGroups.map((group) => (
-            <span
-              key={group.term.toLocaleLowerCase()}
-              className={`glossary-term${deletingTerm === group.term ? " deleting" : ""}`}
-              data-testid={`glossary-term-${group.ids[0]}`}
-            >
-              <span>{group.term}</span>
-              <button
-                type="button"
-                aria-label={t("glossary.delete", { term: group.term })}
-                title={t("glossary.delete", { term: group.term })}
-                disabled={deletingTerm !== null}
-                onClick={() => void deleteTerm(group)}
-              >
-                <X size={13} strokeWidth={2.2} aria-hidden="true" />
-              </button>
-            </span>
-          ))}
-          {!isPending && termGroups.length === 0 && (
-            <div className="glossary-empty">{t("glossary.empty")}</div>
-          )}
+    <div className="glossary-page page">
+      <header className="page-head">
+        <div>
+          <h1 className="page-title">{t("glossary.title")}</h1>
+          <p className="page-sub">{t("glossary.description")}</p>
         </div>
+        <span className="glossary-count">{t("glossary.count", { n: termGroups.length })}</span>
+      </header>
+
+      <form className="glossary-add" onSubmit={(event) => void addTerm(event)}>
+        <Plus size={16} strokeWidth={1.8} aria-hidden="true" />
+        <input
+          autoComplete="off"
+          value={term}
+          onChange={(event) => {
+            setTerm(event.target.value);
+            if (error) setError(null);
+          }}
+          placeholder={t("glossary.input")}
+          aria-label={t("glossary.input")}
+        />
+        <button type="submit" className="btn btn-primary" disabled={!term.trim() || addMut.isPending}>
+          {t("glossary.add")}
+        </button>
+      </form>
+
+      {error && <div className="glossary-error" role="alert">{error}</div>}
+
+      <div className="glossary-terms" aria-live="polite" aria-busy={isPending}>
+        {termGroups.map((group) => (
+          <div
+            key={group.term.toLocaleLowerCase()}
+            className={`glossary-term${deletingTerm === group.term ? " deleting" : ""}`}
+            data-testid={`glossary-term-${group.ids[0]}`}
+          >
+            <span>{group.term}</span>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label={t("glossary.delete", { term: group.term })}
+              title={t("glossary.delete", { term: group.term })}
+              disabled={deletingTerm !== null}
+              onClick={() => void deleteTerm(group)}
+            >
+              <X size={14} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          </div>
+        ))}
+        {!isPending && termGroups.length === 0 && (
+          <div className="glossary-empty">{t("glossary.empty")}</div>
+        )}
       </div>
     </div>
   );

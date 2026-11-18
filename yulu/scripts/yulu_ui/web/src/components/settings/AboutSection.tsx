@@ -19,13 +19,14 @@ export function AboutSection() {
     <section id="about" className="settings-section">
       <h2 className="settings-section-h">{t("settings.about.heading")}</h2>
 
-      <div className="row">
-        <div className="row-label">{t("settings.about.version")}</div>
-        <div className="row-value"><span className="about-value">{version}</span></div>
-        <div className="row-status" />
+      <div className="group settings-group">
+        <div className="row">
+          <div className="row-label">{t("settings.about.version")}</div>
+          <div className="row-value"><span className="about-value">{version}</span></div>
+          <div className="row-status" />
+        </div>
+        {installSource && <details className="adv-disclosure"><summary className="adv-summary"><span>{t("settings.about.installSource")}</span></summary><div className="adv-body"><p className="about-source">{installSource}</p></div></details>}
       </div>
-
-      {installSource && <details className="settings-install-details"><summary>{t("settings.about.installSource")}</summary><p>{installSource}</p></details>}
     </section>
   );
 }

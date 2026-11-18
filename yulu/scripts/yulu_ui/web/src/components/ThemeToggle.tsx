@@ -1,28 +1,17 @@
-// web/src/components/ThemeToggle.tsx
-import { useTheme, type ThemeChoice } from "../theme.js";
+import { useTheme, type ThemeMode } from "../theme.js";
 import { useT } from "../i18n/LanguageProvider.js";
-import "./ThemeToggle.css";
 
-const OPTIONS: { value: ThemeChoice }[] = [
-  { value: "auto" },
-  { value: "light" },
-  { value: "dark" },
-];
+const MODES: ThemeMode[] = ["auto", "light", "dark"];
 
+/** The one appearance control: follow the system, or pin light / dark. */
 export function ThemeToggle() {
-  const { choice, set } = useTheme();
+  const { mode, setMode } = useTheme();
   const t = useT();
   return (
-    <div className="theme-toggle" role="group" aria-label={t("theme.aria")}>
-      {OPTIONS.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          aria-pressed={choice === o.value}
-          className={choice === o.value ? "active" : ""}
-          onClick={() => set(o.value)}
-        >
-          {t(`theme.${o.value}`)}
+    <div className="seg" role="group" aria-label={t("theme.aria")}>
+      {MODES.map((value) => (
+        <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>
+          {t(`theme.${value}`)}
         </button>
       ))}
     </div>

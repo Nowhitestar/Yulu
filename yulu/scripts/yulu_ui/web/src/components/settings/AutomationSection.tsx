@@ -50,6 +50,7 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
       <h2 className="settings-section-h">{t("settings.automation.heading")}</h2>
       <p className="settings-section-sub">{t("settings.automation.sub")}</p>
 
+      <div className="group settings-group">
       <InlineEditRow
         label={t("settings.automation.enabled.label")}
         help={t("settings.automation.enabled.help")}
@@ -105,6 +106,7 @@ export function AutomationSection({ tracker }: AutomationSectionProps) {
           />
         ))}
       </AdvancedDisclosure>
+      </div>
     </section>
   );
 }
@@ -124,6 +126,7 @@ export function RecordingProcessingSection({ tracker }: AutomationSectionProps) 
   };
   return <section id="recording-processing" className="settings-section">
     <h2 className="settings-section-h">{t("settings.processing.heading")}</h2>
+    <div className="group settings-group">
       <InlineEditRow
         label={t("settings.automation.pipeline.enabled.label")}
         help={t("settings.automation.pipeline.enabled.help")}
@@ -142,6 +145,6 @@ export function RecordingProcessingSection({ tracker }: AutomationSectionProps) 
         disabled={isBlocked("agent_pipeline.auto_process_recordings")}
         status={tracker.statusFor("agent_pipeline.auto_process_recordings")}
       />
-
+    </div>
   </section>;
 }

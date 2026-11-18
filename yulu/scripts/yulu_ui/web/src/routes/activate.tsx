@@ -6,7 +6,6 @@ import { useLang, useT } from "../i18n/LanguageProvider.js";
 import { trpc } from "../trpc.js";
 import "./activate.css";
 
-export const handle = { breadcrumb: "breadcrumb.activate", filters: null };
 
 export function Activate() {
   const activation = trpc.activation.status.useQuery(undefined, {
@@ -92,10 +91,10 @@ export function Activate() {
           <h1 id="activate-title" ref={titleRef} tabIndex={-1}>{t("activation.statusError.title")}</h1>
           <p role="alert">{t("activation.statusError.body")}</p>
           <div className="activate-actions">
-            <button type="button" className="activate-action primary" onClick={() => void activation.refetch()}>
+            <button type="button" className="btn btn-primary" onClick={() => void activation.refetch()}>
               {t("activation.statusError.retry")}
             </button>
-            <Link className="activate-action" to="/agent-console">{t("activation.statusError.continue")}</Link>
+            <Link className="btn" to="/agent-console">{t("activation.statusError.continue")}</Link>
           </div>
         </div>
       </section>
@@ -178,7 +177,7 @@ export function Activate() {
             {activation.data.state === "recording" && (
               <button
                 type="button"
-                className="activate-action primary"
+                className="btn btn-primary"
                 disabled={stopAttempt.isPending}
                 onClick={() => {
                   setActionFailed(null);
@@ -193,7 +192,7 @@ export function Activate() {
             )}
             {blocker && (
               <>
-                <Link className="activate-action" to={blocker.remediation.href}>{remediationLabel}</Link>
+                <Link className="btn" to={blocker.remediation.href}>{remediationLabel}</Link>
                 {blocker.retry === "new_summary_attempt" && task ? (
                   keptUnknownTaskId === task.id ? (
                     <span role="status">{t("activation.attempt.unknownKept")}</span>
@@ -201,7 +200,7 @@ export function Activate() {
                     <>
                       <button
                         type="button"
-                        className="activate-action primary"
+                        className="btn btn-primary"
                         disabled={createSummaryAttemptFromUnknown.isPending}
                         onClick={() => runRecovery(() => createSummaryAttemptFromUnknown.mutateAsync({ id: task.id }))}
                       >
@@ -209,7 +208,7 @@ export function Activate() {
                       </button>
                       <button
                         type="button"
-                        className="activate-action"
+                        className="btn"
                         onClick={() => setKeptUnknownTaskId(task.id)}
                       >
                         {t("activation.attempt.keepWaiting")}
@@ -219,7 +218,7 @@ export function Activate() {
                 ) : (
                   <button
                     type="button"
-                    className="activate-action primary"
+                    className="btn btn-primary"
                     disabled={retryAttempt.isPending || rerecordAttempt.isPending}
                     onClick={() => runRecovery(() => blocker.retry === "rerecord"
                       ? rerecordAttempt.mutateAsync()
@@ -237,7 +236,7 @@ export function Activate() {
             {activation.data.summaryRecovery?.canReplace && (
               <button
                 type="button"
-                className="activate-action"
+                className="btn"
                 disabled={replaceSummaryProvider.isPending}
                 onClick={() => runRecovery(() => replaceSummaryProvider.mutateAsync())}
               >
@@ -247,7 +246,7 @@ export function Activate() {
                 })}
               </button>
             )}
-            <Link className="activate-action" to="/agent-console">{t("activation.attempt.leave")}</Link>
+            <Link className="btn" to="/agent-console">{t("activation.attempt.leave")}</Link>
           </div>
           {actionFailed && (
             <p role="alert">{t("activation.action.errorDetail", { reason: actionFailed })}</p>
@@ -417,10 +416,10 @@ export function Activate() {
             <div className="activate-blocker" role="alert">
               <p>{t("activation.microphone.guidance")}</p>
               <div className="activate-actions">
-                <a className="activate-action primary" href={data.blocker.remediation.href}>
+                <a className="btn btn-primary" href={data.blocker.remediation.href}>
                   {t("activation.microphone.openSettings")}
                 </a>
-                <button type="button" className="activate-action" onClick={() => void activation.refetch()}>
+                <button type="button" className="btn" onClick={() => void activation.refetch()}>
                   {t("activation.microphone.retry")}
                 </button>
               </div>
@@ -431,10 +430,10 @@ export function Activate() {
             <div className="activate-blocker" role="alert">
               <p>{t("activation.audioInput.guidance")}</p>
               <div className="activate-actions">
-                <Link className="activate-action primary" to={data.blocker.remediation.href}>
+                <Link className="btn btn-primary" to={data.blocker.remediation.href}>
                   {t("activation.audioInput.openSettings")}
                 </Link>
-                <button type="button" className="activate-action" onClick={() => void activation.refetch()}>
+                <button type="button" className="btn" onClick={() => void activation.refetch()}>
                   {t("activation.audioInput.retry")}
                 </button>
               </div>
@@ -445,10 +444,10 @@ export function Activate() {
             <div className="activate-blocker" role="alert">
               <p>{t("activation.pipeline.guidance")}</p>
               <div className="activate-actions">
-                <Link className="activate-action primary" to={data.blocker.remediation.href}>
+                <Link className="btn btn-primary" to={data.blocker.remediation.href}>
                   {t("activation.pipeline.openSettings")}
                 </Link>
-                <button type="button" className="activate-action" onClick={() => void activation.refetch()}>
+                <button type="button" className="btn" onClick={() => void activation.refetch()}>
                   {t("activation.pipeline.retry")}
                 </button>
               </div>
@@ -462,10 +461,10 @@ export function Activate() {
                 ? t("activation.transcription.localBlocked")
                 : t("activation.transcription.xaiBlocked")}</p>
               <div className="activate-actions">
-                <Link className="activate-action primary" to={data.blocker.remediation.href}>
+                <Link className="btn btn-primary" to={data.blocker.remediation.href}>
                   {t("activation.transcription.openSettings")}
                 </Link>
-                <button type="button" className="activate-action" onClick={() => void retryTranscription()}>
+                <button type="button" className="btn" onClick={() => void retryTranscription()}>
                   {t("activation.transcription.retry")}
                 </button>
               </div>
@@ -484,7 +483,7 @@ export function Activate() {
               <div className="activate-actions">
                 <button
                   type="button"
-                  className="activate-action primary"
+                  className="btn btn-primary"
                   onClick={() => void run(async () => {
                     await acceptAgentConnectionDisclosure.mutateAsync({
                       connectionId: "direct-xai",
@@ -503,7 +502,7 @@ export function Activate() {
                 </button>
                 <button
                   type="button"
-                  className="activate-action"
+                  className="btn"
                   onClick={() => {
                     setPendingXai(false);
                     setDisclosureDeclined(true);
@@ -519,7 +518,7 @@ export function Activate() {
             <div className="activate-declined" role="status">
               <p>{t("activation.disclosure.declined")}</p>
               {readiness.transcription.local.available && (
-                <button type="button" className="activate-action" onClick={() => void chooseLocal()}>
+                <button type="button" className="btn" onClick={() => void chooseLocal()}>
                   {t("activation.disclosure.chooseLocal")}
                 </button>
               )}
@@ -540,7 +539,7 @@ export function Activate() {
               <div className="activate-actions">
                 <button
                   type="button"
-                  className="activate-action primary"
+                  className="btn btn-primary"
                   disabled={!summaryDisclosureConnectionId}
                   onClick={() => void run(async () => {
                     if (!summaryDisclosureConnectionId) throw new Error("Summary disclosure connection is unavailable");
@@ -556,7 +555,7 @@ export function Activate() {
                 </button>
                 <button
                   type="button"
-                  className="activate-action"
+                  className="btn"
                   disabled={!summaryDisclosureConnectionId}
                   onClick={() => void run(async () => {
                     if (!summaryDisclosureConnectionId) throw new Error("Summary disclosure connection is unavailable");
@@ -578,12 +577,12 @@ export function Activate() {
             <div className="activate-declined" role="alert">
               <p>{t("activation.summaryDisclosure.declined", { provider: summaryProviderLabel })}</p>
               <div className="activate-actions">
-                <Link className="activate-action" to="/settings/llm?capability=summary">
+                <Link className="btn" to="/settings/llm?capability=summary">
                   {t("activation.summary.openSettings")}
                 </Link>
                 <button
                   type="button"
-                  className="activate-action"
+                  className="btn"
                   onClick={() => setReviewSummaryDisclosure(true)}
                 >
                   {t("activation.summaryDisclosure.review")}
@@ -598,11 +597,11 @@ export function Activate() {
               <p>{t(`activation.summary.blocker.${summaryBlocker.reason}`)}</p>
               {summaryBlocker.detail && <p>{summaryBlocker.detail}</p>}
               <div className="activate-actions">
-                <Link className="activate-action primary" to={summaryBlocker.remediation.href}>
+                <Link className="btn btn-primary" to={summaryBlocker.remediation.href}>
                   {t("activation.summary.openSettings")}
                 </Link>
                 {summaryContract.data?.selected?.connectionId && (
-                  <button type="button" className="activate-action" onClick={() => void retrySummary()}>
+                  <button type="button" className="btn" onClick={() => void retrySummary()}>
                     {t("activation.summary.retry")}
                   </button>
                 )}
@@ -616,7 +615,7 @@ export function Activate() {
                 <p className="activate-recording-guidance">{t("activation.attempt.duration")}</p>
                 <button
                   type="button"
-                  className="activate-action primary"
+                  className="btn btn-primary"
                   disabled={startAttempt.isPending}
                   onClick={() => void run(() => startAttempt.mutateAsync())}
                 >
@@ -624,12 +623,12 @@ export function Activate() {
                 </button>
               </>
             )}
-            <Link className="activate-action" to="/settings/llm">
+            <Link className="btn" to="/settings/llm">
               {t("activation.action.providers")}
             </Link>
             <button
               type="button"
-              className="activate-action"
+              className="btn"
               disabled={defer.isPending}
               onClick={() => {
                 setDeferFailed(false);
@@ -690,7 +689,7 @@ export function Activate() {
           {activated.completedNoteAvailable && (
             <button
               type="button"
-              className="activate-action primary"
+              className="btn btn-primary"
               aria-expanded={noteOpen}
               aria-controls="activate-completed-note"
               onClick={() => setNoteOpen((open) => !open)}
@@ -698,8 +697,8 @@ export function Activate() {
               {t("activation.action.note")}
             </button>
           )}
-          <Link className="activate-action" to="/settings/transcription">{t("activation.action.transcription")}</Link>
-          <Link className="activate-action" to="/settings/llm">{t("activation.action.providers")}</Link>
+          <Link className="btn" to="/settings/transcription">{t("activation.action.transcription")}</Link>
+          <Link className="btn" to="/settings/llm">{t("activation.action.providers")}</Link>
         </div>
 
         {noteOpen && activated.completedNote && (

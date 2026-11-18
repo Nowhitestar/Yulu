@@ -36,12 +36,6 @@ const R = {
   sighup: (...d: Daemon[]): ReloadAction => ({ kind: "sighup", daemons: d }),
 };
 
-const ThemeSettingSchema = z.object({
-  family: z.enum(["default", "ayu", "paper", "custom"]).default("default"),
-  mode: z.enum(["auto", "light", "dark"]).default("auto"),
-  custom: z.unknown().optional(),
-}).passthrough();
-
 const DictationSchema = z.object({
   cleanup_enabled: z.boolean().optional(),
   cleanup_level: DictationCleanupLevelSchema.optional(),
@@ -79,7 +73,7 @@ export const TextProviderSelectionSchema = z.union([
 // 仅当前已暴露的设置(P2 再补缺失项)。reload 已修正(B3)。
 export const SETTINGS: SettingDef[] = [
   { path: "ui.language",                 category: "general", label: "Language", type: "select", validate: z.enum(["zh", "en"]), reload: R.sighup("statusagent") },
-  { path: "ui.theme",                    category: "general", label: "Theme", type: "preset", validate: ThemeSettingSchema, reload: R.none },
+  { path: "ui.theme.mode",               category: "general", label: "Appearance", type: "select", validate: z.enum(["auto", "light", "dark"]), reload: R.none },
   { path: "ui.show_dock_icon",           category: "general", label: "Show Dock icon", type: "toggle", validate: z.boolean(), reload: R.none },
   { path: "ui.show_menu_bar_icon",       category: "general", label: "Show menu bar icon", type: "toggle", validate: z.boolean(), reload: R.none },
   { path: "audio.mic_device",            category: "audio", label: "麦克风设备",   type: "select",  validate: z.string(),                  reload: R.none },

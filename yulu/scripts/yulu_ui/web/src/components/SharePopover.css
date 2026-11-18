@@ -1,30 +1,45 @@
+/* The share confirmation: what will be sent, where, and one deliberate button. */
 .share-popover-root { position: relative; display: inline-flex; }
-.share-popover { position: fixed; z-index: 90; width: min(420px, calc(100vw - 28px)); max-height: calc(100vh - 28px); overflow-y: auto; }
-.share-panel { padding: 16px; border: 1px solid var(--edge-card); border-radius: var(--radius-panel); background: var(--wp-1); box-shadow: 0 18px 44px -20px rgba(0,0,0,.28), var(--edge-shadow); }
-.share-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 12px; color: var(--fg-2); }
-.share-panel-title { display: inline-flex; align-items: center; gap: 8px; color: var(--fg); font-size: 13px; font-weight: 750; }
-.share-format { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px; background: color-mix(in oklch, var(--fg) 5%, transparent); color: var(--fg-2); font-size: 10px; font-weight: 650; }
-.share-panel-sub { margin-top: 2px; color: var(--fg-3); font-size: 11px; }
-.share-snapshot { display: flex; flex-direction: column; gap: 9px; }
-.share-snapshot-row { display: grid; grid-template-columns: 92px minmax(0,1fr); gap: 3px 10px; padding: 9px 10px; border: 1px solid var(--edge-card); border-radius: var(--radius-inner); background: var(--glass-3); }
-.share-snapshot-row > span { grid-row: 1 / span 2; align-self: center; color: var(--fg-3); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.share-snapshot-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg); font-size: 12px; }
-.share-snapshot-row small { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-3); font-size: 10.5px; }
-.share-summary-label { margin-top: 3px; color: var(--fg-3); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-.share-summary-snapshot { max-height: 220px; margin: 0; padding: 11px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--edge-card); border-radius: var(--radius-inner); background: var(--glass-3); color: var(--fg-2); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.share-warning, .share-unavailable, .share-outcome { display: flex; align-items: flex-start; gap: 7px; margin-top: 11px; padding: 9px 10px; border-radius: var(--radius-inner); font-size: 11px; line-height: 1.4; }
-.share-warning { background: color-mix(in oklch, var(--orange, #b56b00) 12%, transparent); color: var(--orange, #b56b00); }
-.share-unavailable { justify-content: space-between; background: var(--glass-3); color: var(--fg-2); }
+.share-popover { position: fixed; z-index: 90; width: min(420px, calc(100vw - 28px)); max-height: calc(100vh - 28px); overflow-y: auto; border-radius: var(--r-lg); box-shadow: var(--shadow-pop); }
+.share-panel { padding: 16px; border-radius: var(--r-lg); background: var(--raised); }
+.share-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 12px; color: var(--fg-3); }
+.share-panel-title { display: inline-flex; align-items: center; gap: 8px; color: var(--fg); font-size: 14px; font-weight: 600; }
+.share-format { padding: 1px 7px; border-radius: var(--r-pill); background: var(--fill); color: var(--fg-2); font-size: 11px; font-weight: 500; }
+.share-panel-sub { margin-top: 3px; color: var(--fg-2); font-size: 12px; line-height: 1.45; }
+.share-snapshot { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.share-snapshot-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 1px 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.share-snapshot-row > span { grid-row: 1 / span 2; color: var(--fg-2); font-size: 12px; }
+.share-snapshot-row strong { min-width: 0; overflow: hidden; font-size: 12.5px; font-weight: 500; text-overflow: ellipsis; }
+.share-snapshot-row small { min-width: 0; overflow: hidden; color: var(--fg-3); font-size: 11.5px; text-overflow: ellipsis; }
+.share-summary-label { margin-top: 12px; color: var(--fg-2); font-size: 12px; }
+.share-summary-snapshot { max-height: 200px; margin: 6px 0 0; padding: 10px 12px; overflow: auto; border-radius: var(--r-md); background: var(--fill); color: var(--fg-2); font: 11.5px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.share-warning, .share-unavailable, .share-outcome { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; padding: 9px 11px; border-radius: var(--r-md); font-size: 12px; line-height: 1.45; }
+.share-warning { background: var(--amber-soft); }
+.share-warning svg { flex: 0 0 auto; margin-top: 1px; color: var(--amber); }
+.share-unavailable { justify-content: space-between; background: var(--fill); color: var(--fg-2); }
 .share-unavailable a { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); white-space: nowrap; }
-.share-outcome { background: color-mix(in oklch, var(--green) 10%, transparent); color: var(--green); }
-.share-reconciliation { display: grid; gap: 8px; margin-top: 11px; color: var(--fg-2); font-size: 11px; }
-.share-reconciliation p { margin: 0; line-height: 1.5; }
+.share-outcome { background: var(--green-soft); color: var(--green); }
+.share-reconciliation { display: grid; gap: 9px; margin-top: 12px; color: var(--fg-2); font-size: 12px; line-height: 1.5; }
 .share-reconciliation label { display: grid; gap: 4px; }
-.share-reconciliation input { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--edge-card); border-radius: var(--radius-control); background: var(--glass-3); color: var(--fg); font-size: 11px; }
-.share-reconciliation button { min-height: 32px; padding: 0 12px; border: 1px solid var(--edge-card); border-radius: var(--radius-control); background: var(--glass-3); color: var(--accent); font-size: 11px; font-weight: 700; }
-.share-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--edge); }
-.share-confirm-actions button { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 12px; border-radius: var(--radius-control); font-size: 11px; font-weight: 700; }
-.share-confirm-actions .primary { background: var(--accent); color: var(--accent-contrast); }
-.share-confirm-actions .secondary { border: 1px solid var(--edge-card); color: var(--fg-2); background: var(--glass-3); }
-.share-confirm-actions .danger { border: 1px solid color-mix(in oklch, var(--red) 30%, var(--edge)); color: var(--red); background: transparent; }
-@media (max-width: 760px) { .share-popover { left: 12px; right: 12px; top: auto; bottom: calc(82px + env(safe-area-inset-bottom)); width: auto; max-height: calc(100vh - 110px - env(safe-area-inset-bottom)); } }
+.share-reconciliation input { width: 100%; min-width: 0; height: 30px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: var(--r-md); outline: 0; background: var(--paper); font-size: 12.5px; }
+.share-reconciliation input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.share-reconciliation button, .share-confirm-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 13px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--paper);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.share-reconciliation button:hover:not(:disabled), .share-confirm-actions button:hover:not(:disabled) { background: var(--fill); }
+.share-reconciliation button:disabled, .share-confirm-actions button:disabled { opacity: 0.45; }
+.share-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.share-confirm-actions .primary { border-color: transparent; background: var(--accent); color: var(--on-accent); }
+.share-confirm-actions .primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, #000); }
+.share-confirm-actions .danger { color: var(--red); }
+@media (max-width: 760px) { .share-popover { top: auto; right: 12px; bottom: 16px; left: 12px; width: auto; max-height: calc(100vh - 80px); } }

@@ -1,225 +1,32 @@
-.glossary-page {
-  height: 100%;
-  min-height: 0;
-  overflow-y: auto;
-  padding: clamp(22px, 4vw, 48px);
-  border: 1px solid var(--edge-card);
-  border-radius: var(--radius-panel);
-  background: var(--glass);
-  backdrop-filter: var(--blur-glass);
-  -webkit-backdrop-filter: var(--blur-glass);
-  box-shadow: var(--shadow);
-}
-
-.glossary-content {
-  width: min(920px, 100%);
-  margin: 0 auto;
-}
-
-.glossary-intro {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 6px 4px 24px;
-}
-
-.glossary-intro h1 {
-  margin: 0;
-  color: var(--fg);
-  font-family: var(--font-heading);
-  font-size: clamp(25px, 3vw, 34px);
-  font-weight: 600;
-  letter-spacing: -0.035em;
-}
-
-.glossary-intro p {
-  max-width: 620px;
-  margin: 8px 0 0;
-  color: var(--fg-2);
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.glossary-count {
-  flex: none;
-  padding: 6px 10px;
-  border: 1px solid color-mix(in oklch, var(--accent) 20%, var(--edge));
-  border-radius: var(--radius-pill);
-  color: var(--accent-on, var(--accent));
-  background: var(--accent-soft);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.06em;
-}
+/* Glossary: one field to add a proper noun, one list to see and remove them. */
+.glossary-count { flex: none; padding-bottom: 2px; color: var(--fg-3); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .glossary-add {
-  min-height: 54px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 8px 8px 16px;
-  border: 1px solid var(--edge-card);
-  border-radius: var(--radius-inner);
-  color: var(--fg-3);
-  background: var(--glass-paper);
-  box-shadow: var(--shadow-paper);
-  transition: border-color 140ms ease, box-shadow 140ms ease;
-}
-
-.glossary-add:focus-within {
-  border-color: color-mix(in oklch, var(--accent) 44%, var(--edge));
-  box-shadow: var(--shadow-paper), 0 0 0 4px var(--accent-soft);
-}
-
-.glossary-add input {
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  color: var(--fg);
-  background: transparent;
-  font: inherit;
-  font-size: 14px;
-}
-
-.glossary-add input::placeholder {
-  color: var(--fg-3);
-}
-
-.glossary-add button {
-  min-width: 68px;
-  min-height: 38px;
-  padding: 7px 14px;
-  border-radius: var(--radius-control);
-  color: white;
-  background: var(--accent);
-  font-size: 12px;
-  font-weight: 700;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
-}
-
-.glossary-add button:disabled {
-  cursor: default;
-  opacity: 0.42;
-}
-
-.glossary-error {
-  margin-top: 10px;
-  padding: 8px 12px;
-  border-radius: var(--radius-control);
-  color: var(--red);
-  background: color-mix(in oklch, var(--red) 10%, transparent);
-  font-size: 12px;
-}
-
-.glossary-terms {
   display: flex;
-  align-content: flex-start;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
-  min-height: 140px;
-  margin-top: 20px;
-  padding: 24px;
-  border: 1px solid var(--edge-card);
-  border-radius: var(--radius-panel);
-  background: color-mix(in oklch, var(--glass-paper) 72%, transparent);
-  box-shadow: inset 0 1px 0 var(--edge-top);
-}
-
-.glossary-term {
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 7px 0 13px;
-  border: 1px solid color-mix(in oklch, var(--accent) 18%, var(--edge));
-  border-radius: var(--radius-pill);
-  color: var(--fg);
-  background: var(--glass-3);
-  box-shadow: var(--shadow-card);
-  font-size: 13px;
-  transition: border-color 140ms ease, background 140ms ease, opacity 140ms ease, transform 140ms ease;
-}
-
-.glossary-term:hover,
-.glossary-term:focus-within {
-  border-color: color-mix(in oklch, var(--accent) 42%, var(--edge));
-  background: var(--glass-paper);
-  transform: translateY(-1px);
-}
-
-.glossary-term.deleting {
-  opacity: 0.36;
-  transform: scale(0.96);
-}
-
-.glossary-term button {
-  width: 24px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
+  min-height: 42px;
+  padding: 0 6px 0 13px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
   color: var(--fg-3);
-  opacity: 0;
-  pointer-events: none;
-  transform: scale(0.72);
-  transition: opacity 120ms ease, transform 120ms ease, color 120ms ease, background 120ms ease;
+  transition: border-color 0.12s, box-shadow 0.12s;
 }
+.glossary-add:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.glossary-add > svg { flex: none; }
+.glossary-add input { flex: 1; min-width: 0; height: 40px; border: 0; outline: 0; background: transparent; color: var(--fg); font-size: 13.5px; }
+.glossary-add input::placeholder { color: var(--fg-3); }
+.glossary-add .btn { flex: none; }
+.glossary-error { margin-top: 10px; color: var(--red); font-size: 12.5px; }
 
-.glossary-term:hover button,
-.glossary-term:focus-within button {
-  opacity: 1;
-  pointer-events: auto;
-  transform: scale(1);
-}
-
-.glossary-term button:hover {
-  color: white;
-  background: var(--red);
-}
-
-.glossary-empty {
-  width: 100%;
-  min-height: 92px;
-  display: grid;
-  place-items: center;
-  color: var(--fg-3);
-  font-size: 13px;
-  text-align: center;
-}
-
-@media (hover: none) {
-  .glossary-term button {
-    opacity: 0.68;
-    pointer-events: auto;
-    transform: scale(1);
-  }
-}
-
-@media (max-width: 760px) {
-  .glossary-page {
-    padding: 18px 14px 96px;
-  }
-
-  .glossary-intro {
-    align-items: flex-start;
-    padding-bottom: 18px;
-  }
-
-  .glossary-intro p {
-    font-size: 12px;
-  }
-
-  .glossary-add {
-    min-height: 50px;
-  }
-
-  .glossary-terms {
-    gap: 8px;
-    margin-top: 14px;
-    padding: 16px;
-    border-radius: var(--radius-inner);
-  }
-}
+.glossary-terms { margin-top: 20px; border: 1px solid var(--line); border-radius: var(--r-lg); }
+.glossary-term { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; padding: 0 6px 0 16px; transition: opacity 0.12s; }
+.glossary-term + .glossary-term { border-top: 1px solid var(--line); }
+.glossary-term > span { min-width: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.glossary-term.deleting { opacity: 0.45; }
+/* Delete stays reachable by keyboard; it only steps back visually until needed. */
+.glossary-term .icon-btn { opacity: 0; }
+.glossary-term:hover .icon-btn, .glossary-term .icon-btn:focus-visible { opacity: 1; }
+.glossary-term .icon-btn:hover:not(:disabled) { background: var(--red-soft); color: var(--red); }
+@media (hover: none) { .glossary-term .icon-btn { opacity: 1; } }
+.glossary-empty { padding: 30px 16px; color: var(--fg-3); font-size: 12.5px; text-align: center; }

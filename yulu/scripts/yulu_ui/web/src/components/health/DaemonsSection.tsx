@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { trpc } from "../../trpc.js";
 import { DaemonCard, type DaemonHealth } from "../DaemonCard.js";
-import "./DaemonsSection.css";
+import "./ControlSections.css";
 
 export function DaemonsSection() {
   const { data } = trpc.daemons.health.useQuery(undefined, { refetchInterval: 5_000 });
