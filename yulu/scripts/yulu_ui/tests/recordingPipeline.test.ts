@@ -86,6 +86,7 @@ describe("RecordingPipeline", () => {
     legacyManualTask?: boolean;
     pollMs?: number;
     glossaryRows?: Array<{ term: string; canonical: string; scope: "prompt" | "replace" | "both" }>;
+    transcriptionProvider?: string;
     xaiText?: boolean;
     xaiReadinessCredentialSource?: "oauth" | "api-key";
     xaiExecutionCredentialSource?: "oauth" | "api-key";
@@ -394,8 +395,8 @@ describe("RecordingPipeline", () => {
         prepare: () => ({ all: () => opts.glossaryRows }),
       }) : undefined,
       transcription: {
-        provider: "test-audio",
-        health: () => ({ available: true, provider: "test-audio", reason: null }),
+        provider: opts.transcriptionProvider ?? "test-audio",
+        health: () => ({ available: true, provider: opts.transcriptionProvider ?? "test-audio", reason: null }),
         warm: warmTranscription,
         transcribeFile: transcribe,
       },
@@ -448,6 +449,83 @@ describe("RecordingPipeline", () => {
     ))).toBe(true);
     expect(existsSync(join(configDir, "agent-tasks", first.task.id))).toBe(false);
     expect(() => writeFileSync(join(moviesDir, "proof"), "ok")).not.toThrow();
+  });
+
+  describe("live transcript reuse", () => {
+    const LOCAL = "sherpa-onnx-paraformer-int8";
+    const liveText = "先说结论，全量拉取太费电了。\n改成增量推送，冲突时两份都保留。\n先在预录灰度百分之十。";
+
+    function writeLive(audioPath: string, coverage: Record<string, unknown>, text = liveText): void {
+      writeFileSync(audioPath.replace(/\.wav$/, ".realtime.transcript.txt"), `${text}\n`);
+      writeFileSync(audioPath.replace(/\.wav$/, ".realtime.coverage.json"), JSON.stringify({
+        language: "zh",
+        covered_ms: 120_000,
+        total_ms: 120_000,
+        chunks: 7,
+        provider: LOCAL,
+        trusted: true,
+        reason: null,
+        finished: true,
+        ...coverage,
+      }));
+    }
+
+    it("commits the finished live transcript instead of transcribing the recording again", async () => {
+      const { audioPath, moviesDir, transcribe } = setup({
+        supportedAgentAdapter: true,
+        transcriptionProvider: LOCAL,
+        glossaryRows: [{ term: "预录", canonical: "玉录", scope: "both" }],
+      });
+      acceptSupportedAgentSummary();
+      writeLive(audioPath, {});
+
+      const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
+      await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+
+      expect(transcribe).not.toHaveBeenCalled();
+      const committed = readFileSync(join(moviesDir, `${task.recordingStem}.transcript.txt`), "utf8");
+      expect(committed).toContain("改成增量推送");
+      expect(committed).toContain("先在玉录灰度");
+      expect(store!.listArtifacts(task.id).find((record) => record.kind === "transcript")?.provenance).toMatchObject({
+        transcriptSource: "realtime",
+        transcriptionProvider: LOCAL,
+        transcriptChunks: 7,
+      });
+    });
+
+    it.each([
+      ["did not finish", { finished: false }, "live transcript did not finish"],
+      ["was not trusted", { trusted: false }, "live transcript was not trusted"],
+      ["missed part of the audio", { covered_ms: 100_000 }, "live transcript does not cover the whole recording"],
+      ["used another engine", { provider: "xai-oauth:yulu" }, "live transcript used another audio engine"],
+      ["used another language", { language: "en" }, "live transcript used another language"],
+    ])("transcribes the whole recording once when the live transcript %s", async (_name, coverage, reason) => {
+      const { audioPath, moviesDir, transcribe } = setup({ supportedAgentAdapter: true, transcriptionProvider: LOCAL });
+      acceptSupportedAgentSummary();
+      writeLive(audioPath, coverage);
+
+      const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
+      await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+
+      expect(transcribe).toHaveBeenCalledTimes(1);
+      expect(readFileSync(join(moviesDir, `${task.recordingStem}.transcript.txt`), "utf8").trim()).toBe("hello transcript");
+      expect(store!.listArtifacts(task.id).find((record) => record.kind === "transcript")?.provenance).toMatchObject({
+        transcriptSource: "full",
+        realtimeNotReused: reason,
+      });
+    });
+
+    it("transcribes the whole recording when there is no live transcript", async () => {
+      const { audioPath, transcribe } = setup({ supportedAgentAdapter: true, transcriptionProvider: LOCAL });
+      acceptSupportedAgentSummary();
+
+      const { task } = pipeline!.enqueueCompletion({ audioPath, title: "Demo" });
+      await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("completed"));
+
+      expect(transcribe).toHaveBeenCalledTimes(1);
+      expect(store!.listArtifacts(task.id).find((record) => record.kind === "transcript")?.provenance)
+        .toMatchObject({ transcriptSource: "full", realtimeNotReused: "no live transcript" });
+    });
   });
 
   it("persists Core Activation Evidence when a production recording completes", async () => {

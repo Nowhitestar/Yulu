@@ -1,7 +1,9 @@
 import {
   closeSync,
+  existsSync,
   mkdirSync,
   openSync,
+  readFileSync,
   readSync,
   realpathSync,
   renameSync,
@@ -310,6 +312,68 @@ function sidecarPath(audioPath: string): string {
 
 function coveragePath(audioPath: string): string {
   return audioPath.replace(/\.wav$/i, ".realtime.coverage.json");
+}
+
+/** A live transcript may stand in for a full pass only when it covers nearly
+ * the whole recording, not just the 85% that makes it a trusted caption. */
+export const REUSABLE_REALTIME_COVERAGE = 0.98;
+
+/** The audio engine family a transcription provider belongs to. */
+export function transcriptionEngineFamily(provider: string): "local" | "xai" | null {
+  if (provider.startsWith("xai")) return "xai";
+  if (provider.startsWith("sherpa-onnx")) return "local";
+  return null;
+}
+
+export type ReusableRealtimeTranscript =
+  | { transcript: string; provider: string; chunks: number; reason: null }
+  | { transcript: null; reason: string };
+
+/**
+ * The transcript written live during a recording, when it can be committed as
+ * the recording's transcript instead of transcribing the WAV again. It must
+ * come from a finished, trusted session of the same audio engine family and
+ * language that covered nearly all of the audio; anything else returns why
+ * not, and the caller transcribes the whole recording as before.
+ */
+export function readReusableRealtimeTranscript(
+  audioPath: string,
+  expected: { language: TranscriptionLanguage; provider: string },
+): ReusableRealtimeTranscript {
+  const coverageFile = coveragePath(audioPath);
+  const transcriptFile = sidecarPath(audioPath);
+  if (coverageFile === audioPath || !existsSync(coverageFile) || !existsSync(transcriptFile)) {
+    return { transcript: null, reason: "no live transcript" };
+  }
+  let coverage: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(readFileSync(coverageFile, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+    coverage = parsed as Record<string, unknown>;
+  } catch {
+    return { transcript: null, reason: "unreadable live coverage" };
+  }
+  if (coverage.finished !== true) return { transcript: null, reason: "live transcript did not finish" };
+  if (coverage.trusted !== true) return { transcript: null, reason: "live transcript was not trusted" };
+  if (coverage.language !== expected.language) {
+    return { transcript: null, reason: "live transcript used another language" };
+  }
+  const provider = typeof coverage.provider === "string" ? coverage.provider : "";
+  const family = transcriptionEngineFamily(provider);
+  if (!family || family !== transcriptionEngineFamily(expected.provider)) {
+    return { transcript: null, reason: "live transcript used another audio engine" };
+  }
+  const coveredMs = Number(coverage.covered_ms);
+  const totalMs = Number(coverage.total_ms);
+  if (!Number.isFinite(coveredMs) || !Number.isFinite(totalMs) || totalMs <= 0 ||
+    coveredMs / totalMs < REUSABLE_REALTIME_COVERAGE) {
+    return { transcript: null, reason: "live transcript does not cover the whole recording" };
+  }
+  const transcript = cleanTranscriptText(readFileSync(transcriptFile, "utf8"));
+  const assessment = assessRealtimeTranscript({ text: transcript, language: expected.language, coveredMs, totalMs });
+  if (!assessment.trusted) return { transcript: null, reason: assessment.reason ?? "live transcript was not trusted" };
+  const chunks = Number(coverage.chunks);
+  return { transcript, provider, chunks: Number.isInteger(chunks) && chunks > 0 ? chunks : 1, reason: null };
 }
 
 function atomicWrite(path: string, content: string): void {
