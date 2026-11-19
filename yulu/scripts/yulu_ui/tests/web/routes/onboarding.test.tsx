@@ -6,9 +6,7 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 
 const onboarding = vi.hoisted(() => ({
-  adoptConversation: vi.fn(async () => ({})),
   adoptCalendarSource: vi.fn(async () => ({})),
-  adoptAgentCalendarConnector: vi.fn(async () => ({})),
   adoptSharing: vi.fn(async () => ({})),
   deferOptional: vi.fn(async () => ({})),
   deferActivation: vi.fn(async () => ({})),
@@ -35,14 +33,6 @@ const onboarding = vi.hoisted(() => ({
     },
     optionalCapabilities: [
       {
-        id: "conversation",
-        contractVersion: "conversation-v1",
-        href: "/settings/llm?capability=conversation",
-        outcome: { outcome: "adopted", decidedAt: "2026-08-29T00:06:00.000Z" },
-        readiness: { state: "needs_attention", detail: "Current probe expired" },
-        isNew: false,
-      },
-      {
         id: "sharing",
         contractVersion: "sharing-v1",
         href: "/settings/sharing",
@@ -58,14 +48,6 @@ const onboarding = vi.hoisted(() => ({
         readiness: { state: "not_tested", detail: "Not tested" },
         isNew: true,
       },
-      {
-        id: "agent-calendar-connector",
-        contractVersion: "agent-calendar-connector-v1",
-        href: "/settings/integrations#agent-calendar-connector",
-        outcome: null,
-        readiness: { state: "ready", detail: "Calendar connector read access verified" },
-        isNew: true,
-      },
     ],
   },
 }));
@@ -77,14 +59,8 @@ vi.mock("../../../web/src/trpc.js", () => ({
       deferOptionalCapability: {
         useMutation: () => ({ mutateAsync: onboarding.deferOptional, isPending: false }),
       },
-      adoptConversation: {
-        useMutation: () => ({ mutateAsync: onboarding.adoptConversation, isPending: false }),
-      },
       adoptCalendarSource: {
         useMutation: () => ({ mutateAsync: onboarding.adoptCalendarSource, isPending: false }),
-      },
-      adoptAgentCalendarConnector: {
-        useMutation: () => ({ mutateAsync: onboarding.adoptAgentCalendarConnector, isPending: false }),
       },
       adoptSharing: {
         useMutation: () => ({ mutateAsync: onboarding.adoptSharing, isPending: false }),
@@ -115,9 +91,7 @@ function renderRoute() {
 afterEach(() => {
   localStorage.clear();
   onboarding.deferOptional.mockClear();
-  onboarding.adoptConversation.mockClear();
   onboarding.adoptCalendarSource.mockClear();
-  onboarding.adoptAgentCalendarConnector.mockClear();
   onboarding.adoptSharing.mockClear();
   onboarding.deferActivation.mockClear();
   onboarding.invalidate.mockClear();
@@ -130,9 +104,9 @@ describe("/onboarding", () => {
     expect(screen.getByRole("heading", { name: "Onboarding Home" })).toBeInTheDocument();
     expect(screen.getByText("Previously completed · new options available")).toBeInTheDocument();
 
-    // Yulu no longer has a conversation surface, so those steps are not offered.
-    expect(screen.queryByTestId("onboarding-capability-conversation")).toBeNull();
-    expect(screen.queryByTestId("onboarding-capability-agent-calendar-connector")).toBeNull();
+    // Calendar Source and Sharing are the only optional steps (ADR-010).
+    expect(screen.getAllByTestId(/^onboarding-capability-/).map((card) => card.getAttribute("data-testid")))
+      .toEqual(["onboarding-capability-sharing", "onboarding-capability-calendar-source"]);
     expect(screen.queryByRole("button", { name: /Conversation|Agent Calendar Connector/ })).toBeNull();
 
     const sharing = screen.getByTestId("onboarding-capability-sharing");
@@ -156,7 +130,7 @@ describe("/onboarding", () => {
   });
 
   it("explicitly adopts a selected and proven Calendar Source", async () => {
-    const calendarSource = onboarding.data.optionalCapabilities[2]!;
+    const calendarSource = onboarding.data.optionalCapabilities.find(({ id }) => id === "calendar-source")!;
     calendarSource.readiness = { state: "ready", detail: "EventKit enumeration passed with 0 events" };
     const user = userEvent.setup();
     renderRoute();
@@ -168,7 +142,7 @@ describe("/onboarding", () => {
   });
 
   it("opens the authoritative Sharing surface and explicitly adopts its verified Test Share", async () => {
-    const sharing = onboarding.data.optionalCapabilities[1]!;
+    const sharing = onboarding.data.optionalCapabilities.find(({ id }) => id === "sharing")!;
     const savedOutcome = sharing.outcome;
     const savedReadiness = sharing.readiness;
     sharing.outcome = null as never;

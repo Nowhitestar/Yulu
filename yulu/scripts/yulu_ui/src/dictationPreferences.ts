@@ -1,7 +1,11 @@
 import { z } from "zod";
 
 export const FAST_DICTATION_MODEL = "grok-4.20-0309-non-reasoning";
-export const DictationCleanupModelSchema = z.enum(["conversation", FAST_DICTATION_MODEL]);
+/** The exact text model used for dictation cleanup and voice translation. */
+export const DictationTextModelSchema = z.string().trim().min(1).max(128);
+/** Dictated text leaves the Mac only for an explicitly selected provider. */
+export const DictationTextProviderSchema = z.enum(["none", "xai"]);
+export type DictationTextProvider = z.infer<typeof DictationTextProviderSchema>;
 
 export const DictationStyleSchema = z.enum(["formal", "casual", "very_casual"]);
 export const DictationCleanupLevelSchema = z.enum(["none", "light", "medium", "heavy"]);

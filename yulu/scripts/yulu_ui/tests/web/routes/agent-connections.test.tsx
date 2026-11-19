@@ -6,7 +6,6 @@ import { LanguageProvider } from "../../../web/src/i18n/LanguageProvider.js";
 
 const mocks = vi.hoisted(() => ({
   probe: vi.fn(async () => ({ status: "ready" })),
-  createConversationProbeAttempt: vi.fn(async () => ({ status: "ready" })),
   refresh: vi.fn(async () => ({})),
   startNativeAuthorization: vi.fn(async () => ({ launched: true })),
   refreshNativeAuthorizationStatus: vi.fn(async () => ({
@@ -30,9 +29,8 @@ const mocks = vi.hoisted(() => ({
   clearApiKey: vi.fn(async () => ({})),
   deletionImpact: vi.fn(async ({ connectionId }: { connectionId: string }) => ({
     connectionId,
-    selectedCapabilities: ["summary", "conversation"],
+    selectedCapabilities: ["summary"],
     pinnedTasks: [{ id: "task-1", recordingStem: "Planning_20260827_120000", title: "Planning", state: "queued", model: "grok-summary" }],
-    pinnedConversations: [{ id: "session-1", title: "Launch plan", status: "active", model: "grok-conversation" }],
     removesRuntimeAuthorization: false,
     removesYuluManagedCredentials: connectionId === "direct-xai",
   })),
@@ -56,7 +54,7 @@ const mocks = vi.hoisted(() => ({
         userCode: "",
         message: "",
       },
-      settings: { credentialSource: "oauth", summaryModel: "grok-summary", conversationModel: "grok-conversation" },
+      settings: { credentialSource: "oauth", summaryModel: "grok-summary" },
       capabilities: [
         {
           capability: "transcription",
@@ -83,15 +81,6 @@ const mocks = vi.hoisted(() => ({
           disclosure: { required: true, disclosureVersion: "xai-summary-v1", data: "transcript_text", destination: "xAI" },
           remediation: { href: "/settings/llm?connection=direct-xai&capability=summary" },
         },
-        {
-          capability: "conversation",
-          declared: true,
-          selected: true,
-          currentReadiness: { status: "ready", model: "grok-conversation", testedAt: "2026-08-27T12:00:00.000Z" },
-          readinessHistory: [],
-          disclosure: { required: false, disclosureVersion: "xai-conversation-v1", data: "meeting_excerpt_text", destination: "xAI" },
-          remediation: null,
-        },
       ],
     }, {
       id: "codex",
@@ -115,7 +104,6 @@ const mocks = vi.hoisted(() => ({
       settings: {
         executablePath: "/fake/bin/codex",
         summaryModel: "gpt-5.6-sol",
-        conversationModel: "gpt-5.6-sol",
       },
       capabilities: [{
         capability: "summary",
@@ -128,19 +116,6 @@ const mocks = vi.hoisted(() => ({
           disclosureVersion: "codex-summary-v1",
           data: "transcript_text",
           destination: "Codex runtime and its configured model provider",
-        },
-        remediation: null,
-      }, {
-        capability: "conversation",
-        declared: true,
-        selected: false,
-        currentReadiness: { status: "ready", model: "gpt-5.6-sol", testedAt: "2026-08-27T12:00:00.000Z" },
-        readinessHistory: [],
-        disclosure: {
-          required: true,
-          disclosureVersion: "codex-conversation-v1",
-          data: "conversation_text_and_agent_tool_context",
-          destination: "Codex runtime and its configured providers/connectors",
         },
         remediation: null,
       }],
@@ -168,7 +143,6 @@ const mocks = vi.hoisted(() => ({
       settings: {
         executablePath: "/fake/bin/claude",
         summaryModel: "claude-sonnet-5",
-        conversationModel: "claude-sonnet-5",
       },
       capabilities: [{
         capability: "summary",
@@ -189,92 +163,7 @@ const mocks = vi.hoisted(() => ({
           destination: "Claude Code runtime and its configured model provider",
         },
         remediation: { href: "/settings/llm?connection=claude-code&capability=summary" },
-      }, {
-        capability: "conversation",
-        declared: true,
-        selected: false,
-        currentReadiness: { status: "ready", model: "claude-sonnet-5", testedAt: "2026-08-27T12:00:00.000Z" },
-        readinessHistory: [],
-        disclosure: {
-          required: true,
-          disclosureVersion: "claude-code-conversation-v1",
-          data: "conversation_text_and_agent_tool_context",
-          destination: "Claude Code runtime and its configured model/tools",
-        },
-        remediation: null,
       }],
-    }, {
-      id: "hermes",
-      kind: "supported-agent",
-      adapter: "hermes",
-      label: "Hermes",
-      lifecycle: "connected",
-      authorization: {
-        connected: true,
-        credentialSource: "runtime-oauth",
-        runtimeVersion: "0.20.0",
-        minimumVersion: "0.20.0",
-        supported: true,
-        provider: "xai",
-        model: "grok-4.6",
-        availableModels: [],
-        features: ["status", "model", "query", "resume", "session-id", "probe-bounds", "no-fallback"],
-        loginCommand: "/fake/bin/hermes model",
-        statusCommand: "/fake/bin/hermes status",
-        remediation: null,
-      },
-      settings: { executablePath: "/fake/bin/hermes", conversationModel: "grok-4.6" },
-      capabilities: [{
-        capability: "conversation",
-        declared: true,
-        selected: false,
-        currentReadiness: { status: "ready", model: "grok-4.6", testedAt: "2026-08-28T12:00:00.000Z" },
-        readinessHistory: [],
-        disclosure: {
-          required: true,
-          disclosureVersion: "hermes-conversation-v1",
-          data: "conversation_text_and_agent_tool_context",
-          destination: "Hermes runtime and its configured model/tools/connectors",
-        },
-        remediation: null,
-      }],
-      summaryUnsupported: "Hermes is Conversation-only because its stable interface cannot prove a tool-free background Summary invocation",
-    }, {
-      id: "openclaw",
-      kind: "supported-agent",
-      adapter: "openclaw",
-      label: "OpenClaw",
-      lifecycle: "connected",
-      authorization: {
-        connected: true,
-        credentialSource: "runtime-oauth",
-        runtimeVersion: "2026.5.12",
-        minimumVersion: "2026.5.12",
-        supported: true,
-        provider: "openai-codex",
-        model: "openai-codex/gpt-5.5",
-        availableModels: [],
-        features: ["models/status-json", "model", "message", "session-id", "json", "probe-bounds", "no-fallback"],
-        loginCommand: "/fake/bin/openclaw configure",
-        statusCommand: "/fake/bin/openclaw models status --json --check",
-        remediation: null,
-      },
-      settings: { executablePath: "/fake/bin/openclaw", conversationModel: "openai-codex/gpt-5.5" },
-      capabilities: [{
-        capability: "conversation",
-        declared: true,
-        selected: false,
-        currentReadiness: { status: "ready", model: "openai-codex/gpt-5.5", testedAt: "2026-08-28T12:00:00.000Z" },
-        readinessHistory: [],
-        disclosure: {
-          required: true,
-          disclosureVersion: "openclaw-conversation-v1",
-          data: "conversation_text_and_agent_tool_context",
-          destination: "OpenClaw runtime and its configured model/tools/connectors",
-        },
-        remediation: null,
-      }],
-      summaryUnsupported: "OpenClaw is Conversation-only because its stable interface cannot prove a tool-free background Summary invocation",
     }],
     candidates: [{
       id: "candidate:codex",
@@ -284,7 +173,7 @@ const mocks = vi.hoisted(() => ({
       lifecycle: "candidate",
       source: "discovered",
       detectedPath: "/fake/bin/codex",
-      capabilities: ["summary", "conversation"],
+      capabilities: ["summary"],
       selected: false,
       readiness: "untested",
       remediation: { href: "/settings/llm?candidate=candidate%3Acodex" },
@@ -296,34 +185,10 @@ const mocks = vi.hoisted(() => ({
       lifecycle: "candidate",
       source: "discovered",
       detectedPath: "/fake/bin/claude",
-      capabilities: ["summary", "conversation"],
+      capabilities: ["summary"],
       selected: false,
       readiness: "untested",
       remediation: { href: "/settings/llm?candidate=candidate%3Aclaude-code" },
-    }, {
-      id: "candidate:hermes",
-      kind: "supported-agent",
-      adapter: "hermes",
-      label: "Hermes",
-      lifecycle: "candidate",
-      source: "discovered",
-      detectedPath: "/fake/bin/hermes",
-      capabilities: ["conversation"],
-      selected: false,
-      readiness: "untested",
-      remediation: { href: "/settings/llm?candidate=candidate%3Ahermes" },
-    }, {
-      id: "candidate:openclaw",
-      kind: "supported-agent",
-      adapter: "openclaw",
-      label: "OpenClaw",
-      lifecycle: "candidate",
-      source: "discovered",
-      detectedPath: "/fake/bin/openclaw",
-      capabilities: ["conversation"],
-      selected: false,
-      readiness: "untested",
-      remediation: { href: "/settings/llm?candidate=candidate%3Aopenclaw" },
     }],
     legacyConnections: [{
       id: "legacy-custom:migrated",
@@ -340,7 +205,6 @@ const mocks = vi.hoisted(() => ({
     selections: {
       transcription: { connectionId: null, model: "local" },
       summary: { connectionId: "direct-xai", model: "grok-summary" },
-      conversation: { connectionId: "direct-xai", model: "grok-conversation" },
     },
   },
 }));
@@ -358,9 +222,6 @@ vi.mock("../../../web/src/trpc.js", () => {
       agentConnections: {
         view: { useQuery: () => ({ data: mocks.view, isPending: false, isError: false, refetch: mocks.refetchView }) },
         probe: { useMutation: () => mutation(mocks.probe) },
-        createConversationProbeAttempt: {
-          useMutation: () => mutation(mocks.createConversationProbeAttempt),
-        },
         refreshCandidates: { useMutation: () => mutation(mocks.refresh) },
         startNativeAuthorization: { useMutation: () => mutation(mocks.startNativeAuthorization) },
         refreshNativeAuthorizationStatus: { useMutation: () => mutation(mocks.refreshNativeAuthorizationStatus) },
@@ -485,7 +346,6 @@ describe("shared AI services", () => {
     expect(screen.queryByRole("heading", { name: /conversation/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /conversation/i })).toBeNull();
     expect(screen.queryByRole("textbox", { name: /conversation/i })).toBeNull();
-    expect(mocks.createConversationProbeAttempt).not.toHaveBeenCalled();
   });
 
   it("treats a retired Conversation deep link as a link to the account", () => {
@@ -825,10 +685,10 @@ describe("shared AI services", () => {
     expect(mocks.remove).toHaveBeenCalledWith({ connectionId: "codex", confirmed: true });
   });
 
-  it("migrates a #136 Conversation-only Claude connection without declaring Summary ready", () => {
+  it("shows the Host-resolved Summary model of a Claude connection without declaring Summary ready", () => {
+    // The Host resolves the model of an older record itself; the page shows what it is given.
     const claude = mocks.view.connections.find((connection) => connection.id === "claude-code");
-    expect(claude).toBeDefined();
-    (claude!.settings as { summaryModel?: string }).summaryModel = undefined;
+    expect(claude?.settings).toEqual({ executablePath: "/fake/bin/claude", summaryModel: "claude-sonnet-5" });
 
     mount("en");
 
@@ -869,8 +729,6 @@ describe("shared AI services", () => {
     const dialog = await screen.findByRole("dialog", { name: "删除 xAI 连接" });
     expect(dialog).toHaveFocus();
     expect(within(dialog).getByText(/Planning/)).toBeInTheDocument();
-    // Old conversations pinned to the account are no longer something you can open.
-    expect(within(dialog).queryByText(/Launch plan/)).toBeNull();
     expect(mocks.remove).not.toHaveBeenCalled();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "删除 xAI 连接" })).not.toBeInTheDocument();

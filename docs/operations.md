@@ -30,8 +30,9 @@ the bearer token; do not read or copy the token yourself. Add the
 [Yulu skill](../skills/yulu/SKILL.md) using the chosen Agent's skill installer,
 then refresh that Agent's MCP connection. A skill alone does not register MCP.
 This helper neither installs a global CLI nor requires external Python/Node.
-The App's AI Provider settings select summary/conversation connections; they do
-not install this external Agent-to-Yulu MCP registration.
+The App's AI Provider settings select summary connections; they do not install
+this external Agent-to-Yulu MCP registration. Ask about meetings in that Agent:
+Yulu itself hosts no conversation (ADR-010).
 
 ## Daily commands
 
@@ -68,8 +69,8 @@ Host. It does not synchronously run speech or summary code in Python.
 
 ### Native recording controls in the product App
 
-The signed App includes its menu-bar controls, dictation/translation hotkeys, and
-voice-chat presentation in the visible Yulu process. It does not require a second
+The signed App includes its menu-bar controls and dictation/translation hotkeys
+in the visible Yulu process. It does not require a second
 StatusAgent installation. Closing the window keeps these controls running;
 quitting Yulu removes them after current native commands finish. Reopen the App
 to restore controls.
@@ -157,8 +158,8 @@ The MCP endpoint and mutating Host endpoints require the per-install token in
 `yulu mcp rotate-token` if it is exposed.
 
 Install the `yulu` MCP registration only into each supported Agent you explicitly
-choose to use. Hermes is optional and Conversation-only in the current product;
-its historical `yulu_artifact` and `yulu_delivery` registrations are compatibility
+choose to use. Hermes and OpenClaw are optional MCP clients in the current product;
+Hermes's historical `yulu_artifact` and `yulu_delivery` registrations are compatibility
 signals, not installation or overall health requirements.
 
 ### 4. Host and Agent health
@@ -254,9 +255,8 @@ automatically when the selected engine is unavailable.
 
 Settings → AI Providers owns the authoritative Agent Connection Center,
 including direct xAI and supported local Agent connections. Opening it does
-not probe a model. Its three capability readiness results are independent: a
-green Summary or Conversation result does not establish Transcription readiness
-(or vice versa). An API key is used only after the user explicitly saves it,
+not probe a model. Its capability readiness results are independent: a green
+Summary result does not establish Transcription readiness (or vice versa). An API key is used only after the user explicitly saves it,
 never as an automatic response to OAuth/probe failure.
 
 The Core Activation page shows the selected Summary Provider and model. An xAI
@@ -266,7 +266,7 @@ not satisfy that disclosure. Declining it is durable and leaves xAI selected but
 blocked, with remediation at `/settings/llm`; there is no fallback. Activation
 lists only Summary connections whose shared contract currently proves explicit
 identity, readiness, and accepted disclosure: xAI, Codex, or Claude Code.
-Hermes and OpenClaw remain Conversation-only.
+Hermes and OpenClaw are not Agent Connections.
 
 `/activate` records through the production recording command and correlates the
 returned Host task identity to a durable Activation Attempt. The page reads task
@@ -616,8 +616,8 @@ ready result. The earlier result remains visible as history; current readiness
 returns to untested until the required native OAuth login is restored and the
 capability is tested explicitly. Use the exact native login remediation shown
 by Agent Connection Center; Yulu never changes or copies runtime credentials.
-The center launches only the detected runtime's fixed command: `codex login`,
-`claude auth login`, `hermes model`, or `openclaw configure`. It does not accept
+The center launches only the detected runtime's fixed command: `codex login` or
+`claude auth login`. It does not accept
 arbitrary arguments or inspect the interactive login output. Complete login in
 the runtime-owned Terminal session, return to Yulu, refresh status, and then run
 the desired capability test explicitly. Launching reauthorization clears only
@@ -630,8 +630,7 @@ blocked: its runtime reports API-key authorization rather than a Claude
 subscription login, and the current CLI contract cannot prove that managed
 hooks are empty or expose exact invocation-provider identity for a Summary
 request. Keep Claude Summary fail-closed and marked as an external acceptance
-blocker; this does not block Claude Conversation, direct xAI, Codex, Hermes, or
-OpenClaw selection within each Agent's declared capabilities.
+blocker; this does not block direct xAI or Codex selection.
 
 Hermes compatibility is feature-gated rather than inferred from a version
 string. `yulu doctor --json` probes the required `serve`, `sessions export`,
@@ -639,30 +638,20 @@ string. `yulu doctor --json` probes the required `serve`, `sessions export`,
 `agent_pipeline.components.hermes_contract` check as an incompatible Hermes
 installation and update Hermes before retrying a recording.
 
-## Conversation-only Hermes and OpenClaw connections
+## Hermes and OpenClaw
 
-Agent Connection Center does not spend model quota on open or refresh. A
-Conversation capability test is enabled only after the current disclosure is
-accepted. Readiness requires runtime-owned authorization plus exact runtime,
-provider, model, fallback, and capability-probe evidence; an executable on PATH
-or a configured model is never sufficient.
+ADR-010 retired Yulu-owned conversation, including the Conversation-only Hermes
+and OpenClaw connections. Register Yulu MCP in either Agent and ask about
+meetings there; that Agent keeps its own history, model, and connectors.
 
-- OpenClaw 2026.5.12+ is probed through `openclaw infer model run --gateway`.
-  The JSON result must identify `transport=gateway`, the exact provider/model,
-  and an empty fallback-attempt list. Production turns use `openclaw agent` and
-  must return the exact requested session ID; embedded fallback, latest/default
-  session drift, transport loss, and unproven cancellation fail closed.
-- Hermes 0.20.0 exposes `--safe-mode` and `--toolsets`, but neither documents a
-  stable empty tool allowlist. Yulu therefore reports this native Conversation
-  adapter unsupported instead of running a potentially tool-capable probe.
-- A timeout or closed transport is an Unknown Outcome unless the remote runtime
-  proves a terminal result. Do not replay automatically. With no proven native
-  session, the same input remains unavailable for retry; start a new
-  conversation only after inspecting the runtime outcome.
-- Deleting either connection removes its Yulu record, readiness history,
-  disclosure receipt, and future selection. A preserved pinned conversation
-  pauses on its next attempt because the exact connection is gone; Yulu never
-  deletes runtime OAuth, tokens, configuration, or native session history.
+- Agent Connection Center no longer discovers, tests, or selects them. Rows
+  saved for them by earlier versions stay inert in `host.sqlite`.
+- Earlier Agent Console history is renamed once to the mode-`0600`
+  `agent-sessions.retired.<timestamp>.json` in the Application Support data
+  directory and is never read or sent anywhere. Retired conversation settings
+  are in `config.legacy-conversation.<timestamp>.json` beside `config.json`.
+- Yulu never deletes runtime OAuth, tokens, configuration, or native session
+  history.
 
 ## Build and codesign native capture
 

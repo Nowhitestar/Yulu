@@ -8,7 +8,6 @@
 import Cocoa
 import Carbon
 import ApplicationServices
-import WebKit
 
 private var embeddedEnvironment: [String: String]?
 private var nativeEnvironment: [String: String] {
@@ -561,15 +560,6 @@ class MenuBuilder {
         openInbox.target = target
         openInbox.image = NSImage(systemSymbolName: "tray", accessibilityDescription: nil)
         menu.addItem(openInbox)
-
-        let openAgentConsole = NSMenuItem(
-            title: L("打开 Agent Console", "Open Agent Console"),
-            action: #selector(StatusAgentApp.onOpenAgentConsole),
-            keyEquivalent: ""
-        )
-        openAgentConsole.target = target
-        openAgentConsole.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
-        menu.addItem(openAgentConsole)
 
         let recentItem = NSMenuItem(title: L("最近记录", "Recent Recordings"), action: nil, keyEquivalent: "")
         recentItem.identifier = NSUserInterfaceItemIdentifier("recent_recordings")
@@ -2058,16 +2048,6 @@ class RecordingLauncher {
     }
 
     @discardableResult
-    static func launchVoiceChatToggle(completion: @escaping DictationCompletion) -> Int32? {
-        return launchDictation(arguments: [
-            "dictate.py", "ask-toggle",
-            "--no-paste",
-            "--no-copy",
-            "--json",
-        ], completion: completion)
-    }
-
-    @discardableResult
     static func launchDictateCancel(completion: @escaping DictationCompletion) -> Int32? {
         launchDictation(arguments: ["dictate.py", "cancel", "--json"], completion: completion)
     }
@@ -2082,7 +2062,7 @@ private final class VoiceLaunchReceipt {
 }
 
 private enum VoiceCommandKind {
-    case dictate, translate(String), chat
+    case dictate, translate(String)
 }
 
 // IPC server for programmatic toggle/status/open-inbox. Mirrors
@@ -2292,23 +2272,11 @@ class IPCServer {
             sendJSON(c, stateChangeResponse(admission: admission) {
                 $0.onDictateTranslate(targetLanguage: obj["target_language"] as? String ?? "")
             })
-        case "voice_chat":
-            sendJSON(c, stateChangeResponse(admission: admission) { $0.onVoiceChat() })
         case "open_inbox":
             DispatchQueue.main.async { [weak self] in
                 withExtendedLifetime(admission) { self?.app?.onOpenInbox() }
             }
             sendJSON(c, ["ok": true])
-        case "open_agent_console":
-            DispatchQueue.main.async { [weak self] in
-                withExtendedLifetime(admission) { self?.app?.onOpenAgentConsole() }
-            }
-            sendJSON(c, ["ok": true])
-        case "open_voice_chat":
-            sendJSON(c, mainResponse(admission: admission) {
-                $0.openVoiceChatWindow(urlString: obj["url"] as? String)
-                return ["ok": true].merging($0.voiceChatWindowStatus()) { _, new in new }
-            })
         case "paste_clipboard":
             sendJSON(c, mainResponse(admission: admission, timeoutError: "paste_timeout") {
                 $0.pasteClipboard(
@@ -2455,7 +2423,9 @@ class IPCServer {
             let pids = app.activeLauncherPids()
             if let pid = pids.first { resp["launcher_pid"] = Int(pid) }
             if !pids.isEmpty { resp["launcher_pids"] = pids.map { Int($0) } }
-            resp.merge(app.voiceChatWindowStatus()) { _, new in new }
+            // ADR-010 retired the voice-chat window. Application Migration only
+            // retires a legacy StatusAgent that reports this field as false.
+            resp["voice_chat_window_visible"] = false
             return resp
         }
     }
@@ -2517,7 +2487,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var configurationGeneration = 0
     var statusItem: NSStatusItem!
     var menu: NSMenu!
-    var voiceChatWindow: NSWindow?
     var voiceOverlayWindow: NSPanel?
     let voiceOverlayMotion = VoiceOverlayMotion()
     var voiceFeedbackWindow: NSPanel?
@@ -3055,11 +3024,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func stopVoiceInputFromOverlay() {
         guard state == .recording && activeRecordingIsDictation else { return }
-        if activeDictationIntent() == "voice_chat" {
-            onVoiceChat()
-        } else {
-            onDictateToggle()
-        }
+        onDictateToggle()
     }
 
     @objc private func cancelVoiceInputFromOverlay() {
@@ -3176,12 +3141,9 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             )
             item.isEnabled = (new == .idle || (new == .recording && !activeRecordingIsDictation) || new == .processing)
         }
-        let voiceChatActive = (new == .recording && activeRecordingIsDictation && activeDictationIntent() == "voice_chat")
         if let item = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("dictate_once") }) {
-            item.title = voiceChatActive
-                ? L("语音对话进行中", "Voice Chat in Progress")
-                : ((new == .recording && activeRecordingIsDictation) ? L("停止听写", "Stop Dictation") : L("开始听写", "Start Dictation"))
-            item.isEnabled = (new == .idle || new == .processing || (new == .recording && activeRecordingIsDictation && !voiceChatActive))
+            item.title = (new == .recording && activeRecordingIsDictation) ? L("停止听写", "Stop Dictation") : L("开始听写", "Start Dictation")
+            item.isEnabled = (new == .idle || new == .processing || (new == .recording && activeRecordingIsDictation))
         }
         if let item = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("dictate_translate") }) {
             item.isEnabled = (new == .idle || new == .processing)
@@ -3201,7 +3163,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         feedbackDismissWorkItem?.cancel()
         voiceOverlayWindow?.close()
         voiceFeedbackWindow?.close()
-        voiceChatWindow?.close()
         hotkeyRegistrars.forEach { $0.unregister() }
         modifierHotkeys.stop()
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
@@ -3368,11 +3329,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         heldHotkey = nil
         let needsInputAccess = result?["error_code"] as? String == "accessibility_not_trusted"
         if wasStopping && status == 0 && result?["action"] as? String == "stop" {
-            if result?["chat"] is [String: Any] {
-                hideVoiceOverlay()
-                applyState(.idle)
-                return
-            }
             log("dictation result success pasted=\(result?["pasted"] as? Bool == true) post_stop_ms=\(result?["post_stop_ms"] ?? 0)")
             let presentation = voiceResultPresentation(
                 pasted: result?["pasted"] as? Bool == true,
@@ -3447,8 +3403,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         voiceCommandQueue.async { [weak self] in
             defer { withExtendedLifetime(admission) {} }
             guard let self else { return }
-            let wantsTarget: Bool
-            if case .chat = kind { wantsTarget = false } else { wantsTarget = !stopping }
+            let wantsTarget = !stopping
             let target = wantsTarget ? self.currentInputTargetApplication(preferred: front) : nil
             let pasteTarget = wantsTarget ? self.capturePasteTarget(for: target) : nil
             let current = DispatchQueue.main.sync { () -> Bool in
@@ -3474,8 +3429,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 pid = RecordingLauncher.launchDictateTranslateToggle(targetLanguage: language,
                     targetBundleId: target?.bundleIdentifier ?? "", targetAppName: target?.localizedName ?? "",
                     completion: completion)
-            case .chat:
-                pid = RecordingLauncher.launchVoiceChatToggle(completion: completion)
             }
             DispatchQueue.main.sync {
                 receipt.pid = pid
@@ -3513,7 +3466,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !voiceLaunchPending, resultManagedLauncherPids.isEmpty else { return }
         if state == .recording && !activeRecordingIsDictation { return }
         let stopping = state == .recording && activeRecordingIsDictation
-        if stopping && activeDictationIntent() == "voice_chat" { return }
         launchVoiceCommand(.dictate, stopping: stopping, recordingText: L("听写中", "Dictating"))
     }
 
@@ -3535,27 +3487,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !voiceLaunchPending, resultManagedLauncherPids.isEmpty else { return }
         if state == .recording && !activeRecordingIsDictation { return }
         let stopping = state == .recording && activeRecordingIsDictation
-        if stopping && activeDictationIntent() == "voice_chat" { return }
         launchVoiceCommand(.translate(dictationTargetLanguage(fallback: targetLanguage)),
             stopping: stopping, recordingText: L("正在翻译", "Translating"))
-    }
-
-    @objc func onVoiceChat() {
-        guard nativeWork.isAccepting else { return }
-        if voiceCancellationPending {
-            queueVoiceRestart { [weak self] in self?.onVoiceChat() }
-            showVoiceOverlay(L("正在启动…", "Starting…"), animation: .starting)
-            return
-        }
-        if pendingStartFeedbackText != nil {
-            pendingVoiceStop = { [weak self] in self?.onVoiceChat() }
-            return
-        }
-        guard !voiceLaunchPending, resultManagedLauncherPids.isEmpty else { return }
-        if state == .recording && !activeRecordingIsDictation { return }
-        let stopping = state == .recording && activeRecordingIsDictation
-        if stopping && activeDictationIntent() != "voice_chat" { return }
-        launchVoiceCommand(.chat, stopping: stopping, recordingText: L("正在听问题", "Listening to your question"))
     }
 
     private func queueVoiceRestart(_ action: @escaping () -> Void) {
@@ -3586,13 +3519,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func onOpenInbox() {
         if let openRoute { openRoute("/inbox"); return }
         if let url = URL(string: "http://127.0.0.1:7777/inbox") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    @objc func onOpenAgentConsole() {
-        if let openRoute { openRoute("/agent-console"); return }
-        if let url = URL(string: "http://127.0.0.1:7777/agent-console") {
             NSWorkspace.shared.open(url)
         }
     }
@@ -4013,51 +3939,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         var resp: [String: Any] = ["ok": true, "method": pasteMethod, "verified": verified, "copied": !verified]
         if !accessibilityError.isEmpty { resp["accessibility_error"] = accessibilityError }
-        return resp
-    }
-
-    func openVoiceChatWindow(urlString: String? = nil) {
-        hideVoiceOverlay()
-        let raw = urlString ?? "http://127.0.0.1:7777/voice-chat"
-        guard let url = URL(string: raw), url.scheme == "http",
-              ["127.0.0.1", "localhost"].contains(url.host ?? ""), url.port == 7777,
-              url.path == "/voice-chat", url.user == nil, url.password == nil else { return }
-        let panel: NSPanel
-        if let existing = voiceChatWindow as? NSPanel {
-            panel = existing
-        } else {
-            panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
-                styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
-                backing: .buffered,
-                defer: false
-            )
-            panel.title = L("Yulu 语音对话", "Yulu Voice Chat")
-            panel.isReleasedWhenClosed = false
-            panel.level = .floating
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            panel.titlebarAppearsTransparent = true
-            panel.hidesOnDeactivate = false
-            panel.becomesKeyOnlyIfNeeded = true
-            panel.contentView = WKWebView(frame: panel.contentView?.bounds ?? .zero)
-            voiceChatWindow = panel
-        }
-        if let web = panel.contentView as? WKWebView {
-            web.autoresizingMask = [.width, .height]
-            if web.url != url { web.load(URLRequest(url: url)) }
-        }
-        if !panel.isVisible { panel.center() }
-        panel.orderFrontRegardless()
-    }
-
-    func voiceChatWindowStatus() -> [String: Any] {
-        var resp: [String: Any] = [
-            "voice_chat_window_visible": voiceChatWindow?.isVisible ?? false,
-        ]
-        if let web = voiceChatWindow?.contentView as? WKWebView,
-           let url = web.url?.absoluteString {
-            resp["voice_chat_window_url"] = url
-        }
         return resp
     }
 

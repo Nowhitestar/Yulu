@@ -2,7 +2,6 @@ import type { XaiCredentialManager, XaiCredentialSource } from "./xaiCredentials
 
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
 const SUMMARY_REQUEST_TIMEOUT_MS = 180_000;
-const CONVERSATION_REQUEST_TIMEOUT_MS = 30_000;
 export const DICTATION_TEXT_TIMEOUT_MS = 20_000;
 const MAX_INPUT_BYTES = 1_000_000;
 const MAX_INPUT_MESSAGES = 64;
@@ -11,7 +10,7 @@ const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_OUTPUT_CHARS = 131_072;
 const OUTPUT_LIMIT_ERROR = "xAI text response exceeded the output limit";
 
-export type XaiTextCapability = "summary" | "conversation" | "dictation";
+export type XaiTextCapability = "summary" | "dictation";
 
 export interface XaiTextMessage {
   role: "system" | "user" | "assistant";
@@ -27,8 +26,6 @@ export interface XaiTextRequest {
   timeoutMs?: number;
   /** Cancels superseded speculative dictation work; never changes provider. */
   signal?: AbortSignal;
-  /** Receives provisional full-text snapshots; only the returned result is final. */
-  onText?: (text: string) => void;
 }
 
 export interface XaiTextResult {
@@ -143,67 +140,6 @@ async function readBoundedResponse(response: Response): Promise<string> {
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), bytes).toString("utf8");
 }
 
-async function readStreamingResponse(response: Response, model: string, onText: (text: string) => void): Promise<unknown> {
-  if (!response.body) throw new XaiTextResponseTransportError("xAI stream ended before completion");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let bytes = 0;
-  let text = "";
-  let verifiedModel = false;
-  let completed: unknown;
-  const event = (frame: string) => {
-    const data = frame.split("\n").filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart()).join("\n");
-    if (!data || data === "[DONE]") return;
-    let item: { type?: string; delta?: unknown; response?: unknown };
-    try { item = JSON.parse(data); } catch { throw new Error("xAI streaming response was invalid"); }
-    if (!item || typeof item !== "object") throw new Error("xAI streaming response was invalid");
-    if (item.response) {
-      const actualModel = outputModel(item.response);
-      if (actualModel !== model) throw new Error(`Pinned xAI model ${model} does not match response model ${actualModel}`);
-      verifiedModel = true;
-    }
-    if (item.type === "response.output_text.delta" && typeof item.delta === "string") {
-      text += item.delta;
-      if (text.length > MAX_OUTPUT_CHARS || Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) throw new Error(OUTPUT_LIMIT_ERROR);
-      if (verifiedModel) onText(text);
-    }
-    if (item.type === "response.completed") {
-      if ((item.response as { status?: unknown } | undefined)?.status !== "completed") throw new Error("xAI streaming response was incomplete");
-      completed = item.response;
-    }
-    if (["error", "response.failed", "response.incomplete"].includes(item.type ?? "")) {
-      throw new Error("xAI streaming response was incomplete");
-    }
-  };
-  try {
-    while (!completed) {
-      let chunk: ReadableStreamReadResult<Uint8Array>;
-      try { chunk = await reader.read(); }
-      catch { throw new XaiTextResponseTransportError("xAI streaming response transport was lost"); }
-      if (chunk.done) break;
-      bytes += chunk.value.byteLength;
-      if (bytes > MAX_RESPONSE_BYTES * 4) throw new Error(OUTPUT_LIMIT_ERROR);
-      buffer += decoder.decode(chunk.value, { stream: true });
-      // Normalize only complete lines so a CR/LF pair split across reads stays intact.
-      buffer = buffer.replace(/\r\n/g, "\n");
-      let boundary: number;
-      while ((boundary = buffer.indexOf("\n\n")) >= 0) {
-        event(buffer.slice(0, boundary));
-        buffer = buffer.slice(boundary + 2);
-        if (completed) break;
-      }
-      if (buffer.length > MAX_RESPONSE_BYTES) throw new Error(OUTPUT_LIMIT_ERROR);
-    }
-    if (!completed) throw new XaiTextResponseTransportError("xAI stream ended before completion");
-    return completed;
-  } finally {
-    try { await reader.cancel(); } catch { /* final state/error already determined */ }
-    reader.releaseLock();
-  }
-}
-
 export class XaiTextClient {
   constructor(
     private readonly credentials: Pick<XaiCredentialManager, "resolve">,
@@ -212,8 +148,8 @@ export class XaiTextClient {
 
   async request(request: XaiTextRequest): Promise<XaiTextResult> {
     const { model, maxOutputTokens } = validateRequest(request);
-    const defaultTimeout = request.capability === "summary" ? SUMMARY_REQUEST_TIMEOUT_MS
-      : request.capability === "dictation" ? DICTATION_TEXT_TIMEOUT_MS : CONVERSATION_REQUEST_TIMEOUT_MS;
+    const defaultTimeout = request.capability === "summary"
+      ? SUMMARY_REQUEST_TIMEOUT_MS : DICTATION_TEXT_TIMEOUT_MS;
     const timeoutMs = request.timeoutMs ?? defaultTimeout;
     if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > defaultTimeout) {
       throw new Error("xAI text timeout is invalid");
@@ -239,7 +175,7 @@ export class XaiTextClient {
         method: "POST",
         redirect: "error",
         headers: {
-          Accept: request.onText ? "text/event-stream" : "application/json",
+          Accept: "application/json",
           Authorization: `Bearer ${credential.accessToken}`,
           "Content-Type": "application/json",
         },
@@ -251,7 +187,6 @@ export class XaiTextClient {
           // These models default to high reasoning; keep dictation editing quick.
           ...(request.capability === "dictation" && /^grok-4\.[56](?:$|-)/.test(model)
             ? { reasoning: { effort: "low" } } : {}),
-          ...(request.onText ? { stream: true } : {}),
         }),
         signal,
       });
@@ -268,12 +203,9 @@ export class XaiTextClient {
     }
     let payload: unknown;
     try {
-      if (request.onText) payload = await readStreamingResponse(response, model, request.onText);
-      else {
-        const raw = await readBoundedResponse(response);
-        try { payload = JSON.parse(raw); }
-        catch { throw new Error("xAI text response was invalid"); }
-      }
+      const raw = await readBoundedResponse(response);
+      try { payload = JSON.parse(raw); }
+      catch { throw new Error("xAI text response was invalid"); }
     } catch (error) {
       if (request.capability === "dictation" && signal.aborted) throw signal.reason;
       if (error instanceof XaiTextResponseTransportError) {

@@ -186,7 +186,7 @@ describe("AgentSharingConnectorAdapter", () => {
     const adapter = new AgentSharingConnectorAdapter({ scriptDir: "/app/scripts", configDir: "/config", run });
     await expect(adapter.discover({
       connection: { ...connection, settings: { executablePath: "/opt/bin/codex" } }, connector: "notion",
-    })).rejects.toThrow(/Choose an explicit Conversation model/);
+    })).rejects.toThrow(/Codex has no connector model; remove and re-add it/);
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -414,7 +414,7 @@ describe("AgentSharingConnectorAdapter", () => {
     });
   });
 
-  it("reports an unverifiable write as Unknown Outcome and rejects Conversation-only OpenClaw", async () => {
+  it("reports an unverifiable write as Unknown Outcome and rejects an OpenClaw connection", async () => {
     const run = vi.fn(async (_input: Parameters<typeof runAgentCliCommand>[0]) => ({
       code: 1,
       stdout: "",
@@ -435,7 +435,7 @@ describe("AgentSharingConnectorAdapter", () => {
     await expect(adapter.discover({
       connection: { ...connection, id: "openclaw", adapter: "openclaw", label: "OpenClaw" },
       connector: "notion",
-    })).rejects.toThrow(/Conversation-only/);
+    })).rejects.toThrow(/OpenClaw does not have a supported Sharing connector adapter/);
   });
 
   it("reports proven pre-write hook rejection as an ordinary configuration failure", async () => {

@@ -166,8 +166,7 @@ def test_state_prints_current_state(tmp_path, monkeypatch, capsys):
     assert "state: idle" in out
     assert "dictation active: True" in out
     assert "launcher pid: 4242" in out
-    assert "voice chat window visible: True" in out
-    assert "voice chat window url: http://127.0.0.1:7777/voice-chat?session=s1" in out
+    assert "voice chat" not in out
 
 
 def test_toggle_prints_before_after(tmp_path, monkeypatch, capsys):
@@ -206,16 +205,12 @@ def test_translate_prints_before_after(tmp_path, monkeypatch, capsys):
     assert "translate: idle → recording" in out
 
 
-def test_voice_chat_prints_before_after(tmp_path, monkeypatch, capsys):
-    def handler(req):
-        assert req["action"] == "voice_chat"
-        return {"ok": True, "state_before": "idle", "state_after": "processing"}
-
-    _start_fake_ipc_server(tmp_path, monkeypatch, handler)
-    rc = sac.main(["voice-chat"])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "voice chat: idle → processing" in out
+@pytest.mark.parametrize("command", ["voice-chat", "open-agent-console", "open-voice-chat"])
+def test_retired_conversation_commands_are_rejected(command, capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        sac.main([command])
+    assert excinfo.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_open_inbox_prints_ok(tmp_path, monkeypatch, capsys):
@@ -228,39 +223,6 @@ def test_open_inbox_prints_ok(tmp_path, monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "open_inbox" in out
-
-
-def test_open_agent_console_prints_ok(tmp_path, monkeypatch, capsys):
-    def handler(req):
-        assert req["action"] == "open_agent_console"
-        return {"ok": True}
-
-    _start_fake_ipc_server(tmp_path, monkeypatch, handler)
-    rc = sac.main(["open-agent-console"])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "open_agent_console" in out
-
-
-def test_open_voice_chat_prints_window_status(tmp_path, monkeypatch, capsys):
-    def handler(req):
-        assert req == {
-            "action": "open_voice_chat",
-            "url": "http://127.0.0.1:7777/voice-chat?session=s1",
-        }
-        return {
-            "ok": True,
-            "voice_chat_window_visible": True,
-            "voice_chat_window_url": "http://127.0.0.1:7777/voice-chat?session=s1",
-        }
-
-    _start_fake_ipc_server(tmp_path, monkeypatch, handler)
-    rc = sac.main(["open-voice-chat", "--url", "http://127.0.0.1:7777/voice-chat?session=s1"])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "open_voice_chat" in out
-    assert "voice chat window visible: True" in out
-    assert "voice chat window url: http://127.0.0.1:7777/voice-chat?session=s1" in out
 
 
 def test_paste_smoke_sends_text_and_prints_json(tmp_path, monkeypatch, capsys):

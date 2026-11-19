@@ -16,7 +16,7 @@ test.beforeEach(async ({ page }) => {
       status_agent: { enabled: true },
       agent_pipeline: { enabled: true, auto_process_recordings: true },
       calendars: [{ type: "macos", enabled: true }],
-      intelligence: { summary: { provider: "agent", connectionId: "codex", model: "selected" }, conversation: { provider: "xai", model: "grok-4.6" } },
+      intelligence: { summary: { provider: "agent", connectionId: "codex", model: "selected" } },
     });
     await route.fulfill({ response, json: body });
   });

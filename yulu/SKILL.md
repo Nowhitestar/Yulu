@@ -1,6 +1,6 @@
 ---
 name: yulu
-description: "Yulu (语录) — native macOS recording with a durable local Host, explicit audio engines, and Agent-owned summaries, conversation, and connectors."
+description: "Yulu (语录) — native macOS recording with a durable local Host, explicit audio engines, and Agent-owned summaries and connectors."
 metadata:
   internal: true
   notice: "Internal architecture and developer guidance. The user-facing skill installed into Agents lives at skills/yulu/SKILL.md."
@@ -17,15 +17,19 @@ Yulu is an Agent-native macOS recorder. Preserve its responsibility boundary:
 - Yulu uses the public Grok CLI-compatible OAuth client and stores its own xAI
   grant in macOS Keychain.
 - The recording's pinned xAI, Codex, or Claude Code provider owns its summary.
-- The selected general Agent owns interactive conversation and its connectors.
+- Yulu owns no conversation (ADR-010). The user's own Agent asks about meetings
+  through authenticated MCP and keeps its own history and connectors.
+- xAI dictation cleanup/translation sends dictated text only through the explicit
+  `transcription.dictation.text_provider` switch and its accepted disclosure.
 - Sharing is a separate, exclusively manual action through a supported Agent
   Connection; recording completion never starts it.
 - Python is capture and local workflow glue, not an AI runtime.
 
 The authoritative runtime decisions are [`ADR-005`](spec/adr/005-agent-native-durable-recording-pipeline.md),
 [`ADR-007`](spec/adr/007-explicit-audio-transcription-engines.md),
-[`ADR-008`](spec/adr/008-yulu-owned-xai-oauth.md), and
-[`ADR-009`](spec/adr/009-grok-cli-compatible-xai-oauth.md).
+[`ADR-008`](spec/adr/008-yulu-owned-xai-oauth.md),
+[`ADR-009`](spec/adr/009-grok-cli-compatible-xai-oauth.md), and
+[`ADR-010`](spec/adr/010-retire-yulu-conversation.md).
 
 ## Product flow
 
@@ -52,7 +56,7 @@ Python completion adapter -> Yulu Host -> durable task + lease
                                        |
                                        +-> processing ends
 
-Agent Console -> selected general Agent -> that Agent's connectors
+User's own Agent -> authenticated Yulu MCP -> local meetings and summaries
 Recording detail -> explicit confirmed Share Action -> selected Agent connector
 ```
 
@@ -74,7 +78,7 @@ spooled and replayed. Do not add a fallback AI path to the capture process.
 7. An uncertain manual share becomes an Unknown Outcome; never assume
    failure and retry blindly.
 8. Summary supports direct xAI, Codex, and Claude Code only. Hermes and OpenClaw
-   remain optional Conversation providers.
+   are MCP clients, not Agent Connections.
 9. A missing pinned Summary Provider pauses work after transcript commit; Yulu
    never substitutes the current provider, model, connection, or credential source.
 10. Agent and connector credentials never belong in Yulu config or source.
@@ -92,7 +96,8 @@ spooled and replayed. Do not add a fallback AI path to the capture process.
 | Recording summary | pinned xAI/Codex/Claude Code provider | capability evidence plus Host-committed summary artifact |
 | Artifact integrity | Host | artifact records, hashes, provenance, and final sidecars |
 | Manual sharing | selected supported Agent connector | Share Action snapshot, authorization, and verified receipt |
-| Interactive conversation | selected general Agent | Agent Console session store and native Agent session |
+| Questions about meetings | the user's own Agent | that Agent's history, via Yulu MCP tools |
+| Dictation text | explicitly enabled xAI text provider | `transcription.dictation.text_provider`/`text_model` plus the dictated-text disclosure receipt |
 | Search, prompts, glossary | Yulu local data | local SQLite and recording sidecars |
 
 ## Prefer MCP for Agent actions
@@ -155,7 +160,7 @@ yulu mcp status
 yulu mcp test
 yulu skill install --agent codex
 
-# Dictation and voice chat
+# Dictation
 yulu dictate warm --json
 yulu dictate once --no-paste --no-copy --json
 yulu status-agent hotkeys
@@ -188,11 +193,13 @@ Relevant sections:
 - `transcription.engine`: explicit local/xAI selection; xAI OAuth is managed
   separately in Settings and is never a config field;
 - `transcription.language` and `transcription.dictation`: language, prompt,
-  context, timeout, and deadline preferences;
-- `intelligence.summary` / `intelligence.conversation`: independent pinned
-  provider, connection, and model selections without credentials;
-- `llm.agent.provider` / `llm.command`: legacy general Agent Console migration input;
-- `agent_console`: capability display and non-secret hints;
+  context, timeout, deadline, and dictation text provider/model preferences;
+- `intelligence.summary`: pinned provider, connection, and model selection
+  without credentials;
+- `llm.agent.provider` / `llm.command`: legacy migration input only;
+- retired conversation settings (`intelligence.conversation`, `agent_console`,
+  `transcription.dictation.voice_chat_scope`/`cleanup_model`,
+  `status_agent.hotkeys.voice_chat`) are archived on upgrade and rejected on write;
 - `status_agent`: menu-bar and global shortcut preferences;
 - `calendars` / `meeting_detection`: when to offer native recording;
 - `ui.theme`: presentation.
@@ -236,7 +243,7 @@ Do not edit task state directly in SQLite.
 | `scripts/yulu_ui/src/xaiAudio.ts` | Direct xAI REST transcription and native realtime STT transport |
 | `scripts/yulu_ui/src/xaiCredentials.ts` | Yulu-owned xAI device OAuth, refresh, and Keychain boundary |
 | `scripts/xai_keychain.swift` | Signed macOS Keychain storage helper for xAI OAuth |
-| `scripts/yulu_ui/src/agentGateway.ts` | Supported Agent summary/conversation and connector tool-call boundary |
+| `scripts/yulu_ui/src/agentGateway.ts` | Supported Agent summary and connector tool-call boundary |
 | `scripts/yulu_ui/src/artifactStore.ts` | Task workspace and atomic artifact commit |
 | `scripts/yulu_ui/src/recordingEventInbox.ts` | Replay capture-completion events after Host downtime |
 | `scripts/yulu_ui/src/agentRuntime.ts` | Supported Agent discovery, connection, capability, and invocation resolution |
@@ -310,6 +317,7 @@ See [`docs/operations.md`](../docs/operations.md) for exact checks.
 Yulu 的产品边界是：macOS 原生录音 + 本地可信 Host。Yulu 明确选择本地或 xAI
 音频引擎，统一负责实时字幕、最终转写和听写，不做自动回退；Yulu 使用兼容 Grok CLI
 的 OAuth，并把自己的 xAI grant 保存到 macOS 钥匙串。录音会固定 direct xAI、Codex
-或 Claude Code 作为摘要服务；Hermes 与 OpenClaw 仅可用于对话。分享只从录音详情页
-发起新的手动 Share Action，录音完成本身绝不分享。Agent Console 选择的通用 Agent
-负责对话和自己的连接器；Python 只做录音边缘控制和 Host 事件投递。
+或 Claude Code 作为摘要服务；Hermes 与 OpenClaw 只作为 MCP 客户端接入。分享只从
+录音详情页发起新的手动 Share Action，录音完成本身绝不分享。Yulu 不再提供对话
+（ADR-010）：用户在自己的 Agent 里通过 Yulu MCP 询问会议内容；听写文字只有在显式
+开启 xAI 文字整理并接受披露后才会发送给 xAI。Python 只做录音边缘控制和 Host 事件投递。

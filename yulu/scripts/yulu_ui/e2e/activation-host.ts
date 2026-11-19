@@ -49,7 +49,6 @@ writeFileSync(join(configDir, "config.json"), JSON.stringify({
   transcription: { engine: "xai", language: "en" },
   intelligence: {
     summary: { provider: "xai", model: "grok-4.6" },
-    conversation: { provider: "xai", model: "grok-4.6" },
   },
   agent_pipeline: {
     enabled: true,

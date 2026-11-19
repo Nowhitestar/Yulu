@@ -11,7 +11,7 @@
       "enabled": false,
       "gog_account": "your.email@example.com",
       "watch_calendars": ["primary"],
-      "note": "Legacy native scheduler provider. Yulu owns scheduling; AI calendar context should come from the selected Agent's MCP connectors when available."
+      "note": "Legacy native scheduler provider. Yulu owns scheduling."
     }
   ],
   "connectors": {
@@ -58,24 +58,20 @@
       "language": "zh",
       "cleanup_enabled": true,
       "cleanup_level": "medium",
-      "cleanup_model": "conversation",
+      "text_provider": "none",
+      "text_model": "grok-4.6",
       "style": "casual",
-      "voice_chat_scope": "general",
       "prompt_slug": "dictation-cleanup",
       "target_language": "English",
       "deadline_sec": 30,
       "timeout_sec": 30,
       "translate_deadline_sec": 30,
       "translate_timeout_sec": 30,
-      "note": "Cleanup uses the selected, authorized xAI conversation connection only for xAI dictation; local dictation stays on-device. Levels: light, medium, heavy (natural paragraphs, lists for clear enumerations); cleanup_enabled is the independent off switch. Defaults to medium and casual. Originals remain in history; failed cleanup keeps the recognized text."
+      "note": "Cleanup and translation send dictated text to xAI only when text_provider is xai, the audio engine is xai, and the dictated-text disclosure was accepted in Settings; text_provider none keeps the recognized text as-is and local dictation stays on-device. Levels: light, medium, heavy (natural paragraphs, lists for clear enumerations); cleanup_enabled is the independent off switch. Defaults to medium and casual. Originals remain in history; failed cleanup keeps the recognized text."
     }
   },
   "intelligence": {
     "summary": {
-      "provider": "agent",
-      "model": "runtime-managed"
-    },
-    "conversation": {
       "provider": "agent",
       "model": "runtime-managed"
     }
@@ -89,15 +85,8 @@
     "command": null,
     "agent": {
       "provider": "auto",
-      "note": "Local Agent use is optional and runtime-managed. Current Summary providers are direct xAI, Codex, or Claude Code; Hermes and OpenClaw are Conversation-only. Selecting xAI for summary or conversation defaults to exact model grok-4.6."
+      "note": "Local Agent use is optional and runtime-managed. Current Summary providers are direct xAI, Codex, or Claude Code. Selecting xAI for summary defaults to exact model grok-4.6. Hermes and OpenClaw can still reach Yulu as MCP clients."
     }
-  },
-  "agent_console": {
-    "plugins": {
-      "added": ["summary"],
-      "note": "Yulu-side filter for capabilities shown in Agent Console. Summary is always available; add notion/zulip/calendar from the console when you want them visible."
-    },
-    "destinations": {}
   },
   "meeting_detection": {
     "enabled": true,

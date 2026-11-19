@@ -130,7 +130,7 @@ export class SharingConfiguration {
       .find((record) => record.id === input.connectionId && record.kind === "supported-agent");
     if (!connection) throw new Error("Sharing requires a Supported Agent Connection");
     if (!SHARING_AGENT_ADAPTERS.has(connection.adapter)) {
-      throw new Error(`${connection.label} is Conversation-only and cannot be selected for Sharing connectors`);
+      throw new Error(`${connection.label} cannot be selected for Sharing connectors`);
     }
     this.options.host.selectSharingConfiguration(input);
     return this.view();
@@ -733,7 +733,7 @@ export class SharingConfiguration {
       .find((record) => record.id === persisted.connectionId && record.kind === "supported-agent");
     if (!connection) throw new Error("The selected Supported Agent Connection is unavailable");
     if (!SHARING_AGENT_ADAPTERS.has(connection.adapter)) {
-      throw new Error(`${connection.label} is Conversation-only and cannot be selected for Sharing connectors`);
+      throw new Error(`${connection.label} cannot be selected for Sharing connectors`);
     }
     return { persisted, connection, key: this.stateKey(connection, persisted.connector) };
   }
@@ -800,7 +800,7 @@ export class SharingConfiguration {
     detail: string,
   ) {
     const executable = String(connection.settings.executablePath ?? connection.adapter).trim();
-    if (/^Choose an explicit Conversation model /i.test(detail)) return detail;
+    if (/ has no connector model; /i.test(detail)) return detail;
     if (/model requires a newer version of Codex/i.test(detail)) {
       return `Update the Codex CLI at "${executable}" to a version that supports its selected model, then return to Settings > Sharing and ${retryAction}. Yulu has not changed the Agent or model.`;
     }

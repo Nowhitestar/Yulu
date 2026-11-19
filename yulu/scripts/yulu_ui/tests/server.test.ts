@@ -14,9 +14,6 @@ import { RealtimeTranscriptionCoordinator } from "../src/realtimeTranscription.j
 import { XaiAudioClient } from "../src/xaiAudio.js";
 import { DictationPreview } from "../src/dictationPreview.js";
 import { DictationTextService } from "../src/dictationText.js";
-import { XaiTextClient } from "../src/xaiText.js";
-import { createAgentSession, getAgentSession } from "../src/agentSessionStore.js";
-import { XAI_CONVERSATION_DISCLOSURE_VERSION } from "../src/conversationDataDisclosure.js";
 
 function rawHttp(port: number, path: string, hostHeader: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -307,7 +304,7 @@ describe("server", () => {
             loginCommand: `${executable} auth login`,
             statusCommand: `${executable} auth status`,
           }),
-          capabilities: expect.arrayContaining([
+          capabilities: [
             expect.objectContaining({
               capability: "summary",
               declared: false,
@@ -316,8 +313,7 @@ describe("server", () => {
                 detail: expect.stringContaining("policy-managed hooks"),
               }),
             }),
-            expect.objectContaining({ capability: "conversation", declared: true }),
-          ]),
+          ],
         }),
       ]));
     } finally {
@@ -991,163 +987,6 @@ describe("server", () => {
     const r = await fetch(`${env.baseUrl}/some/unknown/path`);
     expect(r.status).toBe(503);
     expect(await r.text()).toMatch(/UI not built/);
-  });
-
-  it("/api/voice-chat/ask requires explicit readiness and blocks follow-up to a paused session", async () => {
-    const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
-    const config = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
-    config.llm = { enabled: false, command: null };
-    writeFileSync(join(configDir, "config.json"), JSON.stringify(config, null, 2));
-
-    const rejected = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
-      body: JSON.stringify({ question: "hello agent" }),
-    });
-    expect(rejected.status).toBe(409);
-    expect(await rejected.json()).toMatchObject({
-      ok: false,
-      error: "conversation_connection_required",
-      detail: expect.stringContaining("/settings/llm?capability=conversation"),
-      remediation: "/settings/llm?capability=conversation",
-    });
-
-    const pinned = createAgentSession(configDir, {
-      provider: "xai",
-      connectionId: "direct-xai",
-      model: "grok-4.6-exact",
-      credentialSource: "oauth",
-      disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
-      title: "Pinned voice chat",
-      purpose: "ask",
-    });
-    const r = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
-      body: JSON.stringify({ question: "hello agent", sessionId: pinned.id }),
-    });
-    expect(r.status).toBe(200);
-    const body = await r.json() as { ok: boolean; sessionId: string; url: string };
-    expect(body.ok).toBe(true);
-    expect(body.sessionId).toBeTruthy();
-    expect(body.url).toBe(`/voice-chat?session=${encodeURIComponent(body.sessionId)}`);
-
-    const next = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
-      body: JSON.stringify({ question: "second turn", sessionId: body.sessionId }),
-    });
-    expect(next.status).toBe(409);
-    expect(await next.json()).toMatchObject({ ok: false, error: "conversation_unavailable" });
-
-    const store = JSON.parse(readFileSync(join(configDir, "agent-sessions.json"), "utf8"));
-    const session = store.sessions.find((item: { id: string }) => item.id === body.sessionId);
-    expect(session.messages.map((m: { role: string }) => m.role)).toEqual(["user", "assistant"]);
-  });
-
-  it("/api/voice-chat/ask can return immediately for an existing pinned session", async () => {
-    const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
-    const unauthorized = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: "must not spend" }),
-    });
-    expect(unauthorized.status).toBe(401);
-    const pinned = createAgentSession(configDir, {
-      provider: "xai",
-      connectionId: "direct-xai",
-      model: "grok-4.6-exact",
-      credentialSource: "oauth",
-      disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION,
-      title: "Pinned deferred voice chat",
-      purpose: "ask",
-    });
-    const r = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
-      body: JSON.stringify({ question: "deferred hello", defer: true, sessionId: pinned.id }),
-    });
-    expect(r.status).toBe(200);
-    const body = await r.json() as { ok: boolean; deferred: boolean; sessionId: string; answer: string; url: string };
-    expect(body.ok).toBe(true);
-    expect(body.deferred).toBe(true);
-    expect(body.answer).toBe("");
-    expect(body.url).toBe(`/voice-chat?session=${encodeURIComponent(body.sessionId)}`);
-
-    let roles: string[] = [];
-    for (let i = 0; i < 20; i++) {
-      const store = JSON.parse(readFileSync(join(configDir, "agent-sessions.json"), "utf8"));
-      const session = store.sessions.find((item: { id: string }) => item.id === body.sessionId);
-      roles = session?.messages.map((m: { role: string }) => m.role) ?? [];
-      if (roles.length >= 2) break;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    expect(roles).toEqual(["user", "assistant"]);
-  });
-
-  it("validates voice scope and never changes an existing conversation's context", async () => {
-    const configDir = join(env.root, ".config", "yulu");
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
-    const pinned = createAgentSession(configDir, {
-      provider: "xai", model: "grok-pinned", credentialSource: "oauth", purpose: "ask", scope: "meetings",
-    });
-    for (const [input, status, error] of [
-      [{ question: "question", scope: "screen" }, 400, "invalid_voice_question"],
-      [{ question: "question", scope: "general", sessionId: pinned.id }, 409, "conversation_scope_changed"],
-      [{ question: "question", sessionId: "missing-session" }, 404, "session_unavailable"],
-      [{ question: "x".repeat(2001) }, 400, "invalid_voice_question"],
-    ] as const) {
-      const result = await fetch(`${env.baseUrl}/api/voice-chat/ask`, {
-        method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
-        body: JSON.stringify(input),
-      });
-      expect(result.status).toBe(status);
-      expect(await result.json()).toMatchObject({ ok: false, error });
-    }
-    expect(getAgentSession(configDir, pinned.id)).toMatchObject({ scope: "meetings", messages: [] });
-  });
-
-  it("admits one deferred general voice question and rejects concurrent duplicates", async () => {
-    const configDir = join(env.root, ".config", "yulu");
-    const store = new HostStore(join(configDir, "host.sqlite"));
-    store.recordAgentConnectionDisclosure({ connectionId: "direct-xai", capability: "conversation",
-      disclosureVersion: XAI_CONVERSATION_DISCLOSURE_VERSION, decision: "accepted" });
-    writeFileSync(join(configDir, "mcp-token.json"), JSON.stringify({ token: "test-token" }), { mode: 0o600 });
-    const pinned = createAgentSession(configDir, {
-      provider: "xai", model: "grok-pinned", credentialSource: "oauth", purpose: "ask", scope: "general",
-    });
-    let resolve!: (result: { text: string; model: string; credentialSource: "oauth" }) => void;
-    const answer = new Promise<{ text: string; model: string; credentialSource: "oauth" }>((done) => { resolve = done; });
-    const request = vi.spyOn(XaiTextClient.prototype, "request").mockImplementation(async (input) => {
-      input.onText?.("部分回答");
-      return answer;
-    });
-    try {
-      const post = () => fetch(`${env.baseUrl}/api/voice-chat/ask`, {
-        method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer test-token" },
-        body: JSON.stringify({ question: "通用问题", scope: "general", sessionId: pinned.id, defer: true }),
-      });
-      const replies = await Promise.all([post(), post()]);
-      expect(replies.map((reply) => reply.status).sort()).toEqual([200, 409]);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-      expect(getAgentSession(configDir, pinned.id)?.messages).toHaveLength(1);
-      resolve({ text: "完整回答", model: "grok-pinned", credentialSource: "oauth" });
-      await vi.waitFor(() => expect(getAgentSession(configDir, pinned.id)?.messages).toHaveLength(2));
-      expect(getAgentSession(configDir, pinned.id)).toMatchObject({
-        scope: "general", messages: [{ role: "user", text: "通用问题" }, { role: "assistant", text: "完整回答" }],
-      });
-      expect(request.mock.calls[0]![0]).toMatchObject({ model: "grok-pinned", onText: expect.any(Function) });
-      expect((await post()).status).toBe(200);
-      await vi.waitFor(() => expect(getAgentSession(configDir, pinned.id)?.messages).toHaveLength(4));
-      expect(request).toHaveBeenCalledTimes(2);
-    } finally {
-      resolve({ text: "完整回答", model: "grok-pinned", credentialSource: "oauth" });
-      request.mockRestore();
-      store.clearAgentConnectionDisclosures("direct-xai");
-      store.close();
-    }
   });
 
   it("falls back to index.html for deep multi-segment SPA paths", async () => {

@@ -12,7 +12,6 @@ function setup(uiMutationAuthorized = true) {
     transcription: { engine: "xai" },
     intelligence: {
       summary: { provider: "xai", model: "grok-summary-exact" },
-      conversation: { provider: "xai", model: "grok-conversation-exact" },
     },
   };
   const connection = {
@@ -35,7 +34,7 @@ function setup(uiMutationAuthorized = true) {
     testXai: vi.fn(async () => ({ ok: true, provider: "xai-oauth:yulu", credentialSource: "oauth" as const })),
   };
   const xaiText = {
-    request: vi.fn(async ({ capability, model }: { capability: "summary" | "conversation"; model: string }) => ({
+    request: vi.fn(async ({ capability, model }: { capability: "summary"; model: string }) => ({
       text: "ready",
       model,
       credentialSource: "oauth" as const,
@@ -79,17 +78,18 @@ function setup(uiMutationAuthorized = true) {
 }
 
 describe("providers router", () => {
-  it("reports one shared connection and records three independent real probes", async () => {
+  it("reports one shared connection and records two independent real probes", async () => {
     const { caller, ctx } = setup();
 
-    await expect(caller.status()).resolves.toMatchObject({
+    const initial = await caller.status();
+    expect(initial).toMatchObject({
       connection: { connected: true, source: "oauth" },
       readiness: {
         transcription: { capability: "transcription", status: "untested", model: "speech-to-text", testedAt: null },
         summary: { capability: "summary", status: "untested", model: "grok-summary-exact", testedAt: null },
-        conversation: { capability: "conversation", status: "untested", model: "grok-conversation-exact", testedAt: null },
       },
     });
+    expect(Object.keys(initial.readiness)).toEqual(["transcription", "summary"]);
 
     await expect(caller.probe({ capability: "summary" })).resolves.toMatchObject({
       capability: "summary",
@@ -112,13 +112,15 @@ describe("providers router", () => {
       readiness: {
         transcription: { status: "untested" },
         summary: { status: "ready" },
-        conversation: { status: "untested" },
       },
     });
     await caller.probe({ capability: "transcription" });
-    await caller.probe({ capability: "conversation" });
+    await expect(caller.probe({ capability: "conversation" })).rejects.toThrow(/invalid_enum_value/);
     expect(ctx.audioTranscription.testXai).toHaveBeenCalledOnce();
-    expect(ctx.xaiText.request).toHaveBeenCalledTimes(2);
+    expect(ctx.xaiText.request).toHaveBeenCalledTimes(1);
+    await expect(caller.status()).resolves.toMatchObject({
+      readiness: { transcription: { status: "ready" }, summary: { status: "ready" } },
+    });
   });
 
   it("invalidates only a changed model and returns a secret-safe failed result", async () => {
@@ -129,16 +131,15 @@ describe("providers router", () => {
     await expect(caller.status()).resolves.toMatchObject({
       readiness: {
         summary: { status: "untested", model: "grok-summary-new", testedAt: null },
-        conversation: { status: "untested", model: "grok-conversation-exact" },
       },
     });
 
     ctx.xaiText.request.mockRejectedValueOnce(new Error("secret-token private prompt"));
-    const failed = await caller.probe({ capability: "conversation" });
+    const failed = await caller.probe({ capability: "summary" });
     expect(failed).toMatchObject({
-      capability: "conversation",
+      capability: "summary",
       status: "failed",
-      model: "grok-conversation-exact",
+      model: "grok-summary-new",
       testedAt: expect.any(String),
     });
     expect(JSON.stringify(failed)).not.toMatch(/secret-token|private prompt/);
@@ -236,7 +237,7 @@ describe("providers router", () => {
     await expect(caller.authorize()).rejects.toThrow("UI mutation bearer required");
     await expect(caller.setApiKey({ apiKey: "submitted-once" }))
       .rejects.toThrow("UI mutation bearer required");
-    await expect(caller.probe({ capability: "conversation" }))
+    await expect(caller.probe({ capability: "summary" }))
       .rejects.toThrow("UI mutation bearer required");
     expect(ctx.xaiCredentials.authorize).not.toHaveBeenCalled();
     expect(ctx.xaiCredentials.setApiKey).not.toHaveBeenCalled();

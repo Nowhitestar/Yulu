@@ -183,7 +183,7 @@ def test_agent_connection_diagnostics_projects_adapter_contracts_and_history_sou
                         "compatibilityTarget": "xai-api",
                         "versionSource": "not-applicable",
                         "supported": True,
-                        "features": ["transcription", "summary", "conversation", "no-provider-fallback"],
+                        "features": ["transcription", "summary", "no-provider-fallback"],
                     },
                     "capabilities": [],
                 },
@@ -204,7 +204,7 @@ def test_agent_connection_diagnostics_projects_adapter_contracts_and_history_sou
         "target_version": "xai-api",
         "version_source": "not-applicable",
         "supported": True,
-        "features": ["transcription", "summary", "conversation", "no-provider-fallback"],
+        "features": ["transcription", "summary", "no-provider-fallback"],
     }
     serialized = json.dumps(report)
     assert "secret-looking-label" not in serialized

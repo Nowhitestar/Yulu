@@ -28,8 +28,8 @@ any page and searches recordings, summaries, and settings.
 
 There is no assistant page: other Agents read and control meetings through
 MCP. `/agent-console`, `/voice-chat`, `/voice-input`, and older inbox, settings,
-and health deep links redirect to their current pages. The Host still serves the
-conversation APIs; retiring them is a separate decision.
+and health deep links redirect to their current pages. ADR-010 retired the
+Host's conversation APIs with them.
 
 ## Layout
 

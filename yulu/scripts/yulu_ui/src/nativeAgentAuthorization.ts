@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
 
-export type NativeAgentAdapter = "codex" | "claude-code" | "hermes" | "openclaw";
+export type NativeAgentAdapter = "codex" | "claude-code";
 
 export interface NativeAgentAuthorizationTarget {
   adapter: NativeAgentAdapter;
@@ -18,8 +18,6 @@ type SystemCommandRunner = (command: string, args: string[]) => Promise<SystemCo
 const LOGIN_ARGS: Record<NativeAgentAdapter, readonly string[]> = {
   codex: ["login"],
   "claude-code": ["auth", "login"],
-  hermes: ["model"],
-  openclaw: ["configure"],
 };
 
 function shellQuote(value: string): string {

@@ -12,9 +12,6 @@ const CAPABILITY_LABELS: Record<string, string> = {
   sharing: "onboarding.capability.sharing",
 };
 
-/** The meeting assistant is retired; its optional setup steps are no longer offered. */
-const RETIRED_CAPABILITIES = new Set<string>(["conversation", "agent-calendar-connector"]);
-
 const READINESS_LABELS = {
   ready: "onboarding.readiness.ready",
   needs_attention: "onboarding.readiness.needsAttention",
@@ -106,7 +103,7 @@ export function OnboardingHome() {
       </article>
 
       <div className="onboarding-grid">
-        {data.optionalCapabilities.filter((capability) => !RETIRED_CAPABILITIES.has(capability.id)).map((capability) => {
+        {data.optionalCapabilities.map((capability) => {
           const durableState = capability.outcome?.outcome ?? (capability.isNew ? "new" : "pending");
           return (
             <article

@@ -457,10 +457,9 @@ function sharingCapability(onboarding) {
   return matches[0];
 }
 
+// ADR-010 retired the Conversation and Agent Calendar Connector steps.
 const FRESH_OPTIONAL_MANIFEST = new Map([
-  ["conversation", "conversation-v1"],
   ["calendar-source", "calendar-source-v1"],
-  ["agent-calendar-connector", "agent-calendar-connector-v1"],
   ["sharing", "sharing-v1"],
 ]);
 

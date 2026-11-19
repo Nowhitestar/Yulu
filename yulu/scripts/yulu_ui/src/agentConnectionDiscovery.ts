@@ -6,8 +6,6 @@ import type { DiscoveredAgentRuntime } from "./agentConnections.js";
 const RUNTIMES = [
   { adapter: "codex", label: "Codex", command: "codex" },
   { adapter: "claude-code", label: "Claude Code", command: "claude" },
-  { adapter: "hermes", label: "Hermes", command: "hermes" },
-  { adapter: "openclaw", label: "OpenClaw", command: "openclaw" },
 ] as const;
 
 export function discoverAgentConnectionCandidates(

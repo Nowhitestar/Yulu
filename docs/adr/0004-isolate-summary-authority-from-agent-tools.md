@@ -1,5 +1,8 @@
 # Isolate summary authority from Agent tools
 
+> Its Conversation paragraph is superseded by [yulu ADR-010](../../yulu/spec/adr/010-retire-yulu-conversation.md),
+> which retired Yulu-owned conversation.
+
 Agent-backed summaries run in a new isolated session that receives only the
 selected instructions and committed transcript. The adapter disables project
 instructions, skills, hooks, MCP servers, connectors, delivery, shell access,

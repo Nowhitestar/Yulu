@@ -97,14 +97,14 @@ _Avoid_: Hermes, detected CLI, configured Agent
 The user's explicit choice to let Yulu invoke one Supported Agent for named
 capabilities. An Agent Connection records the
 connection type and its non-secret settings; it does not by itself select a
-Summary Provider or Conversation Provider and does not prove readiness.
+Summary Provider and does not prove readiness.
 _Avoid_: detected Agent, connected CLI, active provider
 
 **Agent Connection Center**:
 The shared configuration surface where a user installs or locates a runtime,
 authorizes it through its native flow, tests individual capabilities, and fixes
-connection failures. Activation, Settings, and Agent Console link to this same
-surface rather than owning separate connection state.
+connection failures. Activation and Settings link to this same surface rather
+than owning separate connection state.
 _Avoid_: Agent picker, connector drawer, activation step
 
 **Connection Candidate**:
@@ -127,15 +127,16 @@ never an automatic fallback from Runtime-owned Authorization.
 _Avoid_: backup credential, automatic fallback key
 
 **Agent Capability**:
-A named operation an Agent Connection may provide. Phase 12 capabilities are
-Summary and Conversation; connectors, delivery, transcription, and runtime
-provisioning are separate capabilities and are not implied by the connection.
-_Avoid_: Agent support, connected features
+A named operation an Agent Connection may provide. The current capability is
+Summary; Yulu no longer owns a Conversation capability (ADR-010). Connectors,
+delivery, transcription, and runtime provisioning are separate capabilities and
+are not implied by the connection.
+_Avoid_: Agent support, connected features, Conversation
 
 **Agent Connector**:
-An external-service capability managed and authorized by a Supported Agent for
-interactive reads or explicit writes. It is separate from a Yulu Calendar Source
-and does not authorize a Share Action by being configured.
+An external-service capability managed and authorized by a Supported Agent.
+Yulu uses it only for explicit Share Action writes. It is separate from a Yulu
+Calendar Source and does not authorize a Share Action by being configured.
 _Avoid_: Yulu integration, Calendar Source, Share Destination
 
 **Connector Readiness**:
@@ -176,12 +177,6 @@ It is neither success nor ordinary failure and requires an explicit user choice
 before another attempt can be created.
 _Avoid_: timeout failure, retryable error
 
-**Native Session Reference**:
-The exact opaque thread or session identifier returned by a Supported Agent and
-pinned to one Yulu Conversation. Yulu never substitutes a runtime's most recent
-or default session when the reference is missing.
-_Avoid_: current Agent chat, last session, resumable conversation
-
 **Legacy Custom Connection**:
 A preserved command-based configuration from an older Yulu version that does
 not satisfy the Supported Agent contract. It remains visible for migration or
@@ -195,8 +190,7 @@ _Avoid_: Provider configured, provider detected
 
 **Calendar Source**:
 A calendar already available to Yulu for finding scheduled meetings and offering
-native capture. It is distinct from an Agent Connector used for interactive
-calendar reasoning or actions.
+native capture. Yulu does not reach calendars through an Agent Connector.
 _Avoid_: Calendar connector, Agent calendar
 
 **Calendar Source Readiness**:

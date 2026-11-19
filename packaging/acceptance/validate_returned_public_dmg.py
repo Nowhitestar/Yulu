@@ -294,13 +294,12 @@ def validate_journey(value: dict[str, Any], scenario: str) -> None:
 def validate_optional_outcomes(outcomes: Any, *, sharing_pending: bool) -> None:
     require(isinstance(outcomes, dict) and outcomes.get("onboardingVersion") == "phase-13-v1" and outcomes.get("currentCompleted") is (not sharing_pending), "fresh onboarding current completion is inconsistent")
     capabilities = outcomes.get("capabilities")
-    require(isinstance(capabilities, list) and len(capabilities) == 4, "fresh optional outcomes are incomplete")
+    # ADR-010 retired the Conversation and Agent Calendar Connector steps.
     expected = {
-        "conversation": "conversation-v1",
         "calendar-source": "calendar-source-v1",
-        "agent-calendar-connector": "agent-calendar-connector-v1",
         "sharing": "sharing-v1",
     }
+    require(isinstance(capabilities, list) and len(capabilities) == len(expected), "fresh optional outcomes are incomplete")
     seen: set[str] = set()
     for outcome in capabilities:
         require(isinstance(outcome, dict), "fresh optional outcome is malformed")

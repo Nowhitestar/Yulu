@@ -27,8 +27,11 @@ export function dictationCleanupTimeoutMs(text: string): number {
   return Math.min(DICTATION_TEXT_TIMEOUT_MS, 8_000 + Math.ceil(Math.max(0, text.length - 500) / 500) * 2_000);
 }
 
-/** A bounded text transformation through the existing explicitly selected xAI
- * connection. It has no meeting retrieval, tools, history or provider fallback. */
+/** A bounded text transformation through the explicitly selected dictation text
+ * provider. It runs only with the xAI audio engine, an explicit
+ * `transcription.dictation.text_provider` of `xai`, a connected credential and
+ * the accepted dictation disclosure. It has no meeting retrieval, tools,
+ * history or provider fallback. */
 export class DictationTextService {
   constructor(private readonly options: {
     config: Pick<ConfigManager, "read">;
@@ -44,13 +47,12 @@ export class DictationTextService {
 
   async translate(input: z.infer<typeof DictationTranslationSchema>) {
     const config = this.options.config.read();
-    const selection = config.intelligence.conversation;
+    const dictation = config.transcription.dictation;
     const credentialSource = this.options.credentialSource();
-    if (selection.provider !== "xai" || !credentialSource || !this.options.hasDisclosure()) {
+    if (dictation.text_provider !== "xai" || !credentialSource || !this.options.hasDisclosure()) {
       throw new Error("听写翻译的 xAI 文字连接尚未就绪；识别文字已保留。");
     }
-    const model = config.transcription.dictation.cleanup_model === "conversation"
-      ? selection.model : config.transcription.dictation.cleanup_model;
+    const model = dictation.text_model;
     const glossary = this.options.glossary(input.text);
     const result = await this.options.text.request({
       capability: "dictation", model, credentialSource, timeoutMs: input.timeoutMs, maxOutputTokens: 8_192,
@@ -82,10 +84,10 @@ export class DictationTextService {
       return skip("disabled");
     }
     if (config.transcription.engine !== "xai") return skip("local_audio");
-    const selection = config.intelligence.conversation;
-    if (selection.provider !== "xai") return skip("provider_unavailable", "听写整理需要已选定的 xAI 对话连接；已保留原文。");
-    const model = config.transcription.dictation.cleanup_model === "conversation"
-      ? selection.model : config.transcription.dictation.cleanup_model;
+    if (config.transcription.dictation.text_provider !== "xai") {
+      return skip("provider_unavailable", "听写整理需要在语音设置中开启 xAI 文字整理；已保留原文。");
+    }
+    const model = config.transcription.dictation.text_model;
     const credentialSource = this.options.credentialSource();
     if (!credentialSource || !this.options.hasDisclosure()) {
       return skip("connection_unavailable", "听写整理的 xAI 连接尚未就绪；已保留原文。");

@@ -155,10 +155,10 @@ final class OffscreenVoicePanel: NSPanel {
                 controller.voiceFeedbackWindow = noticePanel
                 notice.cancelButton.target = controller
                 notice.cancelButton.action = NSSelectorFromString("dismissVoiceFeedback")
-                controller.onVoiceChat()
+                controller.onDictateToggle()
                 if CommandLine.arguments[1] == "lifecycle-network-error" {
                     waitUntil { controller.state == .recording }
-                    controller.onVoiceChat()
+                    controller.onDictateToggle()
                 }
                 waitUntil { notice.mode == .failure }
                 waitUntil { controller.voiceOverlayMotion.phase == .hidden }
@@ -181,22 +181,22 @@ final class OffscreenVoicePanel: NSPanel {
                 return
             }
             let started = ProcessInfo.processInfo.systemUptime
-            controller.onVoiceChat()
+            controller.onDictateToggle()
             let response = ProcessInfo.processInfo.systemUptime - started
             precondition(response < 0.20, "Initial feedback waited for the helper")
             precondition(visual.mode == .starting && !visual.stopButton.isEnabled)
-            controller.onVoiceChat() // Stop before the first helper is ready.
+            controller.onDictateToggle() // Stop before the first helper is ready.
             precondition(controller.pendingVoiceStop != nil)
             waitUntil { controller.pendingStartFeedbackText == nil && controller.state == .idle }
             waitUntil { controller.voiceOverlayMotion.phase == .hidden }
             precondition(controller.voiceRecoveryText == nil)
-            controller.onVoiceChat()
+            controller.onDictateToggle()
             waitUntil { FileManager.default.fileExists(atPath: root.appendingPathComponent("capture").path) }
             visual.cancelButton.performClick(nil)
-            controller.onVoiceChat() // Restart while the old cancellation is still running.
+            controller.onDictateToggle() // Restart while the old cancellation is still running.
             let doubleRestart = CommandLine.arguments[1] == "lifecycle-double-restart"
             if doubleRestart {
-                controller.onVoiceChat() // Preserve a second finish request during cancellation.
+                controller.onDictateToggle() // Preserve a second finish request during cancellation.
                 waitUntil {
                     let events = (try? String(contentsOf: root.appendingPathComponent("events"), encoding: .utf8)) ?? ""
                     return events.split(separator: "\n").count == 7 && controller.state == .idle
@@ -210,7 +210,7 @@ final class OffscreenVoicePanel: NSPanel {
             let expected = ["start", "stop", "start", "cancel-begin", "cancel-end", "start"]
                 + (doubleRestart ? ["stop"] : [])
             precondition(events == expected, events.description)
-            if !doubleRestart { controller.onVoiceChat() }
+            if !doubleRestart { controller.onDictateToggle() }
             waitUntil { controller.state == .idle }
             waitUntil { controller.voiceOverlayMotion.phase == .hidden }
             precondition(controller.voiceRecoveryText == nil && !panel.isVisible)
@@ -395,7 +395,7 @@ def test_voice_start_early_stop_cancel_and_restart_use_isolated_helpers(voice_ov
     for directory in ["data/dictation", "ipc", "logs", "media"]:
         (tmp_path / directory).mkdir(parents=True, exist_ok=True)
     (tmp_path / "data/config.json").write_text('{"status_agent":{"feedback_sounds":false}}')
-    (tmp_path / "data/dictation/state.json").write_text('{"intent":"voice_chat"}')
+    (tmp_path / "data/dictation/state.json").write_text('{"intent":"dictation"}')
     (tmp_path / "dictate.py").write_text('''import json, os, sys, time
 from pathlib import Path
 root = Path(os.environ["HOME"])
@@ -418,7 +418,7 @@ elif capture.exists():
     if (root / "fail-stop").exists():
         print(json.dumps({"error_code":"transcription_network", "audio_preserved":True}), flush=True)
         sys.exit(1)
-    print(json.dumps({"action":"stop", "chat":{}}), flush=True)
+    print(json.dumps({"action":"stop", "pasted":True, "paste_dispatched":True}), flush=True)
 else:
     event("start")
     capture.touch()

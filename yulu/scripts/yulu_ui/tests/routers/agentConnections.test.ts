@@ -7,19 +7,7 @@ import { HostStore } from "../../src/hostStore.js";
 import { AgentConnectionCenter, type DiscoveredAgentRuntime } from "../../src/agentConnections.js";
 import { agentConnectionsRouter } from "../../src/routers/agentConnections.js";
 import { createCaller } from "../../src/trpc.js";
-import { createAgentSession, readAgentSessionStore } from "../../src/agentSessionStore.js";
 import { XaiTextUnknownOutcomeError } from "../../src/xaiText.js";
-import { CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION } from "../../src/conversationDataDisclosure.js";
-import {
-  ConversationOnlyAgentAdapter,
-  type ConversationOnlyAgentKind,
-  type ConversationOnlyProbeResult,
-  type ConversationOnlyRuntimeClient,
-} from "../../src/conversationOnlyAgentAdapter.js";
-import {
-  ConversationOnlyCliRuntimeClient,
-  type CliCommandRunner,
-} from "../../src/conversationOnlyCliClient.js";
 import type { NativeAgentAuthorizationTarget } from "../../src/nativeAgentAuthorization.js";
 
 const roots: string[] = [];
@@ -29,7 +17,6 @@ function setup(
   discovered: DiscoveredAgentRuntime[] = [],
   options: {
     seedDirectCredentialSource?: "oauth" | "api-key" | false;
-    conversationOnlyClient?: ConversationOnlyRuntimeClient;
     nativeAuthorization?: (input: NativeAgentAuthorizationTarget) => Promise<unknown>;
   } = {},
 ) {
@@ -87,27 +74,6 @@ function setup(
       login: { command: "/fake/bin/codex login", statusCommand: "/fake/bin/codex login status" },
       remediation: null,
     })),
-    probe: vi.fn(async ({ model }: { model: string }) => ({
-      status: "ready" as const,
-      reason: null,
-      remediation: null,
-      evidence: {
-        adapter: "codex" as const,
-        transport: "codex-app-server-stdio" as const,
-        runtimeVersion: "0.144.4",
-        authorizationClass: "chatgpt" as const,
-        requestedProvider: "openai" as const,
-        requestedModel: model,
-        actualProvider: "openai",
-        actualModel: model,
-        requestId: "turn-135",
-        sessionId: "thread-probe-135",
-        terminalStatus: "ready" as const,
-        fallbackOccurred: false,
-        cancellationRequested: false,
-        cancellationConfirmed: null,
-      },
-    })),
     probeSummary: vi.fn(async ({ model }: { model: string }) => ({
       status: "ready" as const,
       reason: null,
@@ -149,7 +115,6 @@ function setup(
         cancellationConfirmed: null,
       },
     })),
-    converse: vi.fn(),
   };
   const codexAdapter = vi.fn(() => codex);
   const claude = {
@@ -181,27 +146,6 @@ function setup(
       ],
       login: { command: "/fake/bin/claude auth login", statusCommand: "/fake/bin/claude auth status" },
       remediation: null,
-    })),
-    probe: vi.fn(async ({ model }: { model: string }) => ({
-      status: "ready" as const,
-      reason: null,
-      remediation: null,
-      evidence: {
-        adapter: "claude-code" as const,
-        transport: "claude-code-print-stream-json" as const,
-        runtimeVersion: "2.1.169",
-        authorizationClass: "claude-subscription" as const,
-        requestedProvider: null,
-        requestedModel: model,
-        actualProvider: null,
-        actualModel: model,
-        requestId: "request-136",
-        sessionId: "019f0000-0000-7000-8000-000000000136",
-        terminalStatus: "ready" as const,
-        fallbackOccurred: false,
-        cancellationRequested: false,
-        cancellationConfirmed: null,
-      },
     })),
     probeSummary: vi.fn(async ({ model }: { model: string }) => ({
       status: "ready" as const,
@@ -244,72 +188,17 @@ function setup(
         cancellationConfirmed: null,
       },
     })),
-    converse: vi.fn(),
   };
   const claudeAdapter = vi.fn(() => claude);
-  const conversationOnly = {
-    status: vi.fn(async (adapter: ConversationOnlyAgentKind) => ({
-      adapter,
-      transport: adapter === "hermes" ? "hermes-cli-chat" as const : "openclaw-cli-gateway-json" as const,
-      runtimeVersion: adapter === "hermes" ? "0.20.0" : "2026.5.12",
-      minimumVersion: adapter === "hermes" ? "0.20.0" as const : "2026.5.12" as const,
-      supported: true,
-      authorized: true,
-      credentialSource: "runtime-oauth" as const,
-      provider: adapter === "hermes" ? "xai" : "openai-codex",
-      model: adapter === "hermes" ? "grok-4.6" : "openai-codex/gpt-5.5",
-      availableModels: [],
-      features: adapter === "hermes"
-        ? ["status" as const, "model" as const, "query" as const, "resume" as const, "session-id" as const, "probe-bounds" as const, "no-fallback" as const]
-        : ["models/status-json" as const, "model" as const, "message" as const, "session-id" as const, "json" as const, "probe-bounds" as const, "no-fallback" as const],
-      login: {
-        command: adapter === "hermes" ? "/fake/bin/hermes model" : "/fake/bin/openclaw configure",
-        statusCommand: adapter === "hermes" ? "/fake/bin/hermes status" : "/fake/bin/openclaw models status --json --check",
-      },
-      remediation: null,
-    })),
-    probe: vi.fn(async (adapter: ConversationOnlyAgentKind, model: string): Promise<ConversationOnlyProbeResult> => ({
-      status: "ready" as const,
-      reason: null,
-      remediation: null,
-      evidence: {
-        adapter,
-        transport: adapter === "hermes" ? "hermes-cli-chat" as const : "openclaw-cli-gateway-json" as const,
-        runtimeVersion: adapter === "hermes" ? "0.20.0" : "2026.5.12",
-        requestedProvider: adapter === "hermes" ? "xai" : "openai-codex",
-        requestedModel: model,
-        actualProvider: adapter === "hermes" ? "xai" : "openai-codex",
-        actualModel: model,
-        requestId: null,
-        sessionId: `${adapter}-probe-138`,
-        terminalStatus: "ready" as const,
-        fallbackOccurred: false,
-        cancellationRequested: false,
-        cancellationConfirmed: null,
-      },
-    })),
-    converse: vi.fn(),
-  };
-  const conversationOnlyAdapter = vi.fn((adapter: ConversationOnlyAgentKind, executable: string) =>
-    options.conversationOnlyClient
-      ? new ConversationOnlyAgentAdapter({ adapter, executable, client: options.conversationOnlyClient })
-      : {
-          status: () => conversationOnly.status(adapter),
-          probe: ({ model }: { model: string }) => conversationOnly.probe(adapter, model),
-          converse: conversationOnly.converse,
-        }
-  );
   const center = new AgentConnectionCenter({
     config: new ConfigManager(configPath),
     host,
-    configDir: root,
     credentials,
     audio,
     text,
     discover,
     codexAdapter,
     claudeAdapter,
-    conversationOnlyAdapter,
     nativeAuthorization,
   });
   if (options.seedDirectCredentialSource !== false) {
@@ -332,22 +221,18 @@ function setup(
     codexAdapter,
     claude,
     claudeAdapter,
-    conversationOnly,
-    conversationOnlyAdapter,
     configPath,
     root,
     configManager: new ConfigManager(configPath),
     makeCenter: () => new AgentConnectionCenter({
       config: new ConfigManager(configPath),
       host,
-      configDir: root,
       credentials,
       audio,
       text,
       discover,
       codexAdapter,
       claudeAdapter,
-      conversationOnlyAdapter,
       nativeAuthorization,
     }),
     discover,
@@ -374,7 +259,6 @@ describe("public Agent Connection Host contract", () => {
     expect(scanned.candidates.map(candidate => candidate.id)).not.toContain("candidate:codex");
     expect(current.host.listAgentConnectionRecords().find(record => record.id === "codex")?.settings.executablePath)
       .toBe("/fake/bin/codex");
-    expect(current.codex.probe).not.toHaveBeenCalled();
     expect(current.codex.probeSummary).not.toHaveBeenCalled();
 
     await current.center.confirmCandidate({candidateId:"candidate:codex:desktop:chatgpt",model:"gpt-5.6-sol"});
@@ -405,733 +289,12 @@ describe("public Agent Connection Host contract", () => {
     host.close();
   });
 
-  it("projects a crash-recovered fence without readiness history as a public Conversation Unknown Outcome", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.host.beginAgentConnectionProbe({
-      connectionId: "direct-xai",
-      adapter: "direct-xai",
-      capability: "conversation",
-      model: "grok-conversation-exact",
-    });
-    setupResult.host.close();
-
-    const restartedHost = new HostStore(join(setupResult.root, "host.sqlite"));
-    const restartedCenter = new AgentConnectionCenter({
-      config: new ConfigManager(setupResult.configPath),
-      host: restartedHost,
-      configDir: setupResult.root,
-      credentials: setupResult.credentials,
-      audio: setupResult.audio,
-      text: setupResult.text,
-      discover: setupResult.discover,
-      codexAdapter: setupResult.codexAdapter,
-      claudeAdapter: setupResult.claudeAdapter,
-      conversationOnlyAdapter: setupResult.conversationOnlyAdapter,
-      nativeAuthorization: setupResult.nativeAuthorization,
-    });
-
-    const view = await restartedCenter.view();
-    expect(restartedHost.listAgentConnectionReadinessHistory("direct-xai", "conversation"))
-      .toEqual([]);
-    expect(view.connections.find(({ id }) => id === "direct-xai")?.capabilities
-      .find(({ capability }) => capability === "conversation")?.currentReadiness)
-      .toMatchObject({
-        status: "failed",
-        reason: "unknown_outcome",
-        model: "grok-conversation-exact",
-        testedAt: expect.any(String),
-      });
-    restartedHost.close();
-  });
-
-  it("returns durable exact Conversation adoption evidence without changing Summary authority", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    setupResult.text.request.mockResolvedValue({
-      credentialSource: "oauth",
-      model: "grok-conversation-exact",
-    });
-
-    await setupResult.center.probe({ connectionId: "direct-xai", capability: "conversation" });
-    await expect(setupResult.center.conversationAdoptionEvidence()).resolves.toMatchObject({
-      kind: "agent-capability-probe",
-      connectionId: "direct-xai",
-      adapter: "direct-xai",
-      provider: "xai",
-      model: "grok-conversation-exact",
-      credentialSource: "oauth",
-      testedAt: expect.any(String),
-      reference: expect.any(String),
-      runtimeEvidence: {
-        transport: "xai-http",
-        requestedProvider: "xai",
-        requestedModel: "grok-conversation-exact",
-        actualProvider: "xai",
-        actualModel: "grok-conversation-exact",
-        terminalStatus: "ready",
-        fallbackOccurred: false,
-      },
-    });
-    expect(setupResult.configManager.read().intelligence.summary).toEqual({
-      provider: "xai",
-      model: "grok-summary-exact",
-    });
-    setupResult.host.close();
-  });
-
-  it("keeps an exact successful Conversation probe adoptable after later readiness loss", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    setupResult.text.request.mockResolvedValue({
-      credentialSource: "oauth",
-      model: "grok-conversation-exact",
-    });
-
-    await setupResult.center.probe({ connectionId: "direct-xai", capability: "conversation" });
-    const durableProof = setupResult.host.listAgentConnectionReadinessHistory(
-      "direct-xai",
-      "conversation",
-    )[0]!;
-    for (let second = 0; second < 10; second += 1) {
-      setupResult.host.recordAgentConnectionReadiness({
-        connectionId: "direct-xai",
-        capability: "conversation",
-        status: "failed",
-        model: "grok-conversation-exact",
-        credentialSource: "oauth",
-        detail: "The selected runtime is currently unavailable",
-        reason: "readiness_failed",
-        runtimeEvidence: {
-          ...durableProof.runtimeEvidence,
-          terminalStatus: "failed",
-        },
-        testedAt: `2099-08-29T00:10:${String(second).padStart(2, "0")}.000Z`,
-      });
-    }
-    const insertMalformedReady = setupResult.host.db.prepare(`
-      INSERT INTO agent_connection_readiness_history (
-        id, connection_id, capability, status, model, credential_source, detail, reason,
-        runtime_evidence_json, tested_at
-      ) VALUES (?, 'direct-xai', 'conversation', 'ready', 'grok-conversation-exact', 'oauth',
-        'Malformed legacy evidence', NULL, ?, ?)
-    `);
-    for (let index = 0; index < 101; index += 1) {
-      insertMalformedReady.run(
-        `malformed-ready-${String(index).padStart(3, "0")}`,
-        "oauth-secret-token-not-json",
-        new Date(Date.UTC(2098, 7, 29, 0, index, 0)).toISOString(),
-      );
-    }
-    insertMalformedReady.run(
-      "semantically-malformed-ready",
-      JSON.stringify({
-        ...durableProof.runtimeEvidence,
-        transport: "legacy-config",
-      }),
-      "2098-12-31T00:00:00.000Z",
-    );
-
-    const restarted = setupResult.makeCenter();
-    const historySpy = vi.spyOn(setupResult.host, "listAgentConnectionReadinessHistory");
-    await expect(restarted.conversationAdoptionEvidence()).resolves.toMatchObject({
-      reference: durableProof.id,
-      model: "grok-conversation-exact",
-      runtimeEvidence: { terminalStatus: "ready", fallbackOccurred: false },
-    });
-    expect(historySpy).not.toHaveBeenCalledWith("direct-xai", "conversation", null);
-    expect((await restarted.view()).connections
-      .find(({ id }) => id === "direct-xai")?.capabilities
-      .find(({ capability }) => capability === "conversation")?.currentReadiness)
-      .toMatchObject({ status: "failed", detail: "The selected runtime is currently unavailable" });
-    setupResult.host.close();
-  });
-
-  it.each([
-    ["codex", "Codex", "gpt-5.6-sol", "codex-app-server-stdio", "openai", "0.144.4"],
-    ["claude-code", "Claude Code", "claude-sonnet-5", "claude-code-print-stream-json", null, "2.1.169"],
-    ["hermes", "Hermes", "grok-4.6", "hermes-cli-chat", "xai", "0.20.0"],
-    ["openclaw", "OpenClaw", "openai-codex/gpt-5.5", "openclaw-cli-gateway-json", "openai-codex", "2026.5.12"],
-  ] as const)("projects persisted %s Conversation readiness loss after restart", async (
-    adapter,
-    label,
-    model,
-    transport,
-    provider,
-    runtimeVersion,
-  ) => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "agent", connectionId: adapter, model },
-      },
-      llm: { agent: { provider: "auto" } },
-    }, [{ adapter, label, path: `/fake/bin/${adapter}` }]);
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-    await caller.refreshCandidates();
-    await caller.confirmCandidate({ candidateId: `candidate:${adapter}`, model });
-    setupResult.host.recordAgentConnectionReadiness({
-      connectionId: adapter,
-      capability: "conversation",
-      status: "failed",
-      model,
-      credentialSource: null,
-      detail: `${label} is currently unavailable`,
-      reason: "readiness_failed",
-      runtimeEvidence: {
-        adapter,
-        transport,
-        runtimeVersion,
-        ...(adapter === "codex" ? { authorizationClass: "chatgpt" as const } : {}),
-        ...(adapter === "claude-code" ? { authorizationClass: "claude-subscription" as const } : {}),
-        requestedProvider: provider,
-        requestedModel: model,
-        actualProvider: provider,
-        actualModel: null,
-        requestId: null,
-        sessionId: null,
-        terminalStatus: "failed",
-        fallbackOccurred: false,
-      },
-      testedAt: "2026-08-29T00:11:00.000Z",
-    });
-    setupResult.host.db.prepare(`
-      INSERT INTO agent_connection_readiness_history (
-        id, connection_id, capability, status, model, credential_source, detail, reason,
-        runtime_evidence_json, tested_at
-      ) VALUES (?, ?, 'conversation', 'ready', ?, NULL, 'Malformed legacy evidence', NULL, '{}', ?)
-    `).run(
-      `semantically-malformed-ready-${adapter}`,
-      adapter,
-      model,
-      "2026-08-29T00:12:00.000Z",
-    );
-
-    const restarted = await setupResult.makeCenter().view();
-    expect(restarted.connections.find(({ id }) => id === adapter)?.capabilities
-      .find(({ capability }) => capability === "conversation")?.currentReadiness)
-      .toMatchObject({
-        status: "failed",
-        model,
-        detail: `${label} is currently unavailable`,
-        testedAt: "2026-08-29T00:11:00.000Z",
-      });
-    setupResult.host.close();
-  });
-
-  it("rejects adoption while the exact Conversation identity has an unresolved fence", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    setupResult.text.request.mockResolvedValue({
-      credentialSource: "oauth",
-      model: "grok-conversation-exact",
-    });
-    await setupResult.center.probe({ connectionId: "direct-xai", capability: "conversation" });
-    setupResult.host.recordAgentConnectionUnknownOutcomeFence({
-      connectionId: "direct-xai",
-      adapter: "direct-xai",
-      capability: "conversation",
-      model: "grok-conversation-exact",
-    });
-
-    await expect(setupResult.center.conversationAdoptionEvidence())
-      .rejects.toThrow(/unresolved Unknown Outcome/i);
-    setupResult.host.close();
-  });
-
-  it.each([
-    ["codex", "Codex", "gpt-5.6-sol", "chatgpt"],
-    ["claude-code", "Claude Code", "claude-sonnet-5", "claude-subscription"],
-    ["hermes", "Hermes", "grok-4.6", undefined],
-    ["openclaw", "OpenClaw", "openai-codex/gpt-5.5", undefined],
-  ] as const)("adopts exact %s Conversation proof without depending on another Agent", async (
-    adapter,
-    label,
-    model,
-    authorizationClass,
-  ) => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "agent", connectionId: adapter, model },
-      },
-      llm: { agent: { provider: "auto" } },
-    }, [{ adapter, label, path: `/fake/bin/${adapter}` }]);
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-    await caller.refreshCandidates();
-    await caller.confirmCandidate({ candidateId: `candidate:${adapter}`, model });
-    await caller.acceptDisclosure({ connectionId: adapter, capability: "conversation" });
-    await caller.probe({ connectionId: adapter, capability: "conversation", model });
-
-    await expect(setupResult.center.conversationAdoptionEvidence()).resolves.toMatchObject({
-      connectionId: adapter,
-      adapter,
-      provider: adapter,
-      model,
-      credentialSource: null,
-      runtimeEvidence: {
-        adapter,
-        requestedModel: model,
-        actualModel: model,
-        terminalStatus: "ready",
-        fallbackOccurred: false,
-        ...(authorizationClass ? { authorizationClass } : {}),
-      },
-    });
-    expect(setupResult.configManager.read().intelligence.summary).toEqual({
-      provider: "xai",
-      model: "grok-summary-exact",
-    });
-    setupResult.host.close();
-  });
-
-  it("fences a Conversation probe Unknown Outcome until an explicit new attempt", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    setupResult.text.request.mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
-      capability: "conversation",
-      model: "grok-conversation-exact",
-      credentialSource: "oauth",
-    }));
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-
-    await expect(caller.createConversationProbeAttempt({
-      connectionId: "direct-xai",
-      model: "grok-conversation-exact",
-    })).rejects.toThrow(/does not have an Unknown Outcome/i);
-    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
-      .resolves.toMatchObject({ status: "failed", reason: "unknown_outcome" });
-    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
-      .rejects.toThrow(/Unknown Outcome.*explicit new attempt/i);
-    expect(setupResult.text.request).toHaveBeenCalledTimes(1);
-
-    setupResult.text.request.mockResolvedValueOnce({
-      credentialSource: "oauth",
-      model: "grok-conversation-exact",
-    });
-    await expect(caller.createConversationProbeAttempt({
-      connectionId: "direct-xai",
-      model: "grok-conversation-exact",
-    })).resolves.toMatchObject({ status: "ready", model: "grok-conversation-exact" });
-    expect(setupResult.text.request).toHaveBeenCalledTimes(2);
-    setupResult.host.close();
-  });
-
-  it("fails closed when persisting an xAI Conversation Unknown Outcome fails after dispatch", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    setupResult.text.request.mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
-      capability: "conversation",
-      model: "grok-conversation-exact",
-      credentialSource: "oauth",
-    }));
-    vi.spyOn(setupResult.host, "recordAgentConnectionReadiness")
-      .mockImplementationOnce(() => { throw new Error("simulated durable-write failure"); });
-
-    await expect(setupResult.center.probe({
-      connectionId: "direct-xai",
-      capability: "conversation",
-    })).rejects.toThrow("simulated durable-write failure");
-    expect(setupResult.host.getAgentConnectionUnknownOutcomeFence({
-      connectionId: "direct-xai",
-      adapter: "direct-xai",
-      capability: "conversation",
-      model: "grok-conversation-exact",
-    })).toMatchObject({ state: "unknown" });
-    await expect(setupResult.center.probe({
-      connectionId: "direct-xai",
-      capability: "conversation",
-    })).rejects.toThrow(/Unknown Outcome.*explicit new attempt/i);
-    expect(setupResult.text.request).toHaveBeenCalledTimes(1);
-    setupResult.host.close();
-  });
-
-  it("fails closed when a Codex post-dispatch status check cannot classify an Unknown Outcome", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
-      },
-      llm: { agent: { provider: "auto" } },
-    }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-    await caller.refreshCandidates();
-    await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
-    await caller.acceptDisclosure({ connectionId: "codex", capability: "conversation" });
-    setupResult.codex.probe.mockResolvedValueOnce({
-      status: "failed",
-      reason: "unknown_outcome",
-      remediation: "Codex probe outcome is unknown",
-    } as never);
-    setupResult.codex.status.mockRejectedValueOnce(new Error("post-dispatch status unavailable"));
-
-    await expect(caller.probe({
-      connectionId: "codex",
-      capability: "conversation",
-      model: "gpt-5.6-sol",
-    })).rejects.toThrow("post-dispatch status unavailable");
-    expect(setupResult.host.getAgentConnectionUnknownOutcomeFence({
-      connectionId: "codex",
-      adapter: "codex",
-      capability: "conversation",
-      model: "gpt-5.6-sol",
-    })).toMatchObject({ state: "unknown" });
-    await expect(caller.probe({
-      connectionId: "codex",
-      capability: "conversation",
-      model: "gpt-5.6-sol",
-    })).rejects.toThrow(/Unknown Outcome.*explicit new attempt/i);
-    expect(setupResult.codex.probe).toHaveBeenCalledTimes(1);
-    setupResult.host.close();
-  });
-
-  it.each([
-    ["codex", "Codex", "gpt-5.6-sol"],
-    ["claude-code", "Claude Code", "claude-sonnet-5"],
-    ["hermes", "Hermes", "grok-4.6"],
-    ["openclaw", "OpenClaw", "openai-codex/gpt-5.5"],
-  ] as const)("durably fences a no-evidence %s Conversation Unknown Outcome across restart", async (
-    adapter,
-    label,
-    model,
-  ) => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "agent", connectionId: adapter, model },
-      },
-      llm: { agent: { provider: "auto" } },
-    }, [{ adapter, label, path: `/fake/bin/${adapter}` }]);
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-    await caller.refreshCandidates();
-    await caller.confirmCandidate({ candidateId: `candidate:${adapter}`, model });
-    await caller.acceptDisclosure({ connectionId: adapter, capability: "conversation" });
-    const adapterProbe = adapter === "codex"
-      ? setupResult.codex.probe
-      : adapter === "claude-code"
-        ? setupResult.claude.probe
-        : setupResult.conversationOnly.probe;
-    adapterProbe.mockResolvedValueOnce({
-      status: "failed",
-      reason: "unknown_outcome",
-      remediation: `${label} transport outcome is unknown`,
-    } as never);
-
-    await expect(caller.probe({ connectionId: adapter, capability: "conversation", model }))
-      .resolves.toMatchObject({ status: "failed", reason: "unknown_outcome" });
-    expect(setupResult.host.listAgentConnectionReadinessHistory(adapter, "conversation")[0])
-      .toMatchObject({ reason: "unknown_outcome", runtimeEvidence: { terminalStatus: "unknown" } });
-    await expect(caller.probe({ connectionId: adapter, capability: "conversation", model }))
-      .rejects.toThrow(/Unknown Outcome.*explicit new attempt/i);
-
-    const restarted = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.makeCenter(),
-      uiMutationAuthorized: true,
-    } as never);
-    await expect(restarted.probe({ connectionId: adapter, capability: "conversation", model }))
-      .rejects.toThrow(/Unknown Outcome.*explicit new attempt/i);
-    expect(adapterProbe).toHaveBeenCalledTimes(1);
-    setupResult.host.close();
-  });
-
-  it("preserves a Conversation Unknown fence across deletion without applying it to a new model", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    setupResult.text.request.mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
-      capability: "conversation",
-      model: "grok-conversation-exact",
-      credentialSource: "oauth",
-    }));
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-
-    await caller.probe({ connectionId: "direct-xai", capability: "conversation" });
-    await caller.remove({ connectionId: "direct-xai", confirmed: true });
-    await caller.restoreDirectXai();
-    await caller.select({
-      connectionId: "direct-xai",
-      capability: "conversation",
-      model: "grok-conversation-new",
-    });
-    await caller.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    setupResult.text.request.mockResolvedValueOnce({
-      credentialSource: "oauth",
-      model: "grok-conversation-new",
-    });
-    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
-      .resolves.toMatchObject({ status: "ready", model: "grok-conversation-new" });
-
-    await caller.select({
-      connectionId: "direct-xai",
-      capability: "conversation",
-      model: "grok-conversation-exact",
-    });
-    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
-      .rejects.toThrow(/Unknown Outcome.*new attempt/i);
-    expect(setupResult.text.request).toHaveBeenCalledTimes(2);
-    setupResult.host.close();
-  });
-
-  it("atomically permits only one explicit new Conversation probe attempt", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    setupResult.text.request.mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
-      capability: "conversation",
-      model: "grok-conversation-exact",
-      credentialSource: "oauth",
-    }));
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-    await caller.probe({ connectionId: "direct-xai", capability: "conversation" });
-
-    let finish!: (value: { credentialSource: "oauth"; model: string }) => void;
-    setupResult.text.request.mockImplementationOnce(() => new Promise((resolve) => {
-      finish = resolve;
-    }));
-    const first = caller.createConversationProbeAttempt({
-      connectionId: "direct-xai",
-      model: "grok-conversation-exact",
-    });
-    await vi.waitFor(() => expect(setupResult.text.request).toHaveBeenCalledTimes(2));
-    await expect(caller.createConversationProbeAttempt({
-      connectionId: "direct-xai",
-      model: "grok-conversation-exact",
-    })).rejects.toThrow(/explicit Conversation probe attempt is already in progress/i);
-    expect(setupResult.text.request).toHaveBeenCalledTimes(2);
-    finish({ credentialSource: "oauth", model: "grok-conversation-exact" });
-    await expect(first).resolves.toMatchObject({ status: "ready" });
-    setupResult.text.request.mockResolvedValueOnce({
-      credentialSource: "oauth",
-      model: "grok-conversation-exact",
-    });
-    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
-      .resolves.toMatchObject({ status: "ready" });
-    expect(setupResult.text.request).toHaveBeenCalledTimes(3);
-    setupResult.host.close();
-  });
-
-  it("permits only one initial Conversation probe and does not let stale Unknown overwrite an explicit attempt", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    let rejectInitial!: (error: Error) => void;
-    setupResult.text.request.mockImplementationOnce(() => new Promise((_resolve, reject) => {
-      rejectInitial = reject;
-    }));
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-    const first = caller.probe({ connectionId: "direct-xai", capability: "conversation" });
-    await vi.waitFor(() => expect(setupResult.text.request).toHaveBeenCalledTimes(1));
-    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
-      .rejects.toThrow(/Conversation probe.*already in progress/i);
-    rejectInitial(new XaiTextUnknownOutcomeError({
-      capability: "conversation",
-      model: "grok-conversation-exact",
-      credentialSource: "oauth",
-    }));
-    await expect(first).resolves.toMatchObject({ reason: "unknown_outcome" });
-
-    let finishExplicit!: (value: { credentialSource: "oauth"; model: string }) => void;
-    setupResult.text.request.mockImplementationOnce(() => new Promise((resolve) => {
-      finishExplicit = resolve;
-    }));
-    const explicit = caller.createConversationProbeAttempt({
-      connectionId: "direct-xai",
-      model: "grok-conversation-exact",
-    });
-    await vi.waitFor(() => expect(setupResult.text.request).toHaveBeenCalledTimes(2));
-    setupResult.host.recordAgentConnectionUnknownOutcomeFence({
-      connectionId: "direct-xai",
-      adapter: "direct-xai",
-      capability: "conversation",
-      model: "grok-conversation-exact",
-    });
-    await expect(caller.createConversationProbeAttempt({
-      connectionId: "direct-xai",
-      model: "grok-conversation-exact",
-    })).rejects.toThrow(/already in progress/i);
-    expect(setupResult.text.request).toHaveBeenCalledTimes(2);
-    finishExplicit({ credentialSource: "oauth", model: "grok-conversation-exact" });
-    await expect(explicit).resolves.toMatchObject({ status: "ready" });
-    setupResult.host.close();
-  });
-
-  it.each([
-    ["codex", "Codex", "gpt-5.6-sol"],
-    ["claude-code", "Claude Code", "claude-sonnet-5"],
-  ] as const)("requires current %s Conversation disclosure for probe and adoption", async (
-    adapter,
-    label,
-    model,
-  ) => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "agent", connectionId: adapter, model },
-      },
-      llm: { agent: { provider: "auto" } },
-    }, [{ adapter, label, path: `/fake/bin/${adapter}` }]);
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-    await caller.refreshCandidates();
-    await caller.confirmCandidate({ candidateId: `candidate:${adapter}`, model });
-    await expect(caller.probe({ connectionId: adapter, capability: "conversation", model }))
-      .rejects.toThrow(/disclosure/i);
-    const adapterProbe = adapter === "codex" ? setupResult.codex.probe : setupResult.claude.probe;
-    expect(adapterProbe).not.toHaveBeenCalled();
-
-    await caller.acceptDisclosure({ connectionId: adapter, capability: "conversation" });
-    await caller.probe({ connectionId: adapter, capability: "conversation", model });
-    await caller.declineDisclosure({ connectionId: adapter, capability: "conversation" });
-    await expect(setupResult.center.conversationAdoptionEvidence()).rejects.toThrow(/disclosure/i);
-    setupResult.host.close();
-  });
-
-  it("clears the Unknown fence after an explicit probe reaches a proven failure", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    setupResult.text.request
-      .mockRejectedValueOnce(new XaiTextUnknownOutcomeError({
-        capability: "conversation",
-        model: "grok-conversation-exact",
-        credentialSource: "oauth",
-      }))
-      .mockRejectedValueOnce(new Error("HTTP 404 invalid model"))
-      .mockResolvedValueOnce({ credentialSource: "oauth", model: "grok-conversation-exact" });
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-
-    await caller.probe({ connectionId: "direct-xai", capability: "conversation" });
-    await expect(caller.createConversationProbeAttempt({
-      connectionId: "direct-xai",
-      model: "grok-conversation-exact",
-    })).resolves.toMatchObject({ status: "failed", reason: "invalid_model" });
-    await expect(caller.probe({ connectionId: "direct-xai", capability: "conversation" }))
-      .resolves.toMatchObject({ status: "ready" });
-    expect(setupResult.text.request).toHaveBeenCalledTimes(3);
-    setupResult.host.close();
-  });
-
   it("stores an xAI API key without changing the explicitly selected credential source", async () => {
     const setupResult = setup({
       audio: {},
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
     });
@@ -1182,7 +345,6 @@ describe("public Agent Connection Host contract", () => {
   it.each([
     ["transcription", /Cloud Transcription Consent \(xai-audio-v1\)/],
     ["summary", /Summary Data Path Disclosure \(xai-summary-v1\)/],
-    ["conversation", /Conversation Data Path Disclosure \(xai-conversation-v1\)/],
   ] as const)("requires the current xAI %s disclosure before a real probe", async (
     capability,
     expected,
@@ -1192,7 +354,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "xai", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
     });
@@ -1214,7 +375,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "xai", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
     });
@@ -1240,7 +400,6 @@ describe("public Agent Connection Host contract", () => {
     }))).toEqual([
       { capability: "transcription", selected: true, required: true, version: "xai-audio-v1" },
       { capability: "summary", selected: true, required: true, version: "xai-summary-v1" },
-      { capability: "conversation", selected: true, required: true, version: "xai-conversation-v1" },
     ]);
     expect(setupResult.audio.testXai).not.toHaveBeenCalled();
     expect(setupResult.text.request).not.toHaveBeenCalled();
@@ -1401,7 +560,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
     });
@@ -1480,7 +638,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
     }, [], { seedDirectCredentialSource: "api-key" });
@@ -1510,10 +667,18 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
-    }, [{ adapter: "hermes", label: "Hermes", path: "/fake/bin/hermes" }]);
+    });
+    // A Hermes connection stored by a version that still had Conversation.
+    setupResult.host.upsertAgentConnectionRecord({
+      id: "hermes",
+      kind: "supported-agent",
+      adapter: "hermes",
+      label: "Hermes",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/bin/hermes", conversationModel: "grok-4.6", credentialSource: "runtime-oauth" },
+    });
     setupResult.text.request.mockResolvedValue({
       credentialSource: "oauth",
       model: "grok-summary-exact",
@@ -1529,8 +694,6 @@ describe("public Agent Connection Host contract", () => {
       capability: "summary",
       model: "grok-summary-exact",
     });
-    await caller.refreshCandidates();
-    await caller.confirmCandidate({ candidateId: "candidate:hermes", model: "grok-4.6" });
 
     await expect(caller.summaryActivation()).resolves.toMatchObject({
       selected: {
@@ -1550,7 +713,7 @@ describe("public Agent Connection Host contract", () => {
     const contract = await caller.summaryActivation();
     expect(contract.options.some(({ provider }: { provider: string }) => provider === "hermes"))
       .toBe(false);
-    expect(setupResult.conversationOnly.probe).not.toHaveBeenCalled();
+    expect((await caller.view()).connections.map(({ id }: { id: string }) => id)).toEqual(["direct-xai"]);
     setupResult.host.close();
   });
 
@@ -1566,7 +729,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter, label: adapter === "codex" ? "Codex" : "Claude Code", path: `/fake/bin/${adapter}` }]);
@@ -1622,58 +784,12 @@ describe("public Agent Connection Host contract", () => {
     setupResult.host.close();
   });
 
-  it("requires an exact current xAI Conversation readiness proof", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
-      },
-      llm: { agent: { provider: "auto" } },
-    });
-    setupResult.text.request.mockResolvedValue({
-      credentialSource: "oauth",
-      model: "grok-conversation-exact",
-    });
-
-    await expect(setupResult.center.assertXaiConversationReady({ model: "grok-conversation-exact" }))
-      .rejects.toThrow(/exact xAI Conversation model/i);
-    await setupResult.center.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
-    await setupResult.center.probe({
-      connectionId: "direct-xai",
-      capability: "conversation",
-      model: "grok-conversation-exact",
-    });
-    await expect(setupResult.center.assertXaiConversationReady({ model: "grok-conversation-exact" }))
-      .resolves.toBe("oauth");
-    await expect(setupResult.center.assertXaiConversationReady({ model: "grok-other" }))
-      .rejects.toThrow(/exact xAI Conversation model/i);
-
-    setupResult.credentials.status.mockResolvedValue({
-      connected: true,
-      source: "api-key",
-      oauthConnected: false,
-      apiKeyConfigured: true,
-      oauthReadSucceeded: true,
-      apiKeyReadSucceeded: true,
-      detail: "xAI API key connected",
-      authorization: { status: "idle", verificationUrl: "", userCode: "", message: "" },
-    });
-    await expect(setupResult.center.assertXaiConversationReady({ model: "grok-conversation-exact" }))
-      .rejects.toThrow(/exact xAI Conversation model/i);
-    await expect(setupResult.makeCenter().assertXaiConversationReady({ model: "grok-conversation-exact" }))
-      .rejects.toThrow(/exact xAI Conversation model/i);
-    setupResult.host.close();
-  });
-
   it("migrates an unambiguous existing xAI OAuth credential source exactly once", async () => {
     const setupResult = setup({
       audio: {},
       transcription: { engine: "xai", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-4.6" },
-        conversation: { provider: "xai", model: "grok-4.6" },
       },
       llm: { agent: { provider: "auto" } },
     }, [], { seedDirectCredentialSource: false });
@@ -1691,7 +807,7 @@ describe("public Agent Connection Host contract", () => {
           compatibilityTarget: "xai-api",
           versionSource: "not-applicable",
           supported: true,
-          features: ["transcription", "summary", "conversation", "no-provider-fallback"],
+          features: ["transcription", "summary", "no-provider-fallback"],
         },
         settings: { credentialSource: "oauth" },
       });
@@ -1892,7 +1008,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
-        conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
       },
       llm: { agent: { provider: "auto" } },
     });
@@ -1918,24 +1033,16 @@ describe("public Agent Connection Host contract", () => {
       summaryCredentialClass: "runtime-oauth",
       summaryDisclosureVersion: "codex-summary-v1",
     }).task;
-    const session = createAgentSession(setupResult.root, {
-      provider: "codex",
-      connectionId: "codex",
-      model: "gpt-5.6-sol",
-      credentialSource: "runtime-oauth",
-      disclosureVersion: "codex-conversation-v1",
-      title: "Pinned Codex conversation",
-    });
     const caller = createCaller(agentConnectionsRouter, {
       agentConnections: setupResult.center,
       uiMutationAuthorized: true,
     } as never);
 
-    await expect(caller.deletionImpact({ connectionId: "codex" })).resolves.toMatchObject({
+    const impact = await caller.deletionImpact({ connectionId: "codex" });
+    expect(impact).toEqual({
       connectionId: "codex",
-      selectedCapabilities: ["summary", "conversation"],
+      selectedCapabilities: ["summary"],
       pinnedTasks: [expect.objectContaining({ id: task.id })],
-      pinnedConversations: [expect.objectContaining({ id: session.id })],
       removesRuntimeAuthorization: false,
       removesYuluManagedCredentials: false,
     });
@@ -1945,12 +1052,8 @@ describe("public Agent Connection Host contract", () => {
     expect(setupResult.credentials.clearApiKey).not.toHaveBeenCalled();
     expect(setupResult.host.listAgentConnectionRecords().some((record) => record.id === "codex")).toBe(false);
     expect(setupResult.host.getTask(task.id)).toMatchObject({ summaryConnectionId: "codex", summaryModel: "gpt-5.6-sol" });
-    expect(readAgentSessionStore(setupResult.root).sessions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: session.id, connectionId: "codex", model: "gpt-5.6-sol" }),
-    ]));
-    expect(setupResult.configManager.read().intelligence).toMatchObject({
+    expect(setupResult.configManager.read().intelligence).toEqual({
       summary: { provider: "agent", model: "runtime-managed", disabled: true },
-      conversation: { provider: "agent", model: "runtime-managed", disabled: true },
     });
     setupResult.host.close();
   });
@@ -1961,7 +1064,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
-        conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" },
       },
       llm: { agent: { provider: "auto" } },
     });
@@ -1986,265 +1088,12 @@ describe("public Agent Connection Host contract", () => {
     setupResult.host.close();
   });
 
-  it.each([
-    ["hermes", "Hermes", "/fake/bin/hermes", "grok-4.6"],
-    ["openclaw", "OpenClaw", "/fake/bin/openclaw", "openai-codex/gpt-5.5"],
-  ] as const)("connects %s explicitly as Conversation-only without probing on open", async (
-    adapter,
-    label,
-    path,
-    model,
-  ) => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-4.6" },
-        conversation: { provider: "xai", model: "grok-4.6" },
-      },
-      llm: { agent: { provider: "auto" } },
-    }, [{ adapter, label, path }]);
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-
-    await caller.refreshCandidates();
-    expect((await caller.view()).candidates).toContainEqual(expect.objectContaining({
-      adapter,
-      capabilities: ["conversation"],
-      lifecycle: "candidate",
-    }));
-    expect(setupResult.conversationOnly.status).not.toHaveBeenCalled();
-    expect(setupResult.conversationOnly.probe).not.toHaveBeenCalled();
-
-    const connected = await caller.confirmCandidate({ candidateId: `candidate:${adapter}`, model });
-    expect(connected.connections).toContainEqual(expect.objectContaining({
-      id: adapter,
-      adapter,
-      authorization: expect.objectContaining({ connected: true, credentialSource: "runtime-oauth" }),
-      capabilities: [expect.objectContaining({
-        capability: "conversation",
-        currentReadiness: expect.objectContaining({ status: "untested", model }),
-      })],
-    }));
-    const connection = connected.connections.find((item: { id: string }) => item.id === adapter);
-    expect(connection.capabilities.some((item: { capability: string }) => item.capability === "summary")).toBe(false);
-    await expect(caller.probe({ connectionId: adapter, capability: "summary", model }))
-      .rejects.toThrow(/Conversation only/i);
-    await expect(caller.probe({ connectionId: adapter, capability: "conversation", model }))
-      .rejects.toThrow(/disclosure/i);
-    expect(setupResult.conversationOnly.probe).not.toHaveBeenCalled();
-
-    await caller.acceptDisclosure({ connectionId: adapter, capability: "conversation" });
-    await expect(caller.probe({ connectionId: adapter, capability: "conversation", model })).resolves.toMatchObject({
-      capability: "conversation",
-      status: "ready",
-      model,
-    });
-    await caller.select({ connectionId: adapter, capability: "conversation", model });
-    expect(JSON.parse(readFileSync(setupResult.configPath, "utf8"))).toMatchObject({
-      intelligence: { conversation: { provider: "agent", connectionId: adapter, model } },
-    });
-    expect(JSON.stringify(await caller.view())).not.toContain("accessToken");
-    setupResult.host.close();
-  });
-
-  it("accepts captured production OpenClaw Client-to-Adapter-to-Center evidence", async () => {
-    const run: CliCommandRunner = vi.fn(async (command) => {
-      const args = command.slice(1).join(" ");
-      const stdout = args === "--version"
-        ? "OpenClaw 2026.5.12 (f066dd2)\n"
-        : args === "agent --help"
-          ? "--json --model <id> --message <text> --session-id <id>\n"
-          : args === "models status --json --check"
-            ? JSON.stringify({
-                resolvedDefault: "openai-codex/gpt-5.5",
-                fallbacks: [],
-                auth: { missingProvidersInUse: [], unusableProfiles: [] },
-              })
-            : args === "infer model run --help"
-              ? "--local --gateway --model <provider/model> --prompt <text> --json\n"
-              : args.startsWith("infer model run --gateway --model openai-codex/gpt-5.5")
-                ? JSON.stringify({
-                    ok: true,
-                    capability: "model.run",
-                    transport: "gateway",
-                    provider: "openai-codex",
-                    model: "gpt-5.5",
-                    attempts: [],
-                    outputs: [{ text: "YULU_OPENCLAW_PROBE_OK" }],
-                  })
-                : "";
-      return {
-        stdout,
-        stderr: "",
-        code: stdout ? 0 : 1,
-        timedOut: false,
-        cancellationRequested: false,
-        cancellationConfirmed: null,
-      };
-    });
-    const runtime = new ConversationOnlyCliRuntimeClient({
-      adapter: "openclaw",
-      executable: "/fake/bin/openclaw",
-      cwd: "/movies",
-      run,
-    });
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-4.6" },
-        conversation: { provider: "xai", model: "grok-4.6" },
-      },
-      llm: { agent: { provider: "auto" } },
-    }, [{ adapter: "openclaw", label: "OpenClaw", path: "/fake/bin/openclaw" }], {
-      conversationOnlyClient: runtime,
-    });
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-
-    await caller.refreshCandidates();
-    await caller.confirmCandidate({ candidateId: "candidate:openclaw", model: "openai-codex/gpt-5.5" });
-    await caller.acceptDisclosure({ connectionId: "openclaw", capability: "conversation" });
-    await expect(caller.probe({
-      connectionId: "openclaw",
-      capability: "conversation",
-      model: "openai-codex/gpt-5.5",
-    })).resolves.toMatchObject({ status: "ready", model: "openai-codex/gpt-5.5" });
-    await caller.select({
-      connectionId: "openclaw",
-      capability: "conversation",
-      model: "openai-codex/gpt-5.5",
-    });
-    await expect(setupResult.center.conversationAdoptionEvidence()).resolves.toMatchObject({
-      connectionId: "openclaw",
-      adapter: "openclaw",
-      model: "openai-codex/gpt-5.5",
-      runtimeEvidence: { sessionId: null, terminalStatus: "ready" },
-    });
-    expect(setupResult.host.listAgentConnectionReadinessHistory("openclaw", "conversation"))
-      .toEqual([expect.objectContaining({
-        runtimeEvidence: expect.objectContaining({
-          requestedProvider: "openai-codex",
-          actualProvider: "openai-codex",
-          requestedModel: "openai-codex/gpt-5.5",
-          actualModel: "openai-codex/gpt-5.5",
-        }),
-      })]);
-    expect(run).toHaveBeenCalledWith(expect.arrayContaining([
-      "infer", "model", "run", "--gateway", "--model", "openai-codex/gpt-5.5",
-    ]), "/movies", 30_000);
-    setupResult.host.close();
-  });
-
-  it("persists Conversation-only Unknown Outcome evidence across Host restart", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-4.6" },
-        conversation: { provider: "xai", model: "grok-4.6" },
-      },
-      llm: { agent: { provider: "auto" } },
-    }, [{ adapter: "openclaw", label: "OpenClaw", path: "/fake/bin/openclaw" }]);
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-    await caller.refreshCandidates();
-    await caller.confirmCandidate({ candidateId: "candidate:openclaw", model: "openai-codex/gpt-5.5" });
-    await caller.acceptDisclosure({ connectionId: "openclaw", capability: "conversation" });
-    setupResult.conversationOnly.probe.mockResolvedValueOnce({
-      status: "failed",
-      reason: "unknown_outcome",
-      remediation: "OpenClaw probe outcome is unknown",
-      evidence: {
-        adapter: "openclaw",
-        transport: "openclaw-cli-gateway-json",
-        runtimeVersion: "2026.5.12",
-        requestedProvider: "openai-codex",
-        requestedModel: "openai-codex/gpt-5.5",
-        actualProvider: null,
-        actualModel: null,
-        requestId: null,
-        sessionId: null,
-        terminalStatus: "unknown",
-        fallbackOccurred: null,
-        cancellationRequested: true,
-        cancellationConfirmed: false,
-      },
-    });
-
-    await expect(caller.probe({
-      connectionId: "openclaw",
-      capability: "conversation",
-      model: "openai-codex/gpt-5.5",
-    })).resolves.toMatchObject({ status: "failed", reason: "unknown_outcome" });
-    expect((await setupResult.makeCenter().view()).connections
-      .find((connection) => connection.id === "openclaw")?.capabilities[0]?.readinessHistory)
-      .toEqual([expect.objectContaining({
-        reason: "unknown_outcome",
-        runtimeEvidence: expect.objectContaining({
-          terminalStatus: "unknown",
-          fallbackOccurred: null,
-        }),
-      })]);
-    setupResult.host.close();
-  });
-
-  it("deletes only the Yulu OpenClaw connection boundary and clears its future selection", async () => {
-    const setupResult = setup({
-      audio: {},
-      transcription: { engine: "local", language: "zh" },
-      intelligence: {
-        summary: { provider: "xai", model: "grok-4.6" },
-        conversation: { provider: "agent", connectionId: "openclaw", model: "openai-codex/gpt-5.5" },
-      },
-      llm: { agent: { provider: "auto" } },
-    }, [{ adapter: "openclaw", label: "OpenClaw", path: "/fake/bin/openclaw" }]);
-    const caller = createCaller(agentConnectionsRouter, {
-      agentConnections: setupResult.center,
-      uiMutationAuthorized: true,
-    } as never);
-    await caller.refreshCandidates();
-    await caller.confirmCandidate({ candidateId: "candidate:openclaw", model: "openai-codex/gpt-5.5" });
-    createAgentSession(setupResult.root, {
-      provider: "openclaw",
-      connectionId: "openclaw",
-      model: "openai-codex/gpt-5.5",
-      runtimeProvider: "openai-codex",
-      disclosureVersion: "openclaw-conversation-v1",
-      credentialSource: "runtime-oauth",
-      title: "Pinned OpenClaw",
-    });
-
-    await expect(caller.deletionImpact({ connectionId: "openclaw" })).resolves.toMatchObject({
-      selectedCapabilities: ["conversation"],
-      pinnedConversations: [expect.objectContaining({ title: "Pinned OpenClaw" })],
-      removesRuntimeAuthorization: false,
-      removesYuluManagedCredentials: false,
-    });
-    await caller.remove({ connectionId: "openclaw", confirmed: true });
-    expect(setupResult.credentials.logout).not.toHaveBeenCalled();
-    expect(setupResult.credentials.clearApiKey).not.toHaveBeenCalled();
-    expect(setupResult.host.listAgentConnectionRecords().some((record) => record.id === "openclaw")).toBe(false);
-    expect(JSON.parse(readFileSync(setupResult.configPath, "utf8"))).toMatchObject({
-      intelligence: { conversation: { provider: "agent", model: "runtime-managed", disabled: true } },
-    });
-    setupResult.host.close();
-  });
-
-  it("confirms Codex explicitly and projects native auth without probing either capability", async () => {
+  it("confirms Codex explicitly as a Summary-only connection without probing it", async () => {
     const setupResult = setup({
       audio: {},
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
@@ -2269,8 +1118,8 @@ describe("public Agent Connection Host contract", () => {
           runtimeVersion: "0.144.4",
           loginCommand: "/fake/bin/codex login",
         }),
-        capabilities: expect.arrayContaining([expect.objectContaining({
-          capability: "conversation",
+        capabilities: [expect.objectContaining({
+          capability: "summary",
           currentReadiness: expect.objectContaining({
             status: "untested",
             model: "gpt-5.6-sol",
@@ -2278,51 +1127,38 @@ describe("public Agent Connection Host contract", () => {
             detail: "Not tested in this Host process",
             credentialSource: null,
           }),
-        })]),
+        })],
+        settings: { summaryModel: "gpt-5.6-sol", executablePath: "/fake/bin/codex" },
       })]),
     });
     expect(setupResult.codex.status).toHaveBeenCalled();
-    expect(setupResult.codex.probe).not.toHaveBeenCalled();
-    expect(setupResult.codex.converse).not.toHaveBeenCalled();
+    expect(setupResult.codex.probeSummary).not.toHaveBeenCalled();
+    expect(setupResult.codex.summarize).not.toHaveBeenCalled();
+    // Sharing runs its connector with the model stored under the historical key.
+    expect(setupResult.host.listAgentConnectionRecords().find(({ id }) => id === "codex")?.settings).toEqual({
+      executablePath: "/fake/bin/codex",
+      summaryModel: "gpt-5.6-sol",
+      conversationModel: "gpt-5.6-sol",
+      credentialSource: "runtime-oauth",
+    });
 
-    const beforeDisclosure = await caller.view();
-    const codex = beforeDisclosure.connections.find((connection: { id: string }) => connection.id === "codex");
-    expect(codex.capabilities.find(({ capability }: { capability: string }) => capability === "conversation").disclosure).toMatchObject({
-      required: true,
-      data: "conversation_text_and_agent_tool_context",
-      destination: "Codex runtime and its configured providers/connectors",
+    // Summary is the only Agent Capability; nothing else can be disclosed, probed or selected.
+    for (const call of [
+      () => caller.acceptDisclosure({ connectionId: "codex", capability: "conversation" }),
+      () => caller.probe({ connectionId: "codex", capability: "conversation" }),
+      () => caller.select({ connectionId: "codex", capability: "conversation", model: "gpt-5.6-sol" }),
+    ]) await expect(call()).rejects.toThrow(/invalid_enum_value|Invalid enum value/i);
+    expect(() => setupResult.center.acceptDisclosure({ connectionId: "codex", capability: "transcription" }))
+      .toThrow("This Codex connection supports Summary only");
+    await expect(setupResult.center.probe({ connectionId: "codex", capability: "transcription" }))
+      .rejects.toThrow("This Codex connection supports Summary only");
+    await expect(setupResult.center.select({ connectionId: "codex", capability: "transcription" }))
+      .rejects.toThrow("This Codex connection supports Summary only");
+    expect(setupResult.codex.probeSummary).not.toHaveBeenCalled();
+    expect(setupResult.host.getAgentConnectionDisclosure("codex", "summary")).toBeNull();
+    expect(JSON.parse(readFileSync(setupResult.configPath, "utf8")).intelligence).toEqual({
+      summary: { provider: "agent", model: "runtime-managed" },
     });
-    await caller.acceptDisclosure({ connectionId: "codex", capability: "conversation" });
-    expect(setupResult.host.getAgentConnectionDisclosure("codex", "conversation")).toMatchObject({
-      decision: "accepted",
-      disclosureVersion: "codex-conversation-v1",
-    });
-    expect(setupResult.host.getSummaryDataPathDisclosure("codex")).toBeNull();
-
-    await expect(caller.probe({ connectionId: "codex", capability: "conversation" })).resolves.toMatchObject({
-      capability: "conversation",
-      status: "ready",
-      model: "gpt-5.6-sol",
-    });
-    expect(setupResult.codex.probe).toHaveBeenCalledWith({ model: "gpt-5.6-sol" });
-    await caller.select({ connectionId: "codex", capability: "conversation", model: "gpt-5.6-sol" });
-    await expect(caller.view()).resolves.toMatchObject({
-      selections: { conversation: { connectionId: "codex", model: "gpt-5.6-sol" } },
-    });
-    expect(JSON.parse(readFileSync(setupResult.configPath, "utf8"))).toMatchObject({
-      intelligence: { conversation: { provider: "agent", connectionId: "codex", model: "gpt-5.6-sol" } },
-    });
-    expect(setupResult.host.listAgentConnectionReadinessHistory("codex", "conversation")).toEqual([
-      expect.objectContaining({
-        status: "ready",
-        runtimeEvidence: expect.objectContaining({
-          authorizationClass: "chatgpt",
-          requestedModel: "gpt-5.6-sol",
-          actualModel: "gpt-5.6-sol",
-          fallbackOccurred: false,
-        }),
-      }),
-    ]);
     setupResult.host.close();
   });
 
@@ -2332,7 +1168,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
@@ -2343,8 +1178,8 @@ describe("public Agent Connection Host contract", () => {
 
     await caller.refreshCandidates();
     await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
-    await caller.acceptDisclosure({ connectionId: "codex", capability: "conversation" });
-    await caller.probe({ connectionId: "codex", capability: "conversation", model: "gpt-5.6-sol" });
+    await caller.acceptDisclosure({ connectionId: "codex", capability: "summary" });
+    await caller.probe({ connectionId: "codex", capability: "summary", model: "gpt-5.6-sol" });
     const oauthStatus = await setupResult.codex.status();
     setupResult.codex.status.mockImplementation(async () => ({
       ...oauthStatus,
@@ -2367,7 +1202,7 @@ describe("public Agent Connection Host contract", () => {
           "Codex API-key authorization cannot be used as Runtime-owned OAuth; run /fake/bin/codex login without --with-api-key to complete ChatGPT OAuth, then refresh this connection",
       },
     });
-    expect(codex?.capabilities.find(({ capability }: { capability: string }) => capability === "conversation"))
+    expect(codex?.capabilities.find(({ capability }: { capability: string }) => capability === "summary"))
       .toMatchObject({
         currentReadiness: { status: "untested", testedAt: null },
         readinessHistory: [expect.objectContaining({
@@ -2377,20 +1212,19 @@ describe("public Agent Connection Host contract", () => {
       });
     await expect(caller.select({
       connectionId: "codex",
-      capability: "conversation",
+      capability: "summary",
       model: "gpt-5.6-sol",
     })).rejects.toThrow();
-    expect(setupResult.codex.probe).toHaveBeenCalledTimes(1);
+    expect(setupResult.codex.probeSummary).toHaveBeenCalledTimes(1);
     setupResult.host.close();
   });
 
-  it("connects Claude Code, proves only Conversation, and keeps readiness bound to its exact runtime identity", async () => {
+  it("connects Claude Code as a Summary-only connection and keeps readiness bound to the Host process", async () => {
     const setupResult = setup({
       audio: {},
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
@@ -2403,12 +1237,12 @@ describe("public Agent Connection Host contract", () => {
     const candidateView = await caller.view();
     expect(candidateView.candidates).toContainEqual(expect.objectContaining({
       adapter: "claude-code",
-      capabilities: ["summary", "conversation"],
+      capabilities: ["summary"],
       lifecycle: "candidate",
       selected: false,
     }));
     expect(setupResult.claude.status).not.toHaveBeenCalled();
-    expect(setupResult.claude.probe).not.toHaveBeenCalled();
+    expect(setupResult.claude.probeSummary).not.toHaveBeenCalled();
 
     await expect(caller.confirmCandidate({
       candidateId: "candidate:claude-code",
@@ -2426,8 +1260,8 @@ describe("public Agent Connection Host contract", () => {
           loginCommand: "/fake/bin/claude auth login",
           statusCommand: "/fake/bin/claude auth status",
         }),
-        capabilities: expect.arrayContaining([expect.objectContaining({
-          capability: "conversation",
+        capabilities: [expect.objectContaining({
+          capability: "summary",
           declared: true,
           currentReadiness: expect.objectContaining({
             status: "untested",
@@ -2435,37 +1269,41 @@ describe("public Agent Connection Host contract", () => {
           }),
           disclosure: expect.objectContaining({
             required: true,
-            disclosureVersion: CLAUDE_CODE_CONVERSATION_DISCLOSURE_VERSION,
-            data: "conversation_text_and_agent_tool_context",
+            disclosureVersion: "claude-code-summary-v1",
+            data: "transcript_text",
           }),
-        })]),
+        })],
+        settings: { summaryModel: "claude-sonnet-5", executablePath: "/fake/bin/claude" },
       })]),
     });
-    expect(setupResult.claude.probe).not.toHaveBeenCalled();
+    expect(setupResult.claude.probeSummary).not.toHaveBeenCalled();
 
-    await caller.acceptDisclosure({ connectionId: "claude-code", capability: "conversation" });
+    await caller.acceptDisclosure({ connectionId: "claude-code", capability: "summary" });
     await expect(caller.probe({
       connectionId: "claude-code",
-      capability: "conversation",
+      capability: "summary",
       model: "claude-sonnet-5",
     })).resolves.toMatchObject({
-      capability: "conversation",
+      capability: "summary",
       status: "ready",
       model: "claude-sonnet-5",
     });
     await caller.select({
       connectionId: "claude-code",
-      capability: "conversation",
+      capability: "summary",
       model: "claude-sonnet-5",
     });
     const live = await caller.view();
     expect(live.connections.find((item: { id: string }) => item.id === "claude-code")?.capabilities
-      .find(({ capability }: { capability: string }) => capability === "summary"))
-      .toMatchObject({ declared: true, currentReadiness: { status: "untested" } });
-    await expect(caller.view()).resolves.toMatchObject({
-      selections: { conversation: { connectionId: "claude-code", model: "claude-sonnet-5" } },
+      .map(({ capability, declared, currentReadiness }: {
+        capability: string; declared: boolean; currentReadiness: { status: string };
+      }) => ({ capability, declared, status: currentReadiness.status })))
+      .toEqual([{ capability: "summary", declared: true, status: "ready" }]);
+    expect(live.selections).toEqual({
+      transcription: { connectionId: null, model: "local" },
+      summary: { connectionId: "claude-code", model: "claude-sonnet-5" },
     });
-    expect(setupResult.host.listAgentConnectionReadinessHistory("claude-code", "conversation")).toEqual([
+    expect(setupResult.host.listAgentConnectionReadinessHistory("claude-code", "summary")).toEqual([
       expect.objectContaining({
         status: "ready",
         runtimeEvidence: expect.objectContaining({
@@ -2473,7 +1311,7 @@ describe("public Agent Connection Host contract", () => {
           authorizationClass: "claude-subscription",
           requestedModel: "claude-sonnet-5",
           actualModel: "claude-sonnet-5",
-          sessionId: "019f0000-0000-7000-8000-000000000136",
+          sessionId: "019f0000-0000-7000-8000-000000000140",
           fallbackOccurred: false,
         }),
       }),
@@ -2481,9 +1319,9 @@ describe("public Agent Connection Host contract", () => {
 
     const restarted = await setupResult.makeCenter().view();
     expect(restarted.connections.find((item) => item.id === "claude-code")?.capabilities
-      .find(({ capability }) => capability === "conversation"))
+      .find(({ capability }) => capability === "summary"))
       .toMatchObject({
-        capability: "conversation",
+        capability: "summary",
         currentReadiness: { status: "untested", testedAt: null },
         readinessHistory: [expect.objectContaining({ status: "ready", model: "claude-sonnet-5" })],
       });
@@ -2496,7 +1334,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
@@ -2507,10 +1344,10 @@ describe("public Agent Connection Host contract", () => {
 
     await caller.refreshCandidates();
     await caller.confirmCandidate({ candidateId: "candidate:claude-code", model: "claude-sonnet-5" });
-    await caller.acceptDisclosure({ connectionId: "claude-code", capability: "conversation" });
+    await caller.acceptDisclosure({ connectionId: "claude-code", capability: "summary" });
     await caller.probe({
       connectionId: "claude-code",
-      capability: "conversation",
+      capability: "summary",
       model: "claude-sonnet-5",
     });
     const oauthStatus = await setupResult.claude.status();
@@ -2536,7 +1373,7 @@ describe("public Agent Connection Host contract", () => {
           "Claude Code API-key login cannot be used as Runtime-owned OAuth; run /fake/bin/claude auth login and choose a Claude subscription, then refresh this connection",
       },
     });
-    expect(claude?.capabilities.find(({ capability }: { capability: string }) => capability === "conversation"))
+    expect(claude?.capabilities.find(({ capability }: { capability: string }) => capability === "summary"))
       .toMatchObject({
         currentReadiness: { status: "untested", testedAt: null },
         readinessHistory: [expect.objectContaining({
@@ -2546,24 +1383,19 @@ describe("public Agent Connection Host contract", () => {
       });
     await expect(caller.select({
       connectionId: "claude-code",
-      capability: "conversation",
+      capability: "summary",
       model: "claude-sonnet-5",
     })).rejects.toThrow();
-    expect(setupResult.claude.probe).toHaveBeenCalledTimes(1);
+    expect(setupResult.claude.probeSummary).toHaveBeenCalledTimes(1);
     setupResult.host.close();
   });
 
-  it("migrates a #136 Conversation-only Claude record while keeping Summary fail-closed", async () => {
+  it("reads a Claude record that stores only its historical model key while keeping Summary fail-closed", async () => {
     const setupResult = setup({
       audio: {},
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary" },
-        conversation: {
-          provider: "agent",
-          connectionId: "claude-code",
-          model: "claude-sonnet-5",
-        },
       },
       llm: { agent: { provider: "auto" } },
     });
@@ -2578,14 +1410,14 @@ describe("public Agent Connection Host contract", () => {
         conversationModel: "claude-sonnet-5",
       },
     });
-    const conversationStatus = await setupResult.claude.status();
+    const runtimeStatus = await setupResult.claude.status();
     setupResult.claude.status.mockReset();
     setupResult.claude.status
-      .mockResolvedValueOnce(conversationStatus)
+      .mockResolvedValueOnce(runtimeStatus)
       .mockResolvedValueOnce({
-        ...conversationStatus,
+        ...runtimeStatus,
         supported: false,
-        features: conversationStatus.features.filter((feature) => feature !== "managed-hooks/none"),
+        features: runtimeStatus.features.filter((feature) => feature !== "managed-hooks/none"),
         remediation: "Claude Code cannot currently prove policy-managed hooks are disabled; Summary remains unavailable",
       } as never);
 
@@ -2596,12 +1428,13 @@ describe("public Agent Connection Host contract", () => {
       authorization: { connected: true },
       settings: {
         summaryModel: "claude-sonnet-5",
-        conversationModel: "claude-sonnet-5",
+        executablePath: "/fake/bin/claude",
       },
-      capabilities: expect.arrayContaining([
+      capabilities: [
         expect.objectContaining({
           capability: "summary",
           declared: false,
+          selected: false,
           currentReadiness: expect.objectContaining({
             status: "failed",
             model: "claude-sonnet-5",
@@ -2610,30 +1443,19 @@ describe("public Agent Connection Host contract", () => {
             reason: "readiness_failed",
           }),
         }),
-        expect.objectContaining({
-          capability: "conversation",
-          declared: true,
-          selected: true,
-          currentReadiness: expect.objectContaining({ status: "untested", model: "claude-sonnet-5" }),
-        }),
-      ]),
+      ],
     });
-    expect(setupResult.claude.probe).not.toHaveBeenCalled();
+    expect(claude?.settings).not.toHaveProperty("conversationModel");
     expect(setupResult.claude.probeSummary).not.toHaveBeenCalled();
     setupResult.host.close();
   });
 
-  it("keeps Claude Conversation available when only the Summary isolation status check fails", async () => {
+  it("keeps Claude Code connected and Summary failed when only the isolation status check fails", async () => {
     const setupResult = setup({
       audio: {},
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary" },
-        conversation: {
-          provider: "agent",
-          connectionId: "claude-code",
-          model: "claude-sonnet-5",
-        },
       },
       llm: { agent: { provider: "auto" } },
     });
@@ -2649,10 +1471,10 @@ describe("public Agent Connection Host contract", () => {
         conversationModel: "claude-sonnet-5",
       },
     });
-    const conversationStatus = await setupResult.claude.status();
+    const runtimeStatus = await setupResult.claude.status();
     setupResult.claude.status.mockReset();
     setupResult.claude.status
-      .mockResolvedValueOnce(conversationStatus)
+      .mockResolvedValueOnce(runtimeStatus)
       .mockRejectedValueOnce(new Error("tool-free inspection failed"));
 
     const view = await setupResult.center.view();
@@ -2661,7 +1483,7 @@ describe("public Agent Connection Host contract", () => {
     expect(claude).toMatchObject({
       lifecycle: "connected",
       authorization: { connected: true },
-      capabilities: expect.arrayContaining([
+      capabilities: [
         expect.objectContaining({
           capability: "summary",
           declared: false,
@@ -2670,24 +1492,17 @@ describe("public Agent Connection Host contract", () => {
             detail: "Claude Code Summary isolation status is unavailable",
           }),
         }),
-        expect.objectContaining({
-          capability: "conversation",
-          declared: true,
-          selected: true,
-          currentReadiness: expect.objectContaining({ status: "untested" }),
-        }),
-      ]),
+      ],
     });
     setupResult.host.close();
   });
 
-  it("proves and selects Claude Code Summary independently from Conversation readiness and disclosure", async () => {
+  it("proves and selects Claude Code Summary through its tool-free probe", async () => {
     const setupResult = setup({
       audio: {},
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
@@ -2700,7 +1515,7 @@ describe("public Agent Connection Host contract", () => {
     await caller.confirmCandidate({ candidateId: "candidate:claude-code", model: "claude-sonnet-5" });
     const before = await caller.view();
     expect(before.connections.find((connection: { id: string }) => connection.id === "claude-code")?.capabilities)
-      .toEqual(expect.arrayContaining([
+      .toEqual([
         expect.objectContaining({
           capability: "summary",
           declared: true,
@@ -2713,15 +1528,13 @@ describe("public Agent Connection Host contract", () => {
             data: "transcript_text",
           }),
         }),
-        expect.objectContaining({ capability: "conversation" }),
-      ]));
+      ]);
 
     await caller.acceptDisclosure({ connectionId: "claude-code", capability: "summary" });
     expect(setupResult.host.getAgentConnectionDisclosure("claude-code", "summary")).toMatchObject({
       decision: "accepted",
       disclosureVersion: "claude-code-summary-v1",
     });
-    expect(setupResult.host.getAgentConnectionDisclosure("claude-code", "conversation")).toBeNull();
 
     setupResult.claude.status.mockClear();
     await expect(caller.probe({
@@ -2731,7 +1544,6 @@ describe("public Agent Connection Host contract", () => {
     })).resolves.toMatchObject({ capability: "summary", status: "ready", model: "claude-sonnet-5" });
     expect(setupResult.claude.probeSummary).toHaveBeenCalledWith({ model: "claude-sonnet-5" });
     expect(setupResult.claude.status).toHaveBeenCalledWith({ toolFree: true });
-    expect(setupResult.claude.probe).not.toHaveBeenCalled();
 
     setupResult.claude.status.mockClear();
     await caller.select({
@@ -2806,7 +1618,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
@@ -2826,8 +1637,7 @@ describe("public Agent Connection Host contract", () => {
     const claude = view.connections.find((connection: { id: string }) => connection.id === "claude-code");
     expect(claude.capabilities.find(({ capability }: { capability: string }) => capability === "summary"))
       .toMatchObject({ declared: false, currentReadiness: { status: "untested" } });
-    expect(claude.capabilities.find(({ capability }: { capability: string }) => capability === "conversation"))
-      .toMatchObject({ declared: true });
+    expect(claude.capabilities).toHaveLength(1);
     await expect(caller.probe({ connectionId: "claude-code", capability: "summary" }))
       .resolves.toMatchObject({ status: "failed" });
     setupResult.host.close();
@@ -2839,7 +1649,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
@@ -2875,13 +1684,12 @@ describe("public Agent Connection Host contract", () => {
     setupResult.host.close();
   });
 
-  it("proves and selects Codex Summary independently from Conversation authorization and disclosure", async () => {
+  it("proves and selects Codex Summary through its tool-free probe", async () => {
     const setupResult = setup({
       audio: {},
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
@@ -2893,11 +1701,11 @@ describe("public Agent Connection Host contract", () => {
     await caller.refreshCandidates();
     expect((await caller.view()).candidates.find((candidate: { adapter: string }) =>
       candidate.adapter === "codex")?.capabilities)
-      .toEqual(["summary", "conversation"]);
+      .toEqual(["summary"]);
     await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
     const before = await caller.view();
     const codex = before.connections.find((connection: { id: string }) => connection.id === "codex");
-    expect(codex.capabilities).toEqual(expect.arrayContaining([
+    expect(codex.capabilities).toEqual([
       expect.objectContaining({
         capability: "summary",
         declared: true,
@@ -2908,8 +1716,7 @@ describe("public Agent Connection Host contract", () => {
           data: "transcript_text",
         }),
       }),
-      expect.objectContaining({ capability: "conversation" }),
-    ]));
+    ]);
     expect(setupResult.codex.probeSummary).not.toHaveBeenCalled();
 
     await caller.acceptDisclosure({ connectionId: "codex", capability: "summary" });
@@ -2917,7 +1724,6 @@ describe("public Agent Connection Host contract", () => {
       decision: "accepted",
       disclosureVersion: "codex-summary-v1",
     });
-    expect(setupResult.host.getAgentConnectionDisclosure("codex", "conversation")).toBeNull();
 
     setupResult.codex.status.mockClear();
     await expect(caller.probe({ connectionId: "codex", capability: "summary" })).resolves.toMatchObject({
@@ -2927,7 +1733,6 @@ describe("public Agent Connection Host contract", () => {
     });
     expect(setupResult.codex.probeSummary).toHaveBeenCalledWith({ model: "gpt-5.6-sol" });
     expect(setupResult.codex.status).toHaveBeenCalledWith({ toolFree: true });
-    expect(setupResult.codex.probe).not.toHaveBeenCalled();
     const tested = await caller.view();
     expect(tested.connections.find((connection: { id: string }) => connection.id === "codex")
       .capabilities.find(({ capability }: { capability: string }) => capability === "summary"))
@@ -2998,7 +1803,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
@@ -3029,7 +1833,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);
@@ -3044,35 +1847,35 @@ describe("public Agent Connection Host contract", () => {
 
     await caller.refreshCandidates();
     await caller.confirmCandidate({ candidateId: "candidate:codex", model: "gpt-5.6-sol" });
-    await caller.acceptDisclosure({ connectionId: "codex", capability: "conversation" });
+    await caller.acceptDisclosure({ connectionId: "codex", capability: "summary" });
     await expect(caller.probe({
       connectionId: "codex",
-      capability: "conversation",
+      capability: "summary",
       model: "gpt-5.6-terra",
     })).resolves.toMatchObject({ status: "ready", model: "gpt-5.6-terra" });
-    expect(setupResult.codex.probe).toHaveBeenLastCalledWith({ model: "gpt-5.6-terra" });
+    expect(setupResult.codex.probeSummary).toHaveBeenLastCalledWith({ model: "gpt-5.6-terra" });
     await expect(caller.select({
       connectionId: "codex",
-      capability: "conversation",
+      capability: "summary",
       model: "gpt-5.6-terra",
     })).resolves.toMatchObject({
-      selections: { conversation: { connectionId: "codex", model: "gpt-5.6-terra" } },
+      selections: { summary: { connectionId: "codex", model: "gpt-5.6-terra" } },
     });
 
     const readyStatus = await setupResult.codex.status();
     setupResult.codex.status.mockResolvedValue({ ...readyStatus, authorized: false });
     const disconnected = await caller.view();
     expect(disconnected.connections.find(({ id }: { id: string }) => id === "codex")?.capabilities
-      .find(({ capability }: { capability: string }) => capability === "conversation")?.currentReadiness)
+      .find(({ capability }: { capability: string }) => capability === "summary")?.currentReadiness)
       .toMatchObject({ status: "untested", model: "gpt-5.6-terra" });
     await expect(caller.select({
       connectionId: "codex",
-      capability: "conversation",
+      capability: "summary",
       model: "gpt-5.6-terra",
-    })).rejects.toThrow(/test this exact Codex Conversation model/i);
+    })).rejects.toThrow(/test this exact Codex summary model/i);
 
     setupResult.codex.status.mockResolvedValue({ ...readyStatus, authorized: true });
-    await caller.probe({ connectionId: "codex", capability: "conversation", model: "gpt-5.6-terra" });
+    await caller.probe({ connectionId: "codex", capability: "summary", model: "gpt-5.6-terra" });
     setupResult.host.upsertAgentConnectionRecord({
       id: "codex",
       kind: "supported-agent",
@@ -3081,25 +1884,24 @@ describe("public Agent Connection Host contract", () => {
       lifecycle: "available",
       settings: {
         executablePath: "/replacement/bin/codex",
-        conversationModel: "gpt-5.6-terra",
+        summaryModel: "gpt-5.6-terra",
         credentialSource: "runtime-oauth",
       },
     });
     await expect(caller.select({
       connectionId: "codex",
-      capability: "conversation",
+      capability: "summary",
       model: "gpt-5.6-terra",
-    })).rejects.toThrow(/test this exact Codex Conversation model/i);
+    })).rejects.toThrow(/test this exact Codex summary model/i);
     setupResult.host.close();
   });
 
-  it("opens secret-safe without probing and migrates old Agent choices to candidate or legacy state", async () => {
+  it("opens secret-safe without probing and migrates old Agent choices to candidate, legacy or retired state", async () => {
     const supported = setup({
       audio: {},
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary" },
-        conversation: { provider: "xai", model: "grok-conversation" },
       },
       llm: { enabled: true, command: null, agent: { provider: "codex" } },
     });
@@ -3118,15 +1920,14 @@ describe("public Agent Connection Host contract", () => {
     expect(view.candidates).toEqual(expect.arrayContaining([
       expect.objectContaining({ adapter: "codex", lifecycle: "candidate", selected: false }),
     ]));
-    expect(view.selections).toMatchObject({
+    expect(view.selections).toEqual({
+      transcription: { connectionId: null, model: "local" },
       summary: { connectionId: "direct-xai", model: "grok-summary" },
-      conversation: { connectionId: "direct-xai", model: "grok-conversation" },
     });
-    expect(view.connections[0]?.capabilities).toEqual(expect.arrayContaining([
+    expect(view.connections[0]?.capabilities).toEqual([
       expect.objectContaining({ capability: "transcription", currentReadiness: expect.objectContaining({ status: "untested" }) }),
       expect.objectContaining({ capability: "summary", currentReadiness: expect.objectContaining({ status: "untested" }) }),
-      expect.objectContaining({ capability: "conversation", currentReadiness: expect.objectContaining({ status: "untested" }) }),
-    ]));
+    ]);
     expect(supported.audio.testXai).not.toHaveBeenCalled();
     expect(supported.text.request).not.toHaveBeenCalled();
     expect(JSON.stringify(view)).not.toMatch(/access[-_ ]?token|refresh[-_ ]?token|api[-_ ]?key.*value/i);
@@ -3145,7 +1946,7 @@ describe("public Agent Connection Host contract", () => {
     await expect(migratedClaude.center.view()).resolves.toMatchObject({
       candidates: [expect.objectContaining({
         adapter: "claude-code",
-        capabilities: ["summary", "conversation"],
+        capabilities: ["summary"],
         lifecycle: "candidate",
         selected: false,
       })],
@@ -3204,6 +2005,31 @@ describe("public Agent Connection Host contract", () => {
     });
     unsupported.host.close();
 
+    // Hermes and OpenClaw were Conversation-only: an explicit selection is
+    // archived with the legacy block and offered neither as a candidate nor as
+    // a Legacy Custom Connection.
+    for (const llm of [
+      { enabled: true, command: null, agent: { provider: "hermes" } },
+      { enabled: true, command: ["openclaw"], agent: { provider: "auto" } },
+    ]) {
+      const retired = setup({
+        audio: {},
+        transcription: { engine: "local", language: "zh" },
+        intelligence: {},
+        llm,
+      });
+      await expect(retired.center.view()).resolves.toMatchObject({ candidates: [], legacyConnections: [] });
+      expect(retired.host.listAgentConnectionCandidates()).toEqual([]);
+      expect(retired.host.listAgentConnectionRecords().map(({ id }) => id)).toEqual(["direct-xai"]);
+      expect(JSON.parse(readFileSync(retired.configPath, "utf8"))).toMatchObject({
+        llm: { enabled: false, command: null, agent: { provider: "auto" } },
+      });
+      const retiredArchives = readdirSync(retired.root).filter((name) => name.includes("legacy-agent-connection"));
+      expect(retiredArchives).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(retired.root, retiredArchives[0]!), "utf8"))).toEqual({ llm });
+      retired.host.close();
+    }
+
     const automatic = setup({
       audio: {},
       transcription: { engine: "local", language: "zh" },
@@ -3224,7 +2050,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
     });
@@ -3288,7 +2113,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "agent", model: "runtime-managed" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "claude-code", label: "Claude Code", path: "/fake/bin/claude" }]);
@@ -3317,9 +2141,13 @@ describe("public Agent Connection Host contract", () => {
     await expect(unauthorized.refreshNativeAuthorizationStatus({
       connectionId: "candidate:claude-code",
     })).rejects.toThrow("UI mutation bearer required");
-    await expect(unauthorized.createConversationProbeAttempt({
+    await expect(unauthorized.probe({
       connectionId: "direct-xai",
-      model: "grok-conversation-exact",
+      capability: "summary",
+    })).rejects.toThrow("UI mutation bearer required");
+    await expect(unauthorized.acceptDisclosure({
+      connectionId: "direct-xai",
+      capability: "summary",
     })).rejects.toThrow("UI mutation bearer required");
     expect(setupResult.discover).not.toHaveBeenCalled();
 
@@ -3328,7 +2156,7 @@ describe("public Agent Connection Host contract", () => {
     });
     await expect(authorized.select({
       connectionId: "candidate:claude-code",
-      capability: "conversation",
+      capability: "summary",
       model: "runtime-managed",
     })).rejects.toThrow("Connection Candidate");
 
@@ -3350,13 +2178,12 @@ describe("public Agent Connection Host contract", () => {
     setupResult.host.close();
   });
 
-  it("persists a separate Conversation disclosure and previews pinned work before deletion", async () => {
+  it("keeps each xAI disclosure separate and previews pinned work before deletion", async () => {
     const setupResult = setup({
       audio: {},
       transcription: { engine: "xai", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
     });
@@ -3372,12 +2199,7 @@ describe("public Agent Connection Host contract", () => {
       summaryModel: "grok-summary-exact",
       summaryCredentialSource: "oauth",
     });
-    createAgentSession(setupResult.root, {
-      provider: "xai",
-      model: "grok-conversation-exact",
-      credentialSource: "oauth",
-      title: "Pinned conversation",
-    });
+    setupResult.host.recordDictationTextDisclosure("xai", "xai-dictation-text-v1");
     setupResult.host.declineSummaryDataPathDisclosure("xai", "xai-summary-v1");
     setupResult.host.recordCloudTranscriptionConsent("xai-audio-v1");
     const caller = createCaller(agentConnectionsRouter, {
@@ -3386,22 +2208,25 @@ describe("public Agent Connection Host contract", () => {
     } as never);
 
     const before = await caller.view();
-    const conversation = before.connections[0].capabilities
-      .find((item: { capability: string }) => item.capability === "conversation");
+    expect(before.connections[0].capabilities.map((item: { capability: string }) => item.capability))
+      .toEqual(["transcription", "summary"]);
+    const transcription = before.connections[0].capabilities
+      .find((item: { capability: string }) => item.capability === "transcription");
     const summary = before.connections[0].capabilities
       .find((item: { capability: string }) => item.capability === "summary");
     expect(summary.disclosure.required).toBe(true);
     expect(summary.disclosure.decision).toBe("declined");
-    expect(conversation.disclosure).toMatchObject({
-      required: true,
-      data: "meeting_excerpt_text",
+    expect(transcription.disclosure).toMatchObject({
+      required: false,
+      decision: "accepted",
+      data: "recording_audio",
       destination: "xAI",
     });
 
-    await caller.acceptDisclosure({ connectionId: "direct-xai", capability: "conversation" });
+    await caller.acceptDisclosure({ connectionId: "direct-xai", capability: "summary" });
     const accepted = await caller.view();
     expect(accepted.connections[0].capabilities
-      .find((item: { capability: string }) => item.capability === "conversation").disclosure.required).toBe(false);
+      .find((item: { capability: string }) => item.capability === "summary").disclosure.required).toBe(false);
     await caller.declineDisclosure({ connectionId: "direct-xai", capability: "summary" });
     const declined = await caller.view();
     expect(declined.connections[0].capabilities
@@ -3410,25 +2235,26 @@ describe("public Agent Connection Host contract", () => {
         decision: "declined",
       });
 
-    await expect(caller.deletionImpact({ connectionId: "direct-xai" })).resolves.toMatchObject({
+    await expect(caller.deletionImpact({ connectionId: "direct-xai" })).resolves.toEqual({
       connectionId: "direct-xai",
-      selectedCapabilities: ["transcription", "summary", "conversation"],
+      selectedCapabilities: ["transcription", "summary"],
       pinnedTasks: [expect.objectContaining({ recordingStem: "Pinned_20260827_120000" })],
-      pinnedConversations: [expect.objectContaining({ title: "Pinned conversation" })],
       removesRuntimeAuthorization: false,
+      removesYuluManagedCredentials: true,
     });
+    expect(setupResult.host.getDictationTextDisclosure("xai")).not.toBeNull();
     await caller.remove({ connectionId: "direct-xai", confirmed: true });
     expect(setupResult.credentials.logout).toHaveBeenCalledOnce();
     expect(setupResult.credentials.clearApiKey).toHaveBeenCalledOnce();
     expect(setupResult.host.getCloudTranscriptionConsent()).toBeNull();
     expect(setupResult.host.getSummaryDataPathDisclosure("xai")).toBeNull();
-    expect(setupResult.host.getAgentConnectionDisclosure("direct-xai", "conversation")).toBeNull();
+    // Removing the connection also revokes the consent to send dictated text.
+    expect(setupResult.host.getDictationTextDisclosure("xai")).toBeNull();
     await expect(caller.view()).resolves.toMatchObject({
       connections: [],
       selections: {
         transcription: { connectionId: null },
         summary: { connectionId: null },
-        conversation: { connectionId: null },
       },
     });
     expect(setupResult.host.listAgentConnectionRecords()).toEqual([]);
@@ -3445,11 +2271,66 @@ describe("public Agent Connection Host contract", () => {
     setupResult.host.close();
   });
 
+  it("never lists, authorizes or confirms a Hermes or OpenClaw connection, stored or discovered", async () => {
+    const setupResult = setup({
+      audio: {},
+      transcription: { engine: "local", language: "zh" },
+      intelligence: {
+        summary: { provider: "xai", model: "grok-summary-exact" },
+      },
+      llm: { agent: { provider: "auto" } },
+    }, [
+      // An older build could still hand these over; the Center must ignore them.
+      { adapter: "hermes", label: "Hermes", path: "/fake/bin/hermes" } as never,
+      { adapter: "codex", label: "Codex", path: "/fake/bin/codex" },
+    ]);
+    // Rows written by a version that still had Conversation-only connections.
+    setupResult.host.upsertAgentConnectionRecord({
+      id: "openclaw",
+      kind: "supported-agent",
+      adapter: "openclaw",
+      label: "OpenClaw",
+      lifecycle: "available",
+      settings: { executablePath: "/fake/bin/openclaw", conversationModel: "openai-codex/gpt-5.5" },
+    });
+    setupResult.host.upsertAgentConnectionCandidate({
+      id: "candidate:openclaw",
+      adapter: "openclaw",
+      label: "OpenClaw",
+      source: "discovered",
+      detectedPath: "/fake/bin/openclaw",
+      settings: {},
+    });
+    const caller = createCaller(agentConnectionsRouter, {
+      agentConnections: setupResult.center,
+      uiMutationAuthorized: true,
+    } as never);
+
+    const view = await caller.refreshCandidates();
+
+    expect(view.connections.map(({ id }: { id: string }) => id)).toEqual(["direct-xai"]);
+    expect(view.candidates.map(({ id }: { id: string }) => id)).toEqual(["candidate:codex"]);
+    expect(setupResult.host.listAgentConnectionCandidates().map(({ id }) => id).sort())
+      .toEqual(["candidate:codex", "candidate:openclaw"]);
+    await expect(caller.confirmCandidate({ candidateId: "candidate:openclaw", model: "openai-codex/gpt-5.5" }))
+      .rejects.toThrow("does not yet have a supported production adapter");
+    for (const connectionId of ["openclaw", "candidate:openclaw"]) {
+      await expect(caller.startNativeAuthorization({ connectionId }))
+        .rejects.toThrow("Locate a supported Agent runtime");
+    }
+    await expect(caller.select({ connectionId: "openclaw", capability: "summary", model: "openai-codex/gpt-5.5" }))
+      .rejects.toThrow("Agent Connection not found");
+    await expect(caller.deletionImpact({ connectionId: "openclaw" })).rejects.toThrow("Agent Connection not found");
+    // The stored row is left exactly as it was.
+    expect(setupResult.host.listAgentConnectionRecords().find(({ id }) => id === "openclaw")?.settings)
+      .toEqual({ executablePath: "/fake/bin/openclaw", conversationModel: "openai-codex/gpt-5.5" });
+    expect(setupResult.nativeAuthorization).not.toHaveBeenCalled();
+    setupResult.host.close();
+  });
+
   it.each([
     ["codex", "Codex", "/fake/bin/codex"],
     ["claude-code", "Claude Code", "/fake/bin/claude"],
-    ["hermes", "Hermes", "/fake/bin/hermes"],
-    ["openclaw", "OpenClaw", "/fake/bin/openclaw"],
   ] as const)("launches %s native authorization from a candidate without selecting or probing", async (
     adapter,
     label,
@@ -3460,7 +2341,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter, label, path }]);
@@ -3483,19 +2363,14 @@ describe("public Agent Connection Host contract", () => {
     expect(readFileSync(setupResult.configPath, "utf8")).toBe(configBefore);
     expect(setupResult.host.listAgentConnectionRecords()
       .some((record) => record.kind === "supported-agent")).toBe(false);
-    expect(setupResult.codex.probe).not.toHaveBeenCalled();
     expect(setupResult.codex.probeSummary).not.toHaveBeenCalled();
-    expect(setupResult.claude.probe).not.toHaveBeenCalled();
     expect(setupResult.claude.probeSummary).not.toHaveBeenCalled();
-    expect(setupResult.conversationOnly.probe).not.toHaveBeenCalled();
     setupResult.host.close();
   });
 
   it.each([
     ["codex", "Codex", "/fake/bin/codex", "0.144.4"],
     ["claude-code", "Claude Code", "/fake/bin/claude", "2.1.169"],
-    ["hermes", "Hermes", "/fake/bin/hermes", "0.20.0"],
-    ["openclaw", "OpenClaw", "/fake/bin/openclaw", "2026.5.12"],
   ] as const)("refreshes %s candidate authorization status without connecting, selecting, or probing", async (
     adapter,
     label,
@@ -3507,7 +2382,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter, label, path }]);
@@ -3530,11 +2404,8 @@ describe("public Agent Connection Host contract", () => {
     expect(readFileSync(setupResult.configPath, "utf8")).toBe(configBefore);
     expect(setupResult.host.listAgentConnectionRecords()
       .some((record) => record.kind === "supported-agent")).toBe(false);
-    expect(setupResult.codex.probe).not.toHaveBeenCalled();
     expect(setupResult.codex.probeSummary).not.toHaveBeenCalled();
-    expect(setupResult.claude.probe).not.toHaveBeenCalled();
     expect(setupResult.claude.probeSummary).not.toHaveBeenCalled();
-    expect(setupResult.conversationOnly.probe).not.toHaveBeenCalled();
     setupResult.host.close();
   });
 
@@ -3544,7 +2415,6 @@ describe("public Agent Connection Host contract", () => {
       transcription: { engine: "local", language: "zh" },
       intelligence: {
         summary: { provider: "xai", model: "grok-summary-exact" },
-        conversation: { provider: "xai", model: "grok-conversation-exact" },
       },
       llm: { agent: { provider: "auto" } },
     }, [{ adapter: "codex", label: "Codex", path: "/fake/bin/codex" }]);

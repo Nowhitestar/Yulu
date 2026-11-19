@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import ipaddress
 import json
 import os
 import re
@@ -19,7 +18,6 @@ import sys
 import tempfile
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 import uuid
 import wave
@@ -55,7 +53,6 @@ LEGACY_MEDIA_MIGRATION_VERSION = 1
 MEDIA_COPY_CHUNK_BYTES = 1024 * 1024
 DEFAULT_PROMPT_SLUG = "dictation-cleanup"
 DEFAULT_TRANSLATE_PROMPT_SLUG = "dictation-translate"
-DEFAULT_UI_BASE_URL = "http://127.0.0.1:7777"
 DEFAULT_CONTEXT_LIMIT = 240
 DEFAULT_HERMES_TIMEOUT_SEC = 30.0
 DEFAULT_HERMES_DEADLINE_SEC = 30.0
@@ -693,7 +690,7 @@ def start_realtime_dictation(state: dict[str, Any]) -> None:
                 "timeoutMs": REALTIME_OPERATION_TIMEOUT_MS,
                 **({"dictationSessionId": state["session_id"]} if (
                     state.get("session_id") and state.get("engine") == "xai"
-                    and state.get("intent") == "dictation" and not state.get("target_language")
+                    and not state.get("target_language")
                     and state.get("prompt_slug") != "none"
                 ) else {}),
             },
@@ -1025,11 +1022,8 @@ def start_recording(
     target_language: str,
     silence_seconds: float,
     capture_target: bool = True,
-    intent: str = "dictation",
     target_bundle_id: str = "",
     target_app_name: str = "",
-    voice_session_id: str = "",
-    voice_scope: str = "general",
 ) -> dict[str, Any]:
     started = time.monotonic()
     migrate_legacy_dictation_media(
@@ -1060,14 +1054,11 @@ def start_recording(
         "prompt_slug": prompt_slug,
         "prompt_id": prompt_id,
         "target_language": target_language,
-        "intent": intent,
+        "intent": "dictation",
         "started_at": _now(),
         "realtime_starting": True,
         "capture_start_ms": int((time.monotonic() - started) * 1000),
     }
-    if intent == "voice_chat":
-        state["voice_chat_session_id"] = voice_session_id
-        state["voice_chat_scope"] = voice_scope
     if capture_target:
         if target_bundle_id or target_app_name:
             state.update({
@@ -1573,102 +1564,6 @@ def write_current_text(*, text: str, target_bundle_id: str = "", target_app_name
     return result
 
 
-def open_voice_chat_url(url: str) -> None:
-    try:
-        _socket_send(STATUS_AGENT_SOCKET, {"action": "open_voice_chat", "url": url}, timeout=2.0)
-        return
-    except DictationError:
-        pass
-    subprocess.run(
-        ["open", "-g", url],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
-class _NoHostRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-def _open_host_request_without_redirects(request: urllib.request.Request, timeout: float):
-    return urllib.request.build_opener(_NoHostRedirectHandler()).open(request, timeout=timeout)
-
-
-def _validated_voice_chat_origin(base_url: str) -> str:
-    try:
-        parsed = urllib.parse.urlsplit(base_url.strip())
-        host = parsed.hostname or ""
-        address = ipaddress.ip_address(host)
-        port = parsed.port
-    except (ValueError, TypeError) as exc:
-        raise DictationError("voice chat URL must use the exact local Yulu Host origin") from exc
-    expected_port = urllib.parse.urlsplit(DEFAULT_UI_BASE_URL).port
-    if (
-        parsed.scheme != "http"
-        or not address.is_loopback
-        or port != expected_port
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in ("", "/")
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise DictationError("voice chat URL must use the exact local Yulu Host origin")
-    canonical_host = f"[{address.compressed}]" if address.version == 6 else address.compressed
-    return f"http://{canonical_host}:{port}"
-
-
-def send_voice_chat(
-    *,
-    question: str,
-    session_id: str = "",
-    base_url: str = DEFAULT_UI_BASE_URL,
-    open_console: bool = True,
-    scope: str | None = None,
-) -> dict[str, Any]:
-    host_origin = _validated_voice_chat_origin(base_url)
-    token_doc = _host_token_document()
-    token = str(token_doc.get("token") or "").strip()
-    if not token:
-        raise DictationError("Yulu Host token is unavailable")
-    payload = {"question": question, "defer": True}
-    if scope is not None:
-        if scope not in {"general", "meetings"}:
-            raise DictationError("invalid voice chat scope")
-        payload["scope"] = scope
-    if session_id:
-        payload["sessionId"] = session_id
-    data = json.dumps(payload).encode("utf-8")
-    url = host_origin + "/api/voice-chat/ask"
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with _open_host_request_without_redirects(req, timeout=10) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise DictationError(f"voice chat failed: HTTP {exc.code} {body}") from exc
-    except OSError as exc:
-        raise DictationError(f"voice chat unavailable: {exc}") from exc
-    if not result.get("ok"):
-        raise DictationError(f"voice chat failed: {result.get('error', 'unknown error')}")
-    if open_console and result.get("url"):
-        relative_url = str(result["url"])
-        if not relative_url.startswith("/") or relative_url.startswith("//"):
-            raise DictationError("voice chat failed: invalid local console URL")
-        open_voice_chat_url(host_origin + relative_url)
-    return result
-
-
 def warm_dictation_engine(*, engine: str, timeout_sec: float, target_language: str = "") -> dict[str, Any]:
     payload = _host_agent_request(
         "/api/agent/transcription/warm",
@@ -1749,8 +1644,7 @@ def process_audio(
     cleanup_source = "final"
     preview_saved_ms = 0
     style = ""
-    if (not target_language and engine == "xai" and prompt_slug != "none"
-            and state.get("intent") != "voice_chat"):
+    if not target_language and engine == "xai" and prompt_slug != "none":
         postprocess_t0 = time.monotonic()
         notify_dictation_progress("cleaning")
         cleanup = cleanup_dictation_text(
@@ -1893,21 +1787,6 @@ def build_parser() -> argparse.ArgumentParser:
     once.add_argument("--duration", type=float, default=1.2, help="recording duration in seconds")
     once.add_argument("--deadline-sec", type=float, default=None, help=f"overall once wall-clock budget, default {DEFAULT_HERMES_DEADLINE_SEC}")
     once.add_argument("--silence-seconds", type=float, default=3.0)
-    ask = sub.add_parser("ask", help="record a question, send it to Agent Console, and open the chat")
-    _add_common(ask)
-    ask.add_argument("--duration", type=float, default=1.2, help="recording duration in seconds")
-    ask.add_argument("--deadline-sec", type=float, default=None, help=f"overall capture+transcription budget before agent call, default {DEFAULT_HERMES_DEADLINE_SEC}")
-    ask.add_argument("--silence-seconds", type=float, default=3.0)
-    ask.add_argument("--session-id", default="", help="continue an existing Agent Console session")
-    ask.add_argument("--ui-url", default=DEFAULT_UI_BASE_URL, help=f"Yulu UI base URL, default {DEFAULT_UI_BASE_URL}")
-    ask.add_argument("--no-open", action="store_true", help="do not open Agent Console after sending")
-    ask_toggle = sub.add_parser("ask-toggle", help="start a voice-chat recording, or stop and send it")
-    _add_common(ask_toggle)
-    ask_toggle.add_argument("--deadline-sec", type=float, default=None, help=f"post-stop wall-clock budget, default {DEFAULT_HERMES_DEADLINE_SEC}")
-    ask_toggle.add_argument("--silence-seconds", type=float, default=MANUAL_SILENCE_SECONDS)
-    ask_toggle.add_argument("--session-id", default="", help="continue an existing Agent Console session")
-    ask_toggle.add_argument("--ui-url", default=DEFAULT_UI_BASE_URL, help=f"Yulu UI base URL, default {DEFAULT_UI_BASE_URL}")
-    ask_toggle.add_argument("--no-open", action="store_true", help="do not open Agent Console after sending")
     warm = sub.add_parser("warm", help="pre-warm the selected Yulu transcription engine")
     warm.add_argument("--engine", help="deprecated compatibility option; Yulu uses the engine selected in Settings")
     warm.add_argument("--translate-to", default=None, help="pre-warm the translation engine for this target language")
@@ -1946,8 +1825,8 @@ def main(argv: list[str] | None = None) -> int:
         engine = resolve_engine(config, args.engine)
         language = resolve_language(config, args.language)
         target_language = str(args.translate_to or "").strip()
-        stored_state = _state() if args.cmd in ("stop", "toggle", "ask", "ask-toggle") else {}
-        active_state = active_dictation_state() if args.cmd in ("toggle", "ask-toggle") else None
+        stored_state = _state() if args.cmd in ("stop", "toggle") else {}
+        active_state = active_dictation_state() if args.cmd == "toggle" else None
         toggle_stops = active_state is not None
         # A stop belongs to the active capture. Failed/completed sessions must
         # never supply the mode of a new Fn recording, nor may the stop key change it.
@@ -1987,22 +1866,15 @@ def main(argv: list[str] | None = None) -> int:
             deadline_sec = float(args.deadline_sec)
         if args.no_copy and not args.no_paste:
             raise DictationError("--no-copy requires --no-paste because paste uses the clipboard")
-        will_copy = False if args.cmd in ("ask", "ask-toggle") else not args.no_copy
-        will_paste = False if args.cmd in ("ask", "ask-toggle") else not args.no_paste
+        will_copy = not args.no_copy
+        will_paste = not args.no_paste
         deadline_reserve_sec = (
             PASTE_RESERVE_SEC if will_paste else
             CLIPBOARD_RESERVE_SEC if will_copy else
             DEADLINE_RESERVE_SEC
         )
 
-        previous_voice_session_id = str(stored_state.get("voice_chat_session_id") or "") if args.cmd in ("ask", "ask-toggle") else ""
-        voice_scope = str(dict_cfg.get("voice_chat_scope") or "general")
-        if stored_state.get("voice_chat_scope", "meetings") != voice_scope:
-            previous_voice_session_id = ""
-        if args.cmd == "ask-toggle" and toggle_stops and str(active_state.get("intent") or "dictation") != "voice_chat":
-            raise DictationError("active dictation is not voice chat")
-
-        if args.cmd == "start" or (args.cmd in ("toggle", "ask-toggle") and not toggle_stops):
+        if args.cmd == "start" or (args.cmd == "toggle" and not toggle_stops):
             state = start_recording(
                 engine=engine,
                 language=language,
@@ -2011,16 +1883,13 @@ def main(argv: list[str] | None = None) -> int:
                 target_language=target_language,
                 silence_seconds=args.silence_seconds,
                 capture_target=not args.no_paste,
-                intent="voice_chat" if args.cmd == "ask-toggle" else "dictation",
-                voice_session_id=getattr(args, "session_id", "") or previous_voice_session_id,
-                voice_scope=voice_scope,
                 target_bundle_id=args.target_bundle_id,
                 target_app_name=args.target_app_name,
             )
             _print({"text": state["audio_path"], "action": "start", **state}, as_json=args.json)
             return 0
 
-        if args.cmd in ("once", "ask"):
+        if args.cmd == "once":
             once_started = time.monotonic()
             stop_started = None
             state = start_recording(
@@ -2031,9 +1900,6 @@ def main(argv: list[str] | None = None) -> int:
                 target_language=target_language,
                 silence_seconds=args.silence_seconds,
                 capture_target=not args.no_paste,
-                intent="voice_chat" if args.cmd == "ask" else "dictation",
-                voice_session_id=getattr(args, "session_id", "") or previous_voice_session_id,
-                voice_scope=voice_scope,
                 target_bundle_id=args.target_bundle_id,
                 target_app_name=args.target_app_name,
             )
@@ -2078,23 +1944,11 @@ def main(argv: list[str] | None = None) -> int:
             result["wall_ms"] = int((time.monotonic() - stop_started) * 1000)
         if toggle_stops:
             result["action"] = "stop"
-        if args.cmd not in ("ask", "ask-toggle"):
-            try:
-                append_history(result)
-            except Exception:
-                pass
-        if args.cmd in ("ask", "ask-toggle"):
-            result["chat"] = send_voice_chat(
-                question=result["text"],
-                session_id=args.session_id or previous_voice_session_id,
-                base_url=args.ui_url,
-                open_console=not args.no_open,
-                scope=voice_scope,
-            )
+        try:
+            append_history(result)
+        except Exception:
+            pass
         next_state: dict[str, Any] = {"last_result": result, "updated_at": _now()}
-        if args.cmd in ("ask", "ask-toggle"):
-            next_state["voice_chat_session_id"] = str(result["chat"].get("sessionId") or previous_voice_session_id)
-            next_state["voice_chat_scope"] = voice_scope
         _write_json(STATE_PATH, next_state)
         _print(result, as_json=args.json)
         return 0

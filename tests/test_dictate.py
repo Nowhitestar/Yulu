@@ -45,18 +45,17 @@ def test_native_progress_is_opt_in_bounded_and_cannot_break_capture(monkeypatch)
     assert calls[0][2]["timeout"] <= 0.1
 
 
-@pytest.mark.parametrize("engine,intent,target,prompt,allowed", [
-    ("xai", "dictation", "", "dictation-cleanup", True),
-    ("local", "dictation", "", "dictation-cleanup", False),
-    ("xai", "voice_chat", "", "dictation-cleanup", False),
-    ("xai", "dictation", "English", "dictation-translate", False),
-    ("xai", "dictation", "", "none", False),
+@pytest.mark.parametrize("engine,target,prompt,allowed", [
+    ("xai", "", "dictation-cleanup", True),
+    ("local", "", "dictation-cleanup", False),
+    ("xai", "English", "dictation-translate", False),
+    ("xai", "", "none", False),
 ])
-def test_only_normal_selected_xai_dictation_enables_preview(monkeypatch, engine, intent, target, prompt, allowed):
+def test_only_normal_selected_xai_dictation_enables_preview(monkeypatch, engine, target, prompt, allowed):
     calls = []
     monkeypatch.setattr(dictate, "_host_agent_request", lambda path, payload, **kwargs: calls.append(payload) or {"ok": True})
     dictate.start_realtime_dictation({"session_id": "test-session", "audio_path": "/test.wav", "language": "zh",
-        "engine": engine, "intent": intent, "target_language": target, "prompt_slug": prompt})
+        "engine": engine, "intent": "dictation", "target_language": target, "prompt_slug": prompt})
     assert calls[0].get("dictationSessionId") == ("test-session" if allowed else None)
 
 
@@ -919,8 +918,7 @@ def test_start_recording_starts_host_realtime_without_legacy_sidecar(monkeypatch
     assert host_calls[0][1]["replaceActive"] is False
 
 
-@pytest.mark.parametrize("intent", ["dictation", "voice_chat"])
-def test_start_recording_persists_state_before_realtime_start(monkeypatch, tmp_path, intent):
+def test_start_recording_persists_state_before_realtime_start(monkeypatch, tmp_path):
     state_path = tmp_path / "dictation" / "state.json"
     audio_path = tmp_path / "dictation.wav"
     feedback = []
@@ -941,9 +939,9 @@ def test_start_recording_persists_state_before_realtime_start(monkeypatch, tmp_p
         persisted = json.loads(state_path.read_text(encoding="utf-8"))
         assert persisted["audio_path"] == state["audio_path"]
         assert persisted["realtime_starting"] is True
-        if intent == "voice_chat":
-            assert persisted["voice_chat_session_id"] == "follow-up-session"
-            assert persisted["voice_chat_scope"] == "general"
+        assert persisted["intent"] == "dictation"
+        assert "voice_chat_session_id" not in persisted
+        assert "voice_chat_scope" not in persisted
 
     monkeypatch.setattr(dictate, "DICTATION_DIR", tmp_path / "dictation")
     monkeypatch.setattr(dictate, "STATE_PATH", state_path)
@@ -958,9 +956,6 @@ def test_start_recording_persists_state_before_realtime_start(monkeypatch, tmp_p
         prompt_id=None,
         target_language="",
         silence_seconds=3600,
-        intent=intent,
-        voice_session_id="follow-up-session",
-        voice_scope="general",
     )
 
 
@@ -1438,243 +1433,6 @@ def test_plain_dictation_ignores_configured_translate_target(monkeypatch, tmp_pa
     assert observed["target_language"] == ""
 
 
-def test_ask_sends_voice_chat_without_clipboard(monkeypatch, tmp_path):
-    observed = {}
-    state = {
-        "audio_path": str(tmp_path / "dictation.wav"),
-        "engine": "hermes",
-        "language": "en",
-        "prompt_slug": "dictation-cleanup",
-        "stopped_at": "2026-06-30T18:33:00",
-    }
-
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
-    monkeypatch.setattr(dictate, "start_recording", lambda **kwargs: state)
-    monkeypatch.setattr(dictate, "stop_recording", lambda: state)
-    monkeypatch.setattr(dictate.time, "sleep", lambda seconds: None)
-
-    def fake_process(**kwargs):
-        observed["process"] = kwargs
-        return {
-            "text": "what did we decide yesterday?",
-            "audio_path": str(tmp_path / "dictation.wav"),
-            "engine": "hermes",
-            "language": "en",
-            "prompt_slug": "dictation-cleanup",
-            "prompt_id": None,
-            "target_language": "",
-            "copied": False,
-            "pasted": False,
-            "context_ms": 0,
-            "post_stop_ms": 1,
-        }
-
-    def fake_send_voice_chat(**kwargs):
-        observed["chat"] = kwargs
-        return {"ok": True, "sessionId": "s1", "url": "/voice-chat?session=s1"}
-
-    monkeypatch.setattr(dictate, "process_audio", fake_process)
-    monkeypatch.setattr(dictate, "send_voice_chat", fake_send_voice_chat)
-
-    assert dictate.main(["ask", "--session-id", "s1", "--ui-url", "http://127.0.0.1:7777", "--no-open"]) == 0
-    assert observed["process"]["copy"] is False
-    assert observed["process"]["paste"] is False
-    assert observed["chat"]["question"] == "what did we decide yesterday?"
-    assert observed["chat"]["session_id"] == "s1"
-    assert observed["chat"]["open_console"] is False
-
-
-@pytest.mark.parametrize("previous_scope,expected_session", [("general", "prev-session"), ("meetings", ""), (None, "")])
-def test_ask_reuses_previous_voice_chat_session(monkeypatch, tmp_path, previous_scope, expected_session):
-    observed = {"writes": []}
-    state = {
-        "audio_path": str(tmp_path / "dictation.wav"),
-        "engine": "hermes",
-        "language": "en",
-        "prompt_slug": "dictation-cleanup",
-        "stopped_at": "2026-06-30T18:34:00",
-    }
-
-    previous = {"voice_chat_session_id": "prev-session"}
-    if previous_scope is not None:
-        previous["voice_chat_scope"] = previous_scope
-    monkeypatch.setattr(dictate, "_state", lambda: previous)
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
-    monkeypatch.setattr(dictate, "start_recording", lambda **kwargs: state)
-    monkeypatch.setattr(dictate, "stop_recording", lambda: state)
-    monkeypatch.setattr(dictate.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(dictate, "_write_json", lambda path, payload: observed["writes"].append(payload))
-    monkeypatch.setattr(dictate, "process_audio", lambda **kwargs: {
-        "text": "continue this chat",
-        "audio_path": str(tmp_path / "dictation.wav"),
-        "engine": "hermes",
-        "language": "en",
-        "prompt_slug": "dictation-cleanup",
-        "prompt_id": None,
-        "target_language": "",
-        "copied": False,
-        "pasted": False,
-        "context_ms": 0,
-        "post_stop_ms": 1,
-    })
-
-    def fake_send_voice_chat(**kwargs):
-        observed["chat"] = kwargs
-        return {"ok": True, "sessionId": "prev-session", "url": "/voice-chat?session=prev-session"}
-
-    monkeypatch.setattr(dictate, "send_voice_chat", fake_send_voice_chat)
-
-    assert dictate.main(["ask", "--no-open"]) == 0
-    assert observed["chat"]["session_id"] == expected_session
-    assert observed["chat"]["scope"] == "general"
-    assert observed["writes"][-1]["voice_chat_session_id"] == "prev-session"
-
-
-def test_ask_toggle_starts_voice_chat_recording(monkeypatch, tmp_path):
-    observed = {}
-
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
-    monkeypatch.setattr(dictate, "active_dictation_state", lambda: None)
-
-    def fake_start(**kwargs):
-        observed.update(kwargs)
-        return {"audio_path": str(tmp_path / "dictation.wav"), "intent": kwargs["intent"]}
-
-    monkeypatch.setattr(dictate, "start_recording", fake_start)
-
-    assert dictate.main(["ask-toggle", "--no-paste", "--no-copy"]) == 0
-    assert observed["intent"] == "voice_chat"
-    assert observed["capture_target"] is False
-
-
-def test_ask_toggle_stops_and_sends_voice_chat(monkeypatch, tmp_path):
-    observed = {}
-    state = {
-        "audio_path": str(tmp_path / "dictation.wav"),
-        "engine": "hermes",
-        "language": "en",
-        "prompt_slug": "dictation-cleanup",
-        "intent": "voice_chat",
-    }
-
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
-    monkeypatch.setattr(dictate, "active_dictation_state", lambda: state)
-    monkeypatch.setattr(dictate, "stop_recording", lambda: state)
-
-    def fake_process(**kwargs):
-        observed["process"] = kwargs
-        return {
-            "text": "continue this chat",
-            "audio_path": str(tmp_path / "dictation.wav"),
-            "engine": "hermes",
-            "language": "en",
-            "prompt_slug": "dictation-cleanup",
-            "prompt_id": None,
-            "target_language": "",
-            "copied": False,
-            "pasted": False,
-            "context_ms": 0,
-            "post_stop_ms": 1,
-        }
-
-    def fake_send_voice_chat(**kwargs):
-        observed["chat"] = kwargs
-        return {"ok": True, "sessionId": "s1", "url": "/voice-chat?session=s1"}
-
-    monkeypatch.setattr(dictate, "process_audio", fake_process)
-    monkeypatch.setattr(dictate, "send_voice_chat", fake_send_voice_chat)
-
-    assert dictate.main(["ask-toggle", "--session-id", "s1", "--no-open"]) == 0
-    assert observed["process"]["copy"] is False
-    assert observed["process"]["paste"] is False
-    assert observed["chat"]["question"] == "continue this chat"
-    assert observed["chat"]["session_id"] == "s1"
-
-
-def test_ask_toggle_rejects_plain_dictation(monkeypatch, tmp_path, capsys):
-    state = {"audio_path": str(tmp_path / "dictation.wav"), "intent": "dictation"}
-
-    monkeypatch.setattr(dictate, "_config", lambda: {"transcription": {"dictation": {"engine": "hermes"}}})
-    monkeypatch.setattr(dictate, "active_dictation_state", lambda: state)
-    monkeypatch.setattr(dictate, "stop_recording", lambda: (_ for _ in ()).throw(AssertionError("unexpected stop")))
-
-    assert dictate.main(["ask-toggle"]) == 1
-    assert "active dictation is not voice chat" in capsys.readouterr().err
-
-
-def test_send_voice_chat_requests_deferred_answer(monkeypatch):
-    observed = {}
-
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def read(self):
-            return b'{"ok":true,"sessionId":"s1","url":"/voice-chat?session=s1","answer":"","deferred":true}'
-
-    def fake_open(req, timeout):
-        observed["timeout"] = timeout
-        observed["url"] = req.full_url
-        observed["body"] = json.loads(req.data.decode("utf-8"))
-        observed["authorization"] = req.get_header("Authorization")
-        return FakeResponse()
-
-    monkeypatch.setattr(dictate, "_load_json", lambda _path: {"token": "voice-host-token"})
-    monkeypatch.setattr(dictate, "_open_host_request_without_redirects", fake_open)
-    monkeypatch.setattr(dictate, "open_voice_chat_url", lambda url: observed.setdefault("opened", url))
-
-    result = dictate.send_voice_chat(question="hello", session_id="s1", base_url="http://127.0.0.1:7777")
-
-    assert result["ok"] is True
-    assert observed["url"] == "http://127.0.0.1:7777/api/voice-chat/ask"
-    assert observed["body"] == {"question": "hello", "defer": True, "sessionId": "s1"}
-    assert observed["authorization"] == "Bearer voice-host-token"
-    assert observed["opened"] == "http://127.0.0.1:7777/voice-chat?session=s1"
-
-
-@pytest.mark.parametrize("base_url", [
-    "https://attacker.example",
-    "http://attacker.example:7777",
-    "http://localhost:7777",
-    "http://127.0.0.1:8888",
-    "http://" + "user:pass@" + "127.0.0.1:7777",
-    "http://127.0.0.1:7777/other",
-    "http://127.0.0.1:7777?next=https://attacker.example",
-    "http://127.0.0.1:7777#attacker",
-])
-def test_send_voice_chat_never_exposes_bearer_to_untrusted_ui_url(monkeypatch, base_url):
-    monkeypatch.setattr(dictate, "_load_json", lambda _path: {"token": "voice-host-token"})
-    monkeypatch.setattr(
-        dictate,
-        "_open_host_request_without_redirects",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("request must not be sent")),
-    )
-
-    with pytest.raises(dictate.DictationError, match="local Yulu Host origin"):
-        dictate.send_voice_chat(question="hello", base_url=base_url)
-
-
-def test_voice_chat_redirect_handler_refuses_cross_origin_redirect_with_bearer():
-    request = dictate.urllib.request.Request(
-        "http://127.0.0.1:7777/api/voice-chat/ask",
-        headers={"Authorization": "Bearer voice-host-token"},
-        method="POST",
-    )
-    redirected = dictate._NoHostRedirectHandler().redirect_request(
-        request,
-        None,
-        302,
-        "Found",
-        {},
-        "https://attacker.example/collect",
-    )
-
-    assert redirected is None
-
-
 def test_warm_resolves_dictation_engine(monkeypatch, capsys):
     observed = {}
 
@@ -1744,43 +1502,6 @@ def test_warm_translation_uses_same_host_audio_endpoint(monkeypatch):
     assert result["engine"] == "xai"
     assert result["warmed_engine"] == "xai"
     assert result["target_language"] == "English"
-
-
-def test_voice_chat_opens_status_agent_window(monkeypatch):
-    observed = {}
-
-    def fake_socket_send(path, payload, **kwargs):
-        observed["path"] = path
-        observed["payload"] = payload
-        observed["kwargs"] = kwargs
-        return {"ok": True}
-
-    monkeypatch.setattr(dictate, "_socket_send", fake_socket_send)
-    monkeypatch.setattr(dictate.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected fallback")))
-
-    dictate.open_voice_chat_url("http://127.0.0.1:7777/voice-chat?session=s1")
-    assert observed["path"] == dictate.STATUS_AGENT_SOCKET
-    assert observed["payload"] == {
-        "action": "open_voice_chat",
-        "url": "http://127.0.0.1:7777/voice-chat?session=s1",
-    }
-
-
-def test_voice_chat_open_falls_back_to_browser(monkeypatch):
-    observed = {}
-
-    def fail_socket_send(*args, **kwargs):
-        raise dictate.DictationError("status agent down")
-
-    def fake_run(cmd, **kwargs):
-        observed["cmd"] = cmd
-        return None
-
-    monkeypatch.setattr(dictate, "_socket_send", fail_socket_send)
-    monkeypatch.setattr(dictate.subprocess, "run", fake_run)
-
-    dictate.open_voice_chat_url("http://127.0.0.1:7777/voice-chat?session=s1")
-    assert observed["cmd"] == ["open", "-g", "http://127.0.0.1:7777/voice-chat?session=s1"]
 
 
 def test_paste_uses_status_agent_ipc(monkeypatch):
@@ -2257,11 +1978,10 @@ def test_normalize_text_preserves_paragraphs_and_lists():
     assert dictate.normalize_text("第 一 段 。\n\n1. AgentKey test\n2. Yulu") == "第一段。\n\n1. AgentKey test\n2. Yulu"
 
 
-@pytest.mark.parametrize("intent,target_language", [("dictation", "English"), ("voice_chat", "")])
-def test_voice_questions_and_translation_start_streaming(monkeypatch, intent, target_language):
+def test_translation_starts_streaming(monkeypatch):
     calls = []
     monkeypatch.setattr(dictate, "_host_agent_request", lambda path, payload, **kwargs: calls.append((path, payload, kwargs)) or {"ok": True})
-    state = {"audio_path": "/tmp/test.wav", "language": "zh", "intent": intent, "target_language": target_language}
+    state = {"audio_path": "/tmp/test.wav", "language": "zh", "intent": "dictation", "target_language": "English"}
     dictate.start_realtime_dictation(state)
     assert state["realtime_started"] is True
     assert calls[0][0] == "/api/recordings/realtime/start"
@@ -2320,14 +2040,16 @@ def test_cleanup_allows_longer_responses_but_respects_total_budget(monkeypatch):
     assert calls[-1][1]["timeout_sec"] == 3
 
 
-def test_voice_question_is_not_rewritten_by_cleanup(monkeypatch, tmp_path):
-    monkeypatch.setattr(dictate, "render_context_prompt", lambda **kwargs: pytest.fail("voice questions must not load dictation templates"))
-    monkeypatch.setattr(dictate, "transcribe_dictation", lambda **kwargs: {"text": "今天的会议讲了什么？"})
-    monkeypatch.setattr(dictate, "cleanup_dictation_text", lambda **kwargs: pytest.fail("questions must not be polished"))
-    result = dictate.process_audio(state={"audio_path": str(tmp_path / "speech.wav"), "intent": "voice_chat"}, engine="xai", language="zh",
-        prompt_slug="dictation-cleanup", prompt_id=None, target_language="", timeout_sec=5,
-        copy=False, paste=False, context_limit=240)
-    assert result["text"] == "今天的会议讲了什么？"
+@pytest.mark.parametrize("command", ["ask", "ask-toggle"])
+def test_retired_voice_chat_commands_are_rejected(monkeypatch, capsys, command):
+    monkeypatch.setattr(dictate, "start_recording", lambda **kwargs: pytest.fail("a retired command must not start capture"))
+    monkeypatch.setattr(dictate, "_host_agent_request", lambda *args, **kwargs: pytest.fail("a retired command must not reach the Host"))
+    with pytest.raises(SystemExit) as excinfo:
+        dictate.main([command, "--json"])
+    assert excinfo.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+    assert not hasattr(dictate, "send_voice_chat")
+    assert not hasattr(dictate, "open_voice_chat_url")
 
 
 def test_process_audio_copies_text(monkeypatch, tmp_path):
@@ -3067,8 +2789,7 @@ def test_activate_timeout_does_not_block_paste(monkeypatch):
     assert calls[-1] == ["osascript", "-e", 'tell application "System Events" to keystroke "v" using command down']
 
 
-@pytest.mark.parametrize('command', ['toggle', 'ask-toggle'])
-def test_fresh_capture_never_inherits_failed_translation(monkeypatch, tmp_path, command):
+def test_fresh_capture_never_inherits_failed_translation(monkeypatch, tmp_path):
     state_path = tmp_path / 'state.json'
     state_path.write_text(json.dumps({'audio_path': '/old.wav', 'target_language': 'English',
         'prompt_slug': 'dictation-translate', 'stopped_at': 'yesterday'}))
@@ -3077,7 +2798,7 @@ def test_fresh_capture_never_inherits_failed_translation(monkeypatch, tmp_path, 
     monkeypatch.setattr(dictate, '_config', lambda: {'transcription': {'engine': 'xai'}})
     monkeypatch.setattr(dictate, 'active_dictation_state', lambda: None)
     monkeypatch.setattr(dictate, 'start_recording', lambda **kwargs: observed.update(kwargs) or {'audio_path': '/new.wav'})
-    assert dictate.main([command, '--json', '--no-paste', '--no-copy']) == 0
+    assert dictate.main(['toggle', '--json', '--no-paste', '--no-copy']) == 0
     assert observed['target_language'] == ''
     assert observed['prompt_slug'] != 'dictation-translate'
 

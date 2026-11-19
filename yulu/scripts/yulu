@@ -75,19 +75,14 @@ Commands:
   logs [daemon]    Tail logs. Daemon = audio_daemon (default), scheduler, detector, calendar, ui
   record start "title"   Manually start a recording
   record stop            Manually stop the current recording
-  dictate start|stop|once|toggle|ask
+  dictate start|stop|once|toggle
                     Experimental low-latency voice input. Mic-only recording,
                     selected Yulu audio engine, prompt/vocab context, clipboard, optional paste
                     Use --translate-to "English" for prompt-based quick translation
-                    Use ask to send a voice question into Agent Console chat
   status-agent dictate
                     Toggle dictation through the running menu-bar agent IPC
-  status-agent open-agent-console
-                    Open Agent Console Ask/chat surface through the menu-bar agent IPC
-  status-agent voice-chat
-                    Record a voice question and send it into Agent Console chat
   status-agent hotkeys
-                    Print configured global shortcuts for dictation, translation, and voice chat
+                    Print configured global shortcuts for dictation and translation
   repair-permissions     Open/reset Screen & System Audio Recording permission helper
   search "term" [--since 7d --type meeting --in summary --json --open]
                     Search across meetings and summaries

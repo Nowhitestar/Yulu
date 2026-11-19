@@ -50,7 +50,6 @@ describe("sharingRouter", () => {
     };
     const providerSelections = {
       summary: { provider: "xai", model: "grok-4.6" },
-      conversation: { provider: "agent", connectionId: "claude-code", model: "claude-sonnet-5" },
     };
     const ctx = {
       uiMutationAuthorized: true,

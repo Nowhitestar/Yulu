@@ -326,7 +326,6 @@ describe("recordings router", () => {
       transcription: {},
       intelligence: {
         summary: { provider: "xai", model: "grok-manual-pinned" },
-        conversation: { provider: "agent", model: "runtime-managed" },
       },
       llm: { agent: { provider: "hermes" } },
       agent_pipeline: { enabled: true, auto_process_recordings: false },

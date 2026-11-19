@@ -1,18 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { HostStore } from "../../src/hostStore.js";
-import {
-  migrateExistingOnboardingOutcomes,
-  onboardingRouter,
-} from "../../src/routers/onboarding.js";
-import { CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS } from "../../src/onboarding.js";
+import { onboardingRouter, reconcileOnboardingCompletion } from "../../src/routers/onboarding.js";
 import { createCaller, type AppContext } from "../../src/trpc.js";
 import { startServer } from "../../src/server.js";
-import { ConversationAdoptionEvidenceUnavailableError } from "../../src/agentConnections.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -32,34 +29,23 @@ function activationEvidence() {
   };
 }
 
-function exactConversationProof() {
-  return {
-    kind: "agent-capability-probe" as const,
-    reference: "00000000-0000-4000-8000-000000000154",
-    connectionId: "codex",
-    adapter: "codex",
-    provider: "codex",
-    model: "gpt-5.6-sol",
-    credentialSource: null,
-    testedAt: "2026-08-29T00:10:00.000Z",
-    runtimeEvidence: {
-      adapter: "codex",
-      transport: "codex-app-server-stdio",
-      runtimeVersion: "0.144.4",
-      authorizationClass: "chatgpt" as const,
-      requestedProvider: "openai",
-      requestedModel: "gpt-5.6-sol",
-      actualProvider: "openai",
-      actualModel: "gpt-5.6-sol",
-      requestId: "turn-154",
-      sessionId: "thread-154",
-      terminalStatus: "ready" as const,
-      fallbackOccurred: false,
-    },
-  };
-}
+/**
+ * The previous version required four Optional Capability Outcomes. Its
+ * requirements are spelled out here so a database can be left exactly as that
+ * version would have: Core Activation recorded, but no Onboarding Completion
+ * while Conversation or the Agent Calendar Connector was undecided.
+ */
+const PREVIOUS_COMPLETION_REQUIREMENTS = {
+  version: "phase-13-v1",
+  optionalCapabilities: [
+    { capability: "conversation", contractVersion: "conversation-v1" },
+    { capability: "calendar-source", contractVersion: "calendar-source-v1" },
+    { capability: "agent-calendar-connector", contractVersion: "agent-calendar-connector-v1" },
+    { capability: "sharing", contractVersion: "sharing-v1" },
+  ],
+};
 
-describe("existing Onboarding outcome migration", () => {
+describe("Onboarding Completion after Conversation was retired (ADR-010)", () => {
   let root = "";
   let host: HostStore | undefined;
 
@@ -85,140 +71,142 @@ describe("existing Onboarding outcome migration", () => {
     return host;
   }
 
-  function context(store: HostStore, conversationAdoptionEvidence = vi.fn(async () => exactConversationProof())) {
-    return {
-      uiMutationAuthorized: true,
-      host: store,
-      agentConnections: {
-        view: vi.fn(async () => ({
-          selections: { conversation: { connectionId: "codex", model: "gpt-5.6-sol" } },
-          connections: [{
-            id: "codex",
-            capabilities: [{
-              capability: "conversation",
-              currentReadiness: {
-                status: "failed",
-                model: "gpt-5.6-sol",
-                detail: "The selected runtime is currently unavailable",
-              },
-            }],
-          }],
-        })),
-        conversationAdoptionEvidence,
-      },
-    } as unknown as AppContext;
+  function context(store: HostStore) {
+    return { uiMutationAuthorized: true, host: store } as unknown as AppContext;
   }
 
-  it("adopts only exact existing Conversation proof and keeps readiness loss separate", async () => {
-    const store = returningHost();
-    const ctx = context(store);
-    store.recordCoreActivationEvidence(
-      activationEvidence(),
-      CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS,
-    );
-    for (const capability of ["calendar-source", "agent-calendar-connector", "sharing"] as const) {
-      store.recordOptionalCapabilityOutcome({
-        onboardingVersion: "phase-13-v1",
-        capability,
-        contractVersion: `${capability}-v1`,
-        outcome: "deferred",
-        evidence: null,
-      }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
-    }
+  function defer(store: HostStore, capability: "calendar-source" | "sharing") {
+    // Recorded against the previous requirements, as the previous version did.
+    return store.recordOptionalCapabilityOutcome({
+      onboardingVersion: "phase-13-v1",
+      capability,
+      contractVersion: `${capability}-v1`,
+      outcome: "deferred",
+      evidence: null,
+    }, PREVIOUS_COMPLETION_REQUIREMENTS);
+  }
 
-    await expect(migrateExistingOnboardingOutcomes(ctx)).resolves.toMatchObject({
-      status: "completed",
-      conversation: "adopted",
-    });
-
-    const journey = await createCaller(onboardingRouter, ctx).status();
-    expect(journey).toMatchObject({
-      entry: { installationKind: "returning", shouldAutoEnter: false },
-      coreActivation: { completed: true, evidence: { taskId: "existing-activation-task" } },
-      completion: { completed: true, currentVersionCompleted: true },
-      optionalCapabilities: expect.arrayContaining([expect.objectContaining({
-        id: "conversation",
-        outcome: expect.objectContaining({ outcome: "adopted" }),
-        readiness: {
-          state: "needs_attention",
-          detail: "The selected runtime is currently unavailable",
-        },
-      })]),
-    });
-  });
-
-  it("fails closed on a legacy Conversation row that only points at configuration", async () => {
-    const store = returningHost();
-    const conversationAdoptionEvidence = vi.fn(async () => {
-      throw new ConversationAdoptionEvidenceUnavailableError("No exact selected production probe exists");
-    });
-    const ctx = context(store, conversationAdoptionEvidence);
+  function storeRetiredOutcome(store: HostStore, capability: "conversation" | "agent-calendar-connector") {
     store.db.prepare(`
       INSERT INTO optional_capability_outcomes (
         onboarding_version, capability, contract_version, outcome,
         evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
-      ) VALUES (?, 'conversation', 'conversation-v1', 'adopted', ?, ?, ?, ?)
-    `).run(
-      "phase-13-v1",
-      "legacy-configuration",
-      "selected-agent",
-      JSON.stringify({
-        capability: "conversation",
-        connectionId: "codex",
-        adapter: "codex",
-        provider: "codex",
-        model: "gpt-5.6-sol",
-        credentialSource: "runtime-oauth",
-        testedAt: "2026-08-29T00:10:00.000Z",
-        runtimeEvidence: exactConversationProof().runtimeEvidence,
-      }),
-      "2026-08-29T00:10:00.000Z",
-    );
+      ) VALUES ('phase-13-v1', ?, ?, 'deferred', NULL, NULL, NULL, '2026-08-29T00:10:00.000Z')
+    `).run(capability, `${capability}-v1`);
+  }
 
-    await expect(migrateExistingOnboardingOutcomes(ctx)).resolves.toMatchObject({
-      status: "completed",
-      conversation: "unresolved",
-    });
+  it("completes a returning user whose only undecided steps were the retired ones", async () => {
+    const store = returningHost();
+    store.recordCoreActivationEvidence(activationEvidence(), PREVIOUS_COMPLETION_REQUIREMENTS);
+    defer(store, "calendar-source");
+    defer(store, "sharing");
+    const ctx = context(store);
     await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
-      optionalCapabilities: expect.arrayContaining([
-        expect.objectContaining({ id: "conversation", outcome: null }),
-      ]),
+      completion: { completed: false, currentVersionCompleted: false, version: null },
     });
 
+    const completion = reconcileOnboardingCompletion(ctx);
+
+    expect(completion).toEqual({ version: "phase-13-v1", completedAt: expect.any(String) });
+    await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
+      completion: {
+        completed: true,
+        currentVersionCompleted: true,
+        version: "phase-13-v1",
+        completedAt: completion!.completedAt,
+      },
+    });
+    // A later start keeps the first completion.
+    expect(reconcileOnboardingCompletion(ctx)).toEqual(completion);
+    expect(store.db.prepare("SELECT count(*) AS count FROM onboarding_completions").get()).toEqual({ count: 1 });
+  });
+
+  it("keeps an existing completion and ignores stored outcomes of the retired steps", async () => {
+    const store = returningHost();
+    store.recordCoreActivationEvidence(activationEvidence(), PREVIOUS_COMPLETION_REQUIREMENTS);
+    storeRetiredOutcome(store, "conversation");
+    storeRetiredOutcome(store, "agent-calendar-connector");
+    defer(store, "calendar-source");
+    defer(store, "sharing");
+    // The previous version recorded this once all four of its steps were decided.
+    store.db.prepare("INSERT INTO onboarding_completions (version, completed_at) VALUES (?, ?)")
+      .run("phase-13-v1", "2026-08-29T00:12:00.000Z");
+    const before = store.getLatestOnboardingCompletion();
+    expect(before).toEqual({ version: "phase-13-v1", completedAt: "2026-08-29T00:12:00.000Z" });
+    const ctx = context(store);
+
+    expect(reconcileOnboardingCompletion(ctx)).toEqual(before);
+
+    const status = await createCaller(onboardingRouter, ctx).status();
+    expect(status.completion).toMatchObject({ completed: true, currentVersionCompleted: true });
+    expect(status.optionalCapabilities.map(({ id }: { id: string }) => id)).toEqual(["calendar-source", "sharing"]);
+    expect(store.db.prepare("SELECT count(*) AS count FROM optional_capability_outcomes").get())
+      .toEqual({ count: 4 });
+  });
+
+  it.each([
+    ["Core Activation Evidence", { activation: false, calendar: true, sharing: true }],
+    ["a Calendar Source outcome", { activation: true, calendar: false, sharing: true }],
+    ["a Sharing outcome", { activation: true, calendar: true, sharing: false }],
+  ] as const)("does not complete onboarding without %s, whatever the retired steps recorded", async (_name, has) => {
+    const store = returningHost();
+    if (has.activation) store.recordCoreActivationEvidence(activationEvidence(), PREVIOUS_COMPLETION_REQUIREMENTS);
+    storeRetiredOutcome(store, "conversation");
+    storeRetiredOutcome(store, "agent-calendar-connector");
+    if (has.calendar) defer(store, "calendar-source");
+    if (has.sharing) defer(store, "sharing");
+    const ctx = context(store);
+
+    expect(reconcileOnboardingCompletion(ctx)).toBeNull();
+
+    await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
+      completion: { completed: false, currentVersionCompleted: false },
+    });
+    expect(store.listOptionalCapabilityOutcomes().map(({ capability }) => capability))
+      .toEqual([...(has.calendar ? ["calendar-source"] : []), ...(has.sharing ? ["sharing"] : [])]);
+  });
+
+  it("leaves a fresh install untouched", async () => {
+    const store = freshHost();
+    const ctx = context(store);
+
+    expect(reconcileOnboardingCompletion(ctx)).toBeNull();
+
+    await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
+      entry: { installationKind: "fresh", shouldAutoEnter: true },
+      coreActivation: { completed: false, evidence: null },
+      completion: { completed: false, currentVersionCompleted: false },
+    });
+    expect(store.listOptionalCapabilityOutcomes()).toEqual([]);
   });
 
   it("rejects a malformed deferral row that carries hidden legacy evidence", async () => {
     const store = returningHost();
-    const conversationAdoptionEvidence = vi.fn(async () => exactConversationProof());
-    const ctx = context(store, conversationAdoptionEvidence);
+    const ctx = context(store);
     store.db.prepare(`
       INSERT INTO optional_capability_outcomes (
         onboarding_version, capability, contract_version, outcome,
         evidence_kind, evidence_reference, evidence_snapshot_json, decided_at
-      ) VALUES (?, 'conversation', 'conversation-v1', 'deferred', NULL, NULL, ?, ?)
+      ) VALUES (?, 'sharing', 'sharing-v1', 'deferred', NULL, NULL, ?, ?)
     `).run(
       "phase-13-v1",
-      JSON.stringify({ legacySelectedAgent: "hermes" }),
+      JSON.stringify({ legacyAutomaticDelivery: "hermes" }),
       "2026-08-29T00:10:00.000Z",
     );
 
-    await expect(migrateExistingOnboardingOutcomes(ctx)).resolves.toMatchObject({
-      status: "completed",
-      conversation: "unresolved",
-    });
-    expect(conversationAdoptionEvidence).not.toHaveBeenCalled();
+    expect(reconcileOnboardingCompletion(ctx)).toBeNull();
     await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
       optionalCapabilities: expect.arrayContaining([
-        expect.objectContaining({ id: "conversation", outcome: null }),
+        expect.objectContaining({ id: "sharing", outcome: null }),
       ]),
     });
 
     await expect(createCaller(onboardingRouter, ctx).deferOptionalCapability({
-      capability: "conversation",
+      capability: "sharing",
     })).resolves.toMatchObject({ outcome: "deferred", evidence: null });
     await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
       optionalCapabilities: expect.arrayContaining([
-        expect.objectContaining({ id: "conversation", outcome: expect.objectContaining({
+        expect.objectContaining({ id: "sharing", outcome: expect.objectContaining({
           outcome: "deferred",
           evidence: null,
         }) }),
@@ -228,13 +216,12 @@ describe("existing Onboarding outcome migration", () => {
 
   it("fails closed on a malformed legacy Onboarding Completion", async () => {
     const store = returningHost();
-    const ctx = context(store, vi.fn(async () => {
-      throw new ConversationAdoptionEvidenceUnavailableError("No exact selected production probe exists");
-    }));
+    const ctx = context(store);
     store.db.prepare(`
       INSERT INTO onboarding_completions (version, completed_at) VALUES (?, ?)
     `).run("phase-12-legacy", "sometime-before-upgrade");
 
+    expect(reconcileOnboardingCompletion(ctx)).toBeNull();
     await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
       coreActivation: { completed: false, evidence: null },
       completion: {
@@ -249,27 +236,22 @@ describe("existing Onboarding outcome migration", () => {
   it("repairs a malformed current completion only after exact requirements are satisfied", async () => {
     const store = returningHost();
     const ctx = context(store);
-    store.recordCoreActivationEvidence(
-      activationEvidence(),
-      CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS,
-    );
-    for (const capability of ["calendar-source", "agent-calendar-connector", "sharing"] as const) {
-      store.recordOptionalCapabilityOutcome({
-        onboardingVersion: "phase-13-v1",
-        capability,
-        contractVersion: `${capability}-v1`,
-        outcome: "deferred",
-        evidence: null,
-      }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
-    }
+    store.recordCoreActivationEvidence(activationEvidence(), PREVIOUS_COMPLETION_REQUIREMENTS);
+    defer(store, "calendar-source");
     store.db.prepare(`
       INSERT INTO onboarding_completions (version, completed_at) VALUES (?, ?)
     `).run("phase-13-v1", "malformed-current-completion");
 
-    await expect(migrateExistingOnboardingOutcomes(ctx)).resolves.toMatchObject({
-      status: "completed",
-      conversation: "adopted",
+    expect(reconcileOnboardingCompletion(ctx)).toBeNull();
+    expect(store.db.prepare(`
+      SELECT completed_at FROM onboarding_completions WHERE version = 'phase-13-v1'
+    `).get()).toEqual({ completed_at: "malformed-current-completion" });
+    await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
+      completion: { completed: false, currentVersionCompleted: false },
     });
+
+    defer(store, "sharing");
+    expect(reconcileOnboardingCompletion(ctx)).toMatchObject({ version: "phase-13-v1" });
     await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
       completion: { completed: true, currentVersionCompleted: true, version: "phase-13-v1" },
     });
@@ -278,58 +260,9 @@ describe("existing Onboarding outcome migration", () => {
     `).get()).not.toEqual({ completed_at: "malformed-current-completion" });
   });
 
-  it("preserves a prior explicit deferral and never upgrades it from later probe history", async () => {
+  it("does not adopt optional capabilities from weak legacy activity", async () => {
     const store = returningHost();
-    const conversationAdoptionEvidence = vi.fn(async () => exactConversationProof());
-    const ctx = context(store, conversationAdoptionEvidence);
-    const deferred = store.recordOptionalCapabilityOutcome({
-      onboardingVersion: "phase-13-v1",
-      capability: "conversation",
-      contractVersion: "conversation-v1",
-      outcome: "deferred",
-      evidence: null,
-    });
-
-    await expect(migrateExistingOnboardingOutcomes(ctx)).resolves.toMatchObject({
-      status: "completed",
-      conversation: "preserved",
-    });
-    expect(conversationAdoptionEvidence).not.toHaveBeenCalled();
-    await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
-      optionalCapabilities: expect.arrayContaining([
-        expect.objectContaining({ id: "conversation", outcome: deferred }),
-      ]),
-    });
-    await expect(migrateExistingOnboardingOutcomes(ctx)).resolves.toMatchObject({
-      status: "already_completed",
-    });
-  });
-
-  it("keeps fresh Onboarding untouched by returning-user migration", async () => {
-    const store = freshHost();
-    const conversationAdoptionEvidence = vi.fn(async () => exactConversationProof());
-    const ctx = context(store, conversationAdoptionEvidence);
-
-    await expect(migrateExistingOnboardingOutcomes(ctx)).resolves.toEqual({
-      status: "skipped",
-      conversation: "fresh",
-    });
-    expect(conversationAdoptionEvidence).not.toHaveBeenCalled();
-    await expect(createCaller(onboardingRouter, ctx).status()).resolves.toMatchObject({
-      entry: { installationKind: "fresh", shouldAutoEnter: true },
-      coreActivation: { completed: false, evidence: null },
-      completion: { completed: false, currentVersionCompleted: false },
-    });
-  });
-
-  it("does not auto-adopt optional capabilities from weak legacy activity", async () => {
-    const store = returningHost();
-    const conversationAdoptionEvidence = vi.fn(async () => {
-      throw new ConversationAdoptionEvidenceUnavailableError(
-        "Configuration and history are not exact adoption evidence",
-      );
-    });
-    const ctx = context(store, conversationAdoptionEvidence);
+    const ctx = context(store);
     store.upsertAgentConnectionCandidate({
       id: "candidate:hermes",
       adapter: "hermes",
@@ -350,44 +283,21 @@ describe("existing Onboarding outcome migration", () => {
       calendarSources: {
         view: () => ({ readiness: { status: "ready", detail: "Legacy calendar setting is reachable" } }),
       },
-      agentCalendarConnector: {
-        view: () => ({ readiness: { status: "ready", detail: "Legacy connector configuration was found" } }),
-      },
       sharing: {
         view: () => ({ sharingReadiness: { status: "ready", detail: "Historical delivery was logged" } }),
       },
     });
 
-    await migrateExistingOnboardingOutcomes(ctx);
+    expect(reconcileOnboardingCompletion(ctx)).toBeNull();
     const journey = await createCaller(onboardingRouter, ctx).status();
-    expect(journey.optionalCapabilities).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "conversation", outcome: null }),
-      expect.objectContaining({ id: "calendar-source", outcome: null }),
-      expect.objectContaining({ id: "agent-calendar-connector", outcome: null }),
-      expect.objectContaining({ id: "sharing", outcome: null }),
-    ]));
+    expect(journey.optionalCapabilities).toEqual([
+      expect.objectContaining({ id: "calendar-source", outcome: null, readiness: expect.objectContaining({ state: "ready" }) }),
+      expect.objectContaining({ id: "sharing", outcome: null, readiness: expect.objectContaining({ state: "ready" }) }),
+    ]);
     expect(store.listOptionalCapabilityOutcomes()).toEqual([]);
   });
 
-  it("retries after a transient evidence read instead of permanently marking it unresolved", async () => {
-    const store = returningHost();
-    const conversationAdoptionEvidence = vi.fn()
-      .mockRejectedValueOnce(new Error("Host evidence read temporarily failed"))
-      .mockResolvedValueOnce(exactConversationProof());
-    const ctx = context(store, conversationAdoptionEvidence);
-
-    await expect(migrateExistingOnboardingOutcomes(ctx))
-      .rejects.toThrow("Host evidence read temporarily failed");
-    expect(store.hasOnboardingOutcomeMigration("phase-13-onboarding-outcomes-v1")).toBe(false);
-
-    await expect(migrateExistingOnboardingOutcomes(ctx)).resolves.toMatchObject({
-      status: "completed",
-      conversation: "adopted",
-    });
-    expect(store.hasOnboardingOutcomeMigration("phase-13-onboarding-outcomes-v1")).toBe(true);
-  });
-
-  it("runs the returning-user outcome migration before serving Onboarding", async () => {
+  it("starts on the previous version's data, archives what Conversation left, and completes onboarding", async () => {
     const store = returningHost();
     const configDir = join(root, ".config", "yulu");
     const moviesDir = join(root, "Movies", "Yulu");
@@ -398,11 +308,24 @@ describe("existing Onboarding outcome migration", () => {
     const dbPath = join(root, "host.sqlite");
     const configFile = join(configDir, "config.json");
     const config = JSON.parse(readFileSync(join(HERE, "../fixtures/config.json"), "utf8"));
+    // Everything the previous version wrote for its Conversation capability.
+    config.transcription = {
+      ...config.transcription,
+      engine: "xai",
+      dictation: { ...config.transcription?.dictation, voice_chat_scope: "meetings", cleanup_model: "conversation" },
+    };
     config.intelligence = {
       summary: { provider: "xai", model: "grok-summary-exact" },
       conversation: { provider: "xai", model: "grok-conversation-exact" },
     };
+    config.status_agent = {
+      ...config.status_agent,
+      hotkeys: { ...config.status_agent?.hotkeys, voice_chat: { key: "Space", modifiers: ["fn"] } },
+    };
+    config.agent_console = { plugins: { added: ["summary"] }, destinations: {} };
     writeFileSync(configFile, JSON.stringify(config));
+    const sessionStore = join(configDir, "agent-sessions.json");
+    writeFileSync(sessionStore, "{ \"version\": 9, \"sessions\": [ truncated", { mode: 0o644 });
     const keychainHelper = join(scriptDir, "Yulu.app", "Contents", "MacOS", "xai_keychain");
     writeFileSync(keychainHelper, `#!/bin/sh
 if [ "$1" = "read" ] && [ "$#" = "1" ]; then
@@ -413,19 +336,10 @@ if [ "$1" = "read" ]; then exit 44; fi
 exit 0
 `);
     chmodSync(keychainHelper, 0o700);
-    store.recordCoreActivationEvidence(
-      activationEvidence(),
-      CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS,
-    );
-    for (const capability of ["calendar-source", "agent-calendar-connector", "sharing"] as const) {
-      store.recordOptionalCapabilityOutcome({
-        onboardingVersion: "phase-13-v1",
-        capability,
-        contractVersion: `${capability}-v1`,
-        outcome: "deferred",
-        evidence: null,
-      }, CURRENT_ONBOARDING_COMPLETION_REQUIREMENTS);
-    }
+    store.recordCoreActivationEvidence(activationEvidence(), PREVIOUS_COMPLETION_REQUIREMENTS);
+    defer(store, "calendar-source");
+    defer(store, "sharing");
+    storeRetiredOutcome(store, "agent-calendar-connector");
     store.upsertAgentConnectionRecord({
       id: "direct-xai",
       kind: "direct-provider",
@@ -434,49 +348,11 @@ exit 0
       lifecycle: "available",
       settings: { credentialSource: "oauth" },
     });
-    store.recordAgentConnectionDisclosure({
-      connectionId: "direct-xai",
-      capability: "conversation",
-      disclosureVersion: "xai-conversation-v1",
-      decision: "accepted",
-    });
-    const runtimeEvidence = {
-      adapter: "direct-xai" as const,
-      transport: "xai-http" as const,
-      runtimeVersion: null,
-      requestedProvider: "xai",
-      requestedModel: "grok-conversation-exact",
-      actualProvider: "xai",
-      actualModel: "grok-conversation-exact",
-      requestId: null,
-      sessionId: null,
-      terminalStatus: "ready" as const,
-      fallbackOccurred: false,
-      cancellationRequested: false,
-      cancellationConfirmed: null,
-    };
-    store.recordAgentConnectionReadiness({
-      connectionId: "direct-xai",
-      capability: "conversation",
-      status: "ready",
-      model: "grok-conversation-exact",
-      credentialSource: "oauth",
-      detail: "Exact production probe passed",
-      reason: null,
-      runtimeEvidence,
-      testedAt: "2026-08-29T00:10:00.000Z",
-    });
-    store.recordAgentConnectionReadiness({
-      connectionId: "direct-xai",
-      capability: "conversation",
-      status: "failed",
-      model: "grok-conversation-exact",
-      credentialSource: "oauth",
-      detail: "The selected runtime is currently unavailable",
-      reason: "readiness_failed",
-      runtimeEvidence: { ...runtimeEvidence, terminalStatus: "failed" },
-      testedAt: "2026-08-29T00:11:00.000Z",
-    });
+    store.db.prepare(`
+      INSERT INTO agent_connection_disclosures (connection_id, capability, disclosure_version, decision, decided_at)
+      VALUES ('direct-xai', 'conversation', 'xai-conversation-v1', 'accepted', '2026-08-29T00:09:00.000Z')
+    `).run();
+    expect(store.getLatestOnboardingCompletion()).toBeNull();
     store.close();
     host = undefined;
     const previousPort = process.env.YULU_UI_PORT;
@@ -495,7 +371,8 @@ exit 0
     try {
       const response = await fetch(`http://127.0.0.1:${server.address.port}/trpc/onboarding.status`);
       expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({
+      const body = await response.json() as { result: { data: { optionalCapabilities: Array<{ id: string }> } } };
+      expect(body).toMatchObject({
         result: { data: {
           entry: { installationKind: "returning", shouldAutoEnter: false },
           coreActivation: {
@@ -503,25 +380,64 @@ exit 0
             evidence: { taskId: "existing-activation-task" },
           },
           completion: { completed: true, currentVersionCompleted: true },
-          optionalCapabilities: expect.arrayContaining([
-            expect.objectContaining({
-              id: "conversation",
-              outcome: expect.objectContaining({ outcome: "adopted" }),
-              readiness: {
-                state: "needs_attention",
-                detail: "The selected runtime is currently unavailable",
-              },
-            }),
+          optionalCapabilities: [
+            expect.objectContaining({ id: "calendar-source", outcome: expect.objectContaining({ outcome: "deferred" }) }),
             expect.objectContaining({ id: "sharing", outcome: expect.objectContaining({ outcome: "deferred" }) }),
-          ]),
+          ],
         } },
       });
-      host = new HostStore(dbPath);
-      expect(host.db.prepare("SELECT count(*) AS count FROM onboarding_outcome_migrations")
-        .get()).toEqual({ count: 1 });
+
+      // Retired settings are archived privately and gone from the active config.
+      const active = JSON.parse(readFileSync(configFile, "utf8"));
+      expect(active.intelligence).toEqual({ summary: { provider: "xai", model: "grok-summary-exact" } });
+      expect(active).not.toHaveProperty("agent_console");
+      expect(active.status_agent.hotkeys).not.toHaveProperty("voice_chat");
+      expect(active.transcription.dictation).toMatchObject({
+        text_provider: "xai",
+        text_model: "grok-conversation-exact",
+      });
+      expect(active.transcription.dictation).not.toHaveProperty("voice_chat_scope");
+      expect(active.transcription.dictation).not.toHaveProperty("cleanup_model");
+      const configArchives = readdirSync(configDir).filter((name) => name.includes(".legacy-conversation."));
+      expect(configArchives).toHaveLength(1);
+      expect(statSync(join(configDir, configArchives[0]!)).mode & 0o777).toBe(0o600);
+
+      // The session store is archived unread; a truncated file does not stop the Host.
+      expect(existsSync(sessionStore)).toBe(false);
+      const sessionArchives = readdirSync(configDir).filter((name) => name.startsWith("agent-sessions.retired."));
+      expect(sessionArchives).toHaveLength(1);
+      expect(statSync(join(configDir, sessionArchives[0]!)).mode & 0o777).toBe(0o600);
+      expect(readFileSync(join(configDir, sessionArchives[0]!), "utf8"))
+        .toBe("{ \"version\": 9, \"sessions\": [ truncated");
+
+      // Dictation cleanup already ran under the accepted receipt, so it keeps running.
+      const dictation = await fetch(`http://127.0.0.1:${server.address.port}/trpc/dictationText.status`);
+      expect(await dictation.json()).toMatchObject({
+        result: { data: {
+          provider: "xai",
+          model: "grok-conversation-exact",
+          audioEngine: "xai",
+          disclosure: { accepted: true, acceptedVersion: "xai-conversation-v1" },
+          active: true,
+        } },
+      });
+
+      // The voice-chat endpoint is gone rather than answering.
+      const voiceChat = await fetch(`http://127.0.0.1:${server.address.port}/api/voice-chat/ask`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question: "What did we decide?" }),
+      });
+      expect(voiceChat.status).toBe(404);
+      // So are the conversation, Agent Console and Agent Calendar Connector APIs.
+      for (const procedure of [
+        "agentSessions.list", "agentConsole.overview", "agentCalendarConnector.view", "ask.ask",
+        "agentConnections.createConversationProbeAttempt", "onboarding.adoptConversation",
+      ]) {
+        const retired = await fetch(`http://127.0.0.1:${server.address.port}/trpc/${procedure}`);
+        expect(retired.status, procedure).toBe(404);
+      }
     } finally {
-      host?.close();
-      host = undefined;
       await server.close();
       if (previousPort === undefined) delete process.env.YULU_UI_PORT;
       else process.env.YULU_UI_PORT = previousPort;

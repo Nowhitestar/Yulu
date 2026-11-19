@@ -1,7 +1,12 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { z } from "zod";
-import { DictationCleanupLevelSchema, DictationCleanupModelSchema, DictationStyleSchema } from "./dictationPreferences.js";
+import {
+  DictationCleanupLevelSchema,
+  DictationStyleSchema,
+  DictationTextModelSchema,
+  DictationTextProviderSchema,
+} from "./dictationPreferences.js";
 import { DEFAULT_HOTKEYS, HotkeySchema as StatusAgentHotkeySchema, validateHotkeyConflicts } from "./hotkeys.js";
 import {
   TextProviderSelectionSchema,
@@ -56,21 +61,6 @@ const ThemeSchema = z.object({
   }).passthrough().default({}),
 }).passthrough().default({});
 
-const AgentConsoleSchema = z.object({
-  plugins: z.object({
-    added: z.array(z.enum(["summary", "notion", "zulip", "calendar"])).default(["summary"]),
-  }).passthrough().default({}),
-  destinations: z.record(z.object({
-    notion: z.object({
-      target: z.string().default("Yulu Meeting"),
-    }).passthrough().default({}),
-    zulip: z.object({
-      stream: z.string().default(""),
-      topic: z.string().default(""),
-    }).passthrough().default({}),
-  }).passthrough()).default({}),
-}).passthrough().default({});
-
 const AgentPipelineSchema = z.object({
   enabled: z.boolean().default(true),
   auto_process_recordings: z.boolean().default(true),
@@ -80,10 +70,12 @@ const AgentPipelineSchema = z.object({
 const DictationSchema = z.object({
   cleanup_enabled: z.boolean().default(true),
   cleanup_level: DictationCleanupLevelSchema.default("medium"),
-  // Preserve existing model selection until fast cleanup is explicitly selected.
-  cleanup_model: DictationCleanupModelSchema.default("conversation"),
+  // Dictated text is sent to a cloud text model only for an explicit provider;
+  // "none" keeps the recognized text unchanged (ADR-010).
+  text_provider: DictationTextProviderSchema.default("none"),
+  // The exact model used for cleanup and voice translation. Never a fallback.
+  text_model: DictationTextModelSchema.default(XAI_TEXT_MODEL_DEFAULT),
   style: DictationStyleSchema.default("casual"),
-  voice_chat_scope: z.enum(["general", "meetings"]).default("general"),
   // Legacy compatibility: only the explicit "none" cleanup opt-out is used.
   prompt_slug: z.string().default("dictation-cleanup"),
   // Retained for older clients; translation now uses built-in rules.
@@ -135,12 +127,10 @@ export const ConfigSchema = z.object({
   }).default({}),
   intelligence: z.object({
     summary: TextProviderSelectionSchema,
-    conversation: TextProviderSelectionSchema,
   }).strict().default({}),
   status_agent: StatusAgentSchema,
   calendars: z.array(CalendarSchema).default([]),
   connectors: ConnectorsSchema,
-  agent_console: AgentConsoleSchema,
   agent_pipeline: AgentPipelineSchema,
   ui: z.object({
     language: z.enum(["zh", "en"]).default("zh"),
@@ -171,7 +161,6 @@ export function defaultYuluConfig(): YuluConfig {
       command: null,
       agent: {},
     },
-    agent_console: {},
     status_agent: {},
     calendars: [{ type: "macos", enabled: true, watch_calendars: [] }],
     meeting_detection: {
@@ -247,9 +236,9 @@ function hasOwn(record: JsonRecord, key: string): boolean {
 /**
  * Retire Yulu-owned connector configuration without destroying it.
  *
- * Destination preferences move to the Hermes Agent projection, and the removed
- * connector/output blocks are written to a mode-0600 archive before the active
- * config changes. Legacy automatic-sharing authorization is not migrated.
+ * The removed connector/output blocks are written to a mode-0600 archive before
+ * the active config changes; only the legacy Notion destination label is kept.
+ * Legacy automatic-sharing authorization is not migrated.
  */
 export function migrateAgentNativeConfig(path: string): AgentNativeConfigMigration {
   if (!existsSync(path)) return { changed: false, archivePath: null };
@@ -267,10 +256,6 @@ export function migrateAgentNativeConfig(path: string): AgentNativeConfigMigrati
   if (!hasLegacy) return { changed: false, archivePath: null };
 
   const pipeline = ensureRecord(root, "agent_pipeline");
-
-  const consoleConfig = ensureRecord(root, "agent_console");
-  const destinations = ensureRecord(consoleConfig, "destinations");
-  const hermes = ensureRecord(destinations, "hermes");
   const oldNotionOutput = record(legacyOutput.notion);
   const notionTarget = stringField(
     oldNotionOutput,
@@ -278,16 +263,7 @@ export function migrateAgentNativeConfig(path: string): AgentNativeConfigMigrati
     "destination_id",
     "database_id",
   ) || stringField(legacyNotion, "database_id");
-  const notion = ensureRecord(hermes, "notion");
-  if (!stringField(notion, "target") && notionTarget) notion.target = notionTarget;
   if (!hasOwn(pipeline, "notion_destination") && notionTarget) pipeline.notion_destination = notionTarget;
-
-  const oldZulipOutput = record(legacyOutput.zulip);
-  const zulip = ensureRecord(hermes, "zulip");
-  const stream = stringField(oldZulipOutput, "stream") || stringField(legacyZulip, "stream");
-  const topic = stringField(oldZulipOutput, "topic") || stringField(legacyZulip, "topic");
-  if (!stringField(zulip, "stream") && stream) zulip.stream = stream;
-  if (!stringField(zulip, "topic") && topic) zulip.topic = topic;
 
   const stamp = new Date().toISOString().replace(/[-:.]/g, "");
   const archivePath = join(dirname(path), `${basename(path, ".json")}.legacy-connectors.${stamp}.json`);
@@ -420,14 +396,9 @@ export function migrateRetiredGatewaySelections(path: string): boolean {
   }
   const root = raw as JsonRecord;
   const intelligence = record(root.intelligence);
-  let changed = false;
-  for (const capability of ["summary", "conversation"] as const) {
-    const selection = record(intelligence[capability]);
-    if (selection.provider !== "agent" || selection.connectionId !== RETIRED_GATEWAY_CONNECTION_ID) continue;
-    intelligence[capability] = { provider: "agent", model: "runtime-managed", disabled: true };
-    changed = true;
-  }
-  if (!changed) return false;
+  const selection = record(intelligence.summary);
+  if (selection.provider !== "agent" || selection.connectionId !== RETIRED_GATEWAY_CONNECTION_ID) return false;
+  intelligence.summary = { provider: "agent", model: "runtime-managed", disabled: true };
   root.intelligence = intelligence;
   const tmp = `${path}.${process.pid}.retired-gateway.tmp`;
   writeFileSync(tmp, `${JSON.stringify(root, null, 2)}\n`, {
@@ -438,6 +409,138 @@ export function migrateRetiredGatewaySelections(path: string): boolean {
   return true;
 }
 
+/** Settings that only the retired Yulu-owned conversation read (ADR-010). */
+const RETIRED_CONVERSATION_SETTINGS = [
+  "intelligence.conversation",
+  "transcription.dictation.voice_chat_scope",
+  "transcription.dictation.cleanup_model",
+  "status_agent.hotkeys.voice_chat",
+  "agent_console",
+] as const;
+
+function isRetiredConversationSetting(dottedKey: string): boolean {
+  return RETIRED_CONVERSATION_SETTINGS.some((path) => dottedKey === path || dottedKey.startsWith(`${path}.`));
+}
+
+/** A whole-object write must not smuggle a retired child key back in. */
+function reintroducesRetiredConversationSetting(dottedKey: string, value: unknown): boolean {
+  return RETIRED_CONVERSATION_SETTINGS.some((path) => {
+    if (!path.startsWith(`${dottedKey}.`)) return false;
+    let cursor: unknown = value;
+    for (const part of path.slice(dottedKey.length + 1).split(".")) {
+      if (!cursor || typeof cursor !== "object" || Array.isArray(cursor) || !hasOwn(cursor as JsonRecord, part)) {
+        return false;
+      }
+      cursor = (cursor as JsonRecord)[part];
+    }
+    return true;
+  });
+}
+
+/**
+ * Archive and remove the settings of the retired Yulu-owned conversation.
+ *
+ * Dictation cleanup used to borrow the Conversation selection. Its explicit
+ * replacement is derived here so that upgrading neither starts nor stops
+ * sending dictated text: it stays on only where the Conversation Provider was
+ * xAI, with the model that was pinned.
+ *
+ * The result must stay readable by the previous App during the update rollback
+ * window, so retired keys are removed and new values go into new keys only.
+ */
+export function migrateRetiredConversationConfig(path: string): AgentNativeConfigMigration {
+  if (!existsSync(path)) return { changed: false, archivePath: null };
+  const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("Yulu config must contain a JSON object");
+  }
+  const root = raw as JsonRecord;
+  const intelligence = record(root.intelligence);
+  const transcription = record(root.transcription);
+  const dictation = record(transcription.dictation);
+  const statusAgent = record(root.status_agent);
+  const hotkeys = record(statusAgent.hotkeys);
+
+  const hadConversation = hasOwn(intelligence, "conversation");
+  const hadVoiceChatScope = hasOwn(dictation, "voice_chat_scope");
+  const hadVoiceChatHotkey = hasOwn(hotkeys, "voice_chat");
+  const hadAgentConsole = hasOwn(root, "agent_console");
+  const hadCleanupModel = hasOwn(dictation, "cleanup_model");
+  if (!hadConversation && !hadVoiceChatScope && !hadVoiceChatHotkey && !hadAgentConsole && !hadCleanupModel) {
+    return { changed: false, archivePath: null };
+  }
+
+  const conversation = record(intelligence.conversation);
+  const conversationWasXai = conversation.provider === "xai";
+  const pinnedModel = conversationWasXai ? stringField(conversation, "model") || XAI_TEXT_MODEL_DEFAULT : "";
+
+  const stamp = new Date().toISOString().replace(/[-:.]/g, "");
+  const archivePath = join(dirname(path), `${basename(path, ".json")}.legacy-conversation.${stamp}.json`);
+  const archiveTmp = `${archivePath}.${process.pid}.tmp`;
+  writeFileSync(archiveTmp, `${JSON.stringify({
+    version: 1,
+    migratedAt: new Date().toISOString(),
+    sourcePath: path,
+    ...(hadConversation ? { intelligence: { conversation: intelligence.conversation } } : {}),
+    ...(hadVoiceChatScope || hadCleanupModel ? {
+      transcription: {
+        dictation: {
+          ...(hadVoiceChatScope ? { voice_chat_scope: dictation.voice_chat_scope } : {}),
+          ...(hadCleanupModel ? { cleanup_model: dictation.cleanup_model } : {}),
+        },
+      },
+    } : {}),
+    ...(hadVoiceChatHotkey ? { status_agent: { hotkeys: { voice_chat: hotkeys.voice_chat } } } : {}),
+    ...(hadAgentConsole ? { agent_console: root.agent_console } : {}),
+  }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  renameSync(archiveTmp, archivePath);
+
+  // The dictation text selection is written only while the Conversation
+  // selection it replaces is still present, so a later run cannot change it.
+  let dictationChanged = hadVoiceChatScope || hadCleanupModel;
+  delete dictation.voice_chat_scope;
+  if (hadConversation && !hasOwn(dictation, "text_provider")) {
+    dictation.text_provider = conversationWasXai ? "xai" : "none";
+    dictationChanged = true;
+  }
+  // `cleanup_model` held either an explicit fast model or "conversation" (also
+  // its default), meaning the pinned Conversation model. Keep the exact model
+  // that was in effect; where cleanup could not run, the default applies.
+  if (!hasOwn(dictation, "text_model")) {
+    const explicitModel = typeof dictation.cleanup_model === "string" &&
+      dictation.cleanup_model.trim() && dictation.cleanup_model.trim() !== "conversation"
+      ? dictation.cleanup_model.trim() : "";
+    const textModel = explicitModel || pinnedModel;
+    if (textModel) {
+      dictation.text_model = textModel;
+      dictationChanged = true;
+    }
+  }
+  delete dictation.cleanup_model;
+  if (dictationChanged) {
+    transcription.dictation = dictation;
+    root.transcription = transcription;
+  }
+  if (hadConversation) {
+    delete intelligence.conversation;
+    root.intelligence = intelligence;
+  }
+  if (hadVoiceChatHotkey) {
+    delete hotkeys.voice_chat;
+    statusAgent.hotkeys = hotkeys;
+    root.status_agent = statusAgent;
+  }
+  delete root.agent_console;
+
+  const configTmp = `${path}.${process.pid}.retired-conversation.tmp`;
+  writeFileSync(configTmp, `${JSON.stringify(root, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: statSync(path).mode,
+  });
+  renameSync(configTmp, path);
+  return { changed: true, archivePath };
+}
+
 export class ConfigManager {
   private cached: YuluConfig | null = null;
   private cachedMtime = 0;
@@ -446,6 +549,7 @@ export class ConfigManager {
     migrateAgentNativeConfig(path);
     migrateRetiredAutomaticSharingConfig(path);
     migrateLegacyTranscriptionConfig(path);
+    migrateRetiredConversationConfig(path);
     migrateRetiredGatewaySelections(path);
   }
 
@@ -494,6 +598,11 @@ export class ConfigManager {
       }
       if (isRetiredTranscriptionSetting(key)) {
         throw new Error(`setting is retired because Yulu now uses one explicit audio engine: ${key}`);
+      }
+    }
+    for (const { key, value } of changes) {
+      if (isRetiredConversationSetting(key) || reintroducesRetiredConversationSetting(key, value)) {
+        throw new Error(`setting is retired because Yulu no longer owns conversation: ${key}`);
       }
     }
     const onDiskMtime = statSync(this.path).mtimeMs;

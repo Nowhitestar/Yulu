@@ -7,7 +7,7 @@ function center(ctx: AppContext) {
   return ctx.agentConnections;
 }
 
-const capability = z.enum(["transcription", "summary", "conversation"]);
+const capability = z.enum(["transcription", "summary"]);
 
 export const agentConnectionsRouter = router({
   view: publicProcedure.query(({ ctx }) => center(ctx).view()),
@@ -45,12 +45,6 @@ export const agentConnectionsRouter = router({
       model: z.string().trim().min(1).max(128).optional(),
     }).strict())
     .mutation(({ ctx, input }) => center(ctx).probe(input)),
-  createConversationProbeAttempt: uiMutationProcedure
-    .input(z.object({
-      connectionId: z.string().min(1).max(200),
-      model: z.string().trim().min(1).max(128).optional(),
-    }).strict())
-    .mutation(({ ctx, input }) => center(ctx).createConversationProbeAttempt(input)),
   acceptDisclosure: uiMutationProcedure
     .input(z.object({
       connectionId: z.string().min(1).max(200),
@@ -60,7 +54,7 @@ export const agentConnectionsRouter = router({
   declineDisclosure: uiMutationProcedure
     .input(z.object({
       connectionId: z.string().min(1).max(200),
-      capability: z.enum(["summary", "conversation"]),
+      capability: z.literal("summary"),
     }).strict())
     .mutation(({ ctx, input }) => center(ctx).declineDisclosure(input)),
   authorize: uiMutationProcedure.mutation(({ ctx }) => center(ctx).authorize()),

@@ -53,9 +53,6 @@ export const configRouter = router({
       if (input.key === "intelligence.summary" || input.key.startsWith("intelligence.summary.")) {
         ctx.xaiReadiness?.delete("summary");
       }
-      if (input.key === "intelligence.conversation" || input.key.startsWith("intelligence.conversation.")) {
-        ctx.xaiReadiness?.delete("conversation");
-      }
       if (input.key === "status_agent.enabled" && typeof input.value === "boolean") {
         try {
           if (input.value) await ctx.launchctl.start("com.yulu.statusagent");

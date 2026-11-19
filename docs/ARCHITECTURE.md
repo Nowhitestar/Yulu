@@ -26,10 +26,12 @@ The selected Yulu audio engine owns realtime captions, final speech recognition,
 and dictation. `local` is the default; `xai` connects directly to xAI with OAuth
 authorized in Yulu and stored in macOS Keychain. The exact Summary Provider pinned
 at task creation owns summary generation through its explicit xAI, Codex,
-or Claude Code connection. Hermes and OpenClaw remain Conversation-only.
-The explicit ready connection selected for a new Agent Console session owns its
-interactive conversation and connectors. No capability silently falls back to
-another provider, model, connection, or credential source.
+or Claude Code connection. Yulu owns no conversation (ADR-010): the user's own
+Agent, including Hermes or OpenClaw, asks about meetings through authenticated
+MCP and keeps its history and connectors. xAI dictation cleanup and translation
+send dictated text only through the explicit `transcription.dictation.text_provider`
+switch and its accepted disclosure. No capability silently falls back to another
+provider, model, connection, or credential source.
 
 ## Runtime components
 
@@ -46,7 +48,7 @@ another provider, model, connection, or credential source.
 | Pipeline coordinator | `recordingPipeline.ts` | Commit the selected-engine transcript first, then dispatch pinned Summary work and recover failures; recording completion never starts sharing |
 | Summary execution | `supportedAgentSummaryAdapter.ts`, `agentGateway.ts` | Run the task's pinned xAI/Codex/Claude Code Summary workflow; retain legacy pinned Hermes artifact work only for recovery/audit; they do not execute production audio transcription |
 | Artifact boundary | `artifactStore.ts` | Independently commit transcript, then validate and atomically commit summary artifacts with hashes and provenance |
-| General Agent runtime | `agentRuntime.ts`, Agent Console | Resolve Codex, Claude Code, Hermes, OpenClaw, or a configured command for conversation |
+| Dictation text | `dictationText.ts`, `dictationTextDisclosure.ts`, `xaiText.ts` | Run explicitly enabled xAI dictation cleanup/translation with its own disclosure; bounded, non-streaming, no fallback |
 | Local context | prompt, glossary, search SQLite databases | Supply instructions and discoverable local data; never execute AI work |
 
 The Host is part of the UI service, but “Host” refers to the trusted local
@@ -224,26 +226,24 @@ operation governed by ADRs 0025 and 0026.
 
 ## General Agent separation
 
-The recording pipeline and interactive Agent Console are deliberately separate:
+Yulu hosts no conversation (ADR-010). The recording pipeline and the user's own
+Agents are deliberately separate:
 
-- The task-pinned Summary connection resolves xAI, Codex, or Claude Code
-  independently from Conversation. Hermes and OpenClaw are never
-  Summary choices.
-- New conversations resolve only the explicit ready connection selected in the
-  Agent Connection Center. Existing sessions keep their pinned native identity.
+- The task-pinned Summary connection resolves xAI, Codex, or Claude Code.
+  Hermes and OpenClaw are never Summary choices; they reach Yulu as MCP clients.
 - Audio uses the separately selected local or xAI engine.
 - These boundaries fail closed: unavailable pinned work pauses with its committed
-  transcript or conversation history. The Host never falls back to another
-  Summary or Conversation connection.
-- The general Agent's connector configuration stays with that Agent. Yulu may
+  transcript. The Host never falls back to another Summary connection.
+- Questions about meetings are asked in the user's own Agent over authenticated
+  MCP. Its history and connector configuration stay with that Agent. Yulu may
   expose local recordings, search, prompts, glossary, health, and task tools, but
   it does not proxy arbitrary connector calls.
 
 Connector ownership is partitioned by intent. Recording Processing owns only the
 local transcript and summary commits. A recording Share belongs to a fresh manual
-Share Action with its own pinned destination; a Notion action requested inside an
-unrelated conversation belongs to the selected general Agent. These paths must not
-silently trigger one another.
+Share Action with its own pinned destination; a Notion action requested in the
+user's own Agent belongs to that Agent. These paths must not silently trigger one
+another.
 
 ## Python capture edge
 
@@ -257,8 +257,8 @@ Its runtime responsibilities are limited to:
 - local clipboard, notification, and permission helpers.
 
 Adding an Agent capability to Python is an architecture regression. Speech
-behavior belongs in the selected Yulu audio engine; summary, conversation, and
-connector behavior belongs in the appropriate Agent behind existing Host contracts.
+behavior belongs in the selected Yulu audio engine; summary and connector
+behavior belongs in the appropriate Agent behind existing Host contracts.
 
 ## Local Host security
 
