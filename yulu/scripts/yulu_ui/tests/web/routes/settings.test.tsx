@@ -128,6 +128,7 @@ vi.mock("../../../web/src/trpc.js", () => {
     integrations: { calendarSources: { invalidate: () => Promise.resolve() } },
     dictationText: { status: { invalidate: dictationText.invalidate } },
     captionTranslation: { status: { invalidate: captionTranslation.invalidate } },
+    liveNotes: { status: { invalidate: () => Promise.resolve() } },
     onboarding: { status: { invalidate: () => Promise.resolve() } },
   };
   return {
@@ -224,6 +225,13 @@ vi.mock("../../../web/src/trpc.js", () => {
       captionTranslation: {
         status: { useQuery: () => ({ data: captionTranslation.status, isPending: false }) },
         acceptDisclosure: { useMutation: () => ({ mutateAsync: captionTranslation.acceptDisclosure, isPending: false }) },
+      },
+      liveNotes: {
+        status: { useQuery: () => ({ data: {
+          provider: "none", model: "grok-4.20-0309-non-reasoning", language: "zh", credentialSource: null,
+          disclosure: { accepted: false, disclosureVersion: "xai-live-notes-v1" }, active: false,
+        }, isPending: false }) },
+        acceptDisclosure: { useMutation: () => ({ mutateAsync: async () => ({ accepted: true }), isPending: false }) },
       },
       mcpAgents: {
         status: { useQuery: () => ({ data: mcp.status, isPending: false }) },

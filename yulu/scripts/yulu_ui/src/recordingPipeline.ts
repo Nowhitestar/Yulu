@@ -1,3 +1,4 @@
+import { readSavedLiveNotes, withAttendeeNotes } from "./liveNotes.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -772,6 +773,8 @@ export class RecordingPipeline {
         ? task
         : this.options.store.recordSummaryInputSnapshot(task.id, leaseToken, transcriptArtifact);
       const committedTranscript = this.options.artifacts.readCommittedTranscript(current, transcriptArtifact);
+      // The attendee's own notes from the meeting inform the summary as data.
+      const attendeeNotes = readSavedLiveNotes(task.audioPath).myNotes;
       const workflowInput = {
         task: current,
         leaseToken,
@@ -779,6 +782,7 @@ export class RecordingPipeline {
         transcriptionProvider: transcription.provider,
         committedTranscript,
         glossary,
+        attendeeNotes,
       };
       let artifactSessionId: string | null = recoveredArtifactSessionId;
       let artifactToolNames: string[] = [];
@@ -807,7 +811,7 @@ export class RecordingPipeline {
             model: task.summaryModel,
             credentialSource: task.summaryCredentialSource ?? undefined,
             input: [
-              { role: "system", content: task.instructions },
+              { role: "system", content: withAttendeeNotes(task.instructions, attendeeNotes) },
               { role: "user", content: transcription.transcript },
             ],
           });

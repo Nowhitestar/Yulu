@@ -8,6 +8,12 @@ import {
   DictationTextProviderSchema,
 } from "./dictationPreferences.js";
 import {
+  LIVE_NOTES_MODEL_DEFAULT,
+  LiveNotesLanguageSchema,
+  LiveNotesModelSchema,
+  LiveNotesProviderSchema,
+} from "./liveNotesPreferences.js";
+import {
   CAPTION_TRANSLATION_MODEL_DEFAULT,
   CaptionTranslationModelSchema,
   CaptionTranslationProviderSchema,
@@ -100,6 +106,14 @@ const CaptionsSchema = z.object({
   translation_model: CaptionTranslationModelSchema.default(CAPTION_TRANSLATION_MODEL_DEFAULT),
 }).passthrough().default({});
 
+// Live notes have their own explicit selection and disclosure. "none" keeps
+// meeting text on this Mac; there is no fallback to another provider.
+const LiveNotesSchema = z.object({
+  provider: LiveNotesProviderSchema.default("none"),
+  model: LiveNotesModelSchema.default(LIVE_NOTES_MODEL_DEFAULT),
+  language: LiveNotesLanguageSchema.optional(),
+}).passthrough().default({});
+
 const StatusAgentSchema = z.object({
   enabled: z.boolean().default(true),
   feedback_sounds: z.boolean().default(true),
@@ -130,6 +144,7 @@ export const ConfigSchema = z.object({
     glossary: z.array(z.string()).optional(),
     dictation: DictationSchema,
     captions: CaptionsSchema,
+    live_notes: LiveNotesSchema,
   }).passthrough().default({}),
   llm: z.object({
     enabled: z.boolean().optional(),

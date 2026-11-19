@@ -1,3 +1,4 @@
+import type { LiveNotesService } from "./liveNotes.js";
 import { initTRPC, TRPCError } from "@trpc/server";
 import type { ConfigManager } from "./config.js";
 import type { LaunchctlClient } from "./launchctl.js";
@@ -34,6 +35,7 @@ export interface AppContext {
   xaiReadiness?: XaiProviderReadiness;
   supportedAgentSummaryAdapter?: SupportedAgentSummaryAdapter;
   agentConnections?: AgentConnectionCenter;
+  liveNotes?: LiveNotesService;
   sharing?: SharingConfiguration;
   calendarSources?: CalendarSourceManager;
   localSearch?: (

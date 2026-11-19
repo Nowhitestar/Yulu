@@ -1,3 +1,4 @@
+import type { MyNote } from "./liveNotes.js";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -232,6 +233,8 @@ export interface AgentArtifactWorkflowInput {
   transcriptionProvider: string;
   committedTranscript?: string;
   glossary?: GlossaryContract;
+  /** Notes the attendee typed during the meeting; data for the summary. */
+  attendeeNotes?: MyNote[];
 }
 
 export type AgentNotionWorkflowInput = AgentArtifactWorkflowInput;

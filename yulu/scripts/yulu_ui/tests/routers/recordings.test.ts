@@ -60,6 +60,7 @@ function mkCtx(opts: { moviesDir: string; glossaryRows?: Array<Record<string, un
     host: {
       latestForRecording: vi.fn(() => null),
       getNotionDelivery: vi.fn(() => null),
+      listArtifacts: vi.fn(() => []),
       cancelPolicyPausedAutomaticForManualAction: vi.fn(() => []),
       prepareRecordingDeletion: vi.fn(() => []),
       purgeRecordingTasks: vi.fn(() => []),
@@ -160,6 +161,27 @@ describe("recordings router", () => {
     const r = await caller.get({ stem: "TeamSync_20260102_090000" });
     expect(r.realtime).toBe("live text");
     expect(r.title).toBe("TeamSync");
+  });
+
+  it("get returns the live notes and the attendee's own notes saved with a recording", async () => {
+    const stem = "TeamSync_20260102_090000";
+    writeFileSync(join(mvDir, `${stem}.wav`), "");
+    const caller = createCaller(recordingsRouter, mkCtx({ moviesDir: mvDir }));
+    expect((await caller.get({ stem })).liveNotes).toBeNull();
+
+    writeFileSync(join(mvDir, `${stem}.notes.md`), "## 结论\n\n- 改为增量推送\n");
+    writeFileSync(join(mvDir, `${stem}.mynotes.json`), JSON.stringify({
+      version: 1,
+      language: "zh",
+      notes: [{ at: "2026-01-02T01:05:00.000Z", text: "预算按二十万估" }, { at: 3, text: "" }],
+    }));
+    const r = await caller.get({ stem });
+    expect(r.liveNotes).toEqual({
+      markdown: "## 结论\n\n- 改为增量推送",
+      myNotes: [{ at: "2026-01-02T01:05:00.000Z", text: "预算按二十万估" }],
+      language: "zh",
+    });
+    expect(r.transcriptSource).toBeNull();
   });
 
   it("get includes summary template choices", async () => {
@@ -551,6 +573,7 @@ describe("recordings router", () => {
         error: null,
       })),
       getNotionDelivery: vi.fn(() => delivery),
+      listArtifacts: vi.fn(() => []),
     } as unknown as AppContext["host"];
 
     const detail = await createCaller(recordingsRouter, ctx).get({ stem });
@@ -603,6 +626,7 @@ describe("recordings router", () => {
         error,
       })),
       getNotionDelivery: vi.fn(() => null),
+      listArtifacts: vi.fn(() => []),
     } as unknown as AppContext["host"];
 
     const caller = createCaller(recordingsRouter, ctx);
@@ -632,6 +656,7 @@ describe("recordings router", () => {
         updatedAt: "2020-01-01T00:00:00.000Z",
       })),
       getNotionDelivery: vi.fn(() => null),
+      listArtifacts: vi.fn(() => []),
     } as unknown as AppContext["host"];
 
     const caller = createCaller(recordingsRouter, ctx);
@@ -655,6 +680,7 @@ describe("recordings router", () => {
         error: "Hermes session used tools outside the artifact capability set: recording_task_transcript_read",
       })),
       getNotionDelivery: vi.fn(() => null),
+      listArtifacts: vi.fn(() => []),
     } as unknown as AppContext["host"];
 
     const caller = createCaller(recordingsRouter, ctx);

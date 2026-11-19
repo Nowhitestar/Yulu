@@ -246,6 +246,14 @@ export interface DictationTextDisclosure {
   decidedAt: string;
 }
 
+/** Acceptance of the live notes disclosure. */
+export interface LiveNotesDisclosure {
+  provider: string;
+  disclosureVersion: string;
+  decision: "accepted";
+  decidedAt: string;
+}
+
 /** Acceptance of the live-caption translation disclosure (ADR-011). */
 export interface CaptionTranslationDisclosure {
   provider: string;
@@ -395,6 +403,15 @@ function dictationDisclosureIdentity(provider: string, disclosureVersion: string
   const version = disclosureVersion.trim();
   if (!/^[a-z0-9][a-z0-9._-]{0,99}$/.test(normalized) || !version || version.length > 100) {
     throw new Error("Dictation Text Disclosure identity is invalid");
+  }
+  return { provider: normalized, disclosureVersion: version };
+}
+
+function liveNotesDisclosureIdentity(provider: string, disclosureVersion: string) {
+  const normalized = provider.trim().toLowerCase();
+  const version = disclosureVersion.trim();
+  if (!/^[a-z0-9][a-z0-9._-]{0,99}$/.test(normalized) || !version || version.length > 100) {
+    throw new Error("Live Notes Disclosure identity is invalid");
   }
   return { provider: normalized, disclosureVersion: version };
 }
@@ -3345,6 +3362,42 @@ export class HostStore {
       .run(provider.trim().toLowerCase());
   }
 
+  getLiveNotesDisclosure(provider: string): LiveNotesDisclosure | null {
+    const row = this.db.prepare(`
+      SELECT provider, disclosure_version, decision, decided_at
+      FROM live_notes_disclosures WHERE provider = ?
+    `).get(provider.trim().toLowerCase()) as {
+      provider: string;
+      disclosure_version: string;
+      decision: string;
+      decided_at: string;
+    } | undefined;
+    return row && row.decision === "accepted" ? {
+      provider: row.provider,
+      disclosureVersion: row.disclosure_version,
+      decision: "accepted",
+      decidedAt: row.decided_at,
+    } : null;
+  }
+
+  recordLiveNotesDisclosure(provider: string, disclosureVersion: string): LiveNotesDisclosure {
+    const identity = liveNotesDisclosureIdentity(provider, disclosureVersion);
+    this.db.prepare(`
+      INSERT INTO live_notes_disclosures (provider, disclosure_version, decision, decided_at)
+      VALUES (?, ?, 'accepted', ?)
+      ON CONFLICT(provider) DO UPDATE SET
+        disclosure_version = excluded.disclosure_version,
+        decision = excluded.decision,
+        decided_at = excluded.decided_at
+    `).run(identity.provider, identity.disclosureVersion, now());
+    return this.getLiveNotesDisclosure(identity.provider)!;
+  }
+
+  clearLiveNotesDisclosure(provider: string): void {
+    this.db.prepare("DELETE FROM live_notes_disclosures WHERE provider = ?")
+      .run(provider.trim().toLowerCase());
+  }
+
   /**
    * Copy the accepted direct-xAI Conversation receipt of the retired capability
    * as the xAI dictation text receipt, keeping its version and decision time.
@@ -4345,6 +4398,13 @@ export class HostStore {
       );
 
       CREATE TABLE IF NOT EXISTS caption_translation_disclosures (
+        provider TEXT PRIMARY KEY,
+        disclosure_version TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK(decision IN ('accepted', 'declined')),
+        decided_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS live_notes_disclosures (
         provider TEXT PRIMARY KEY,
         disclosure_version TEXT NOT NULL,
         decision TEXT NOT NULL CHECK(decision IN ('accepted', 'declined')),

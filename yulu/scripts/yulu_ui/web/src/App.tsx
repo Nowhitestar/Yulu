@@ -19,6 +19,7 @@ import { Health } from "./routes/health.js";
 import { Activate } from "./routes/activate.js";
 import { OnboardingHome } from "./routes/onboarding.js";
 import { LegacyAgentConnectionsRedirect } from "./routes/agent-connections.js";
+import { LivePanel } from "./routes/live.js";
 
 function RecordingRedirect() {
   const { stem } = useParams();
@@ -77,6 +78,8 @@ export const APP_ROUTES: RouteObject[] = [
       { path: "health/logs", element: <Navigate to="/health#logs" replace /> },
     ],
   },
+  // The floating notes panel: a page of its own, outside the window's panes.
+  { path: "/live", Component: LivePanel },
 ];
 
 const router = createBrowserRouter(APP_ROUTES);

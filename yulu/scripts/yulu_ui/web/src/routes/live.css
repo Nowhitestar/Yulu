@@ -1,0 +1,33 @@
+/* The live notes panel: one column that fills its floating window. The window
+   itself is the glass; this page only lays out what is on it. */
+.live-panel { height: 100vh; display: flex; flex-direction: column; color: var(--fg); font-size: 14px; }
+.live-head { flex: none; height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--line); }
+.live-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--red); animation: live-pulse 1.6s ease-in-out infinite; }
+@keyframes live-pulse { 50% { opacity: 0.35; } }
+.live-time { font-family: var(--font-mono); font-size: 13px; color: var(--fg-2); }
+.live-title { flex: 1; min-width: 0; overflow: hidden; color: var(--fg-2); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.live-lang { border-radius: var(--r-pill); }
+.live-lang > button { min-width: 36px; height: 28px; border-radius: var(--r-pill); font-size: 12.5px; }
+
+.live-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 14px; line-height: 1.6; }
+.live-body .markdown-body { font-size: 14px; line-height: 1.6; }
+.live-body .markdown-body h2 { margin: 0 0 0.4em; font-size: 16px; }
+.live-section { margin: 0 -10px; padding: 4px 10px; border-radius: var(--r-md); transition: background 4s ease-out; }
+.live-section--fresh { background: var(--accent-soft); transition: none; }
+.live-body .live-notes-mine { margin-top: 2px; }
+
+.live-empty { padding: 120px 12px 40px; text-align: center; }
+.live-empty p { margin: 0 0 8px; color: var(--fg-2); }
+.live-quiet { margin: 0; color: var(--fg-3); font-size: 13px; }
+.live-notice { padding: 14px 16px; border-radius: var(--r-md); background: var(--fill); display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--fg-2); }
+.live-notice p { margin: 0; }
+.live-notice-title { color: var(--fg); font-size: 14px; font-weight: 600; }
+.live-link { align-self: flex-start; padding: 0; color: var(--accent); font-size: 13px; font-weight: 500; }
+.live-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+.live-input { flex: none; margin: 0; padding: 10px 12px 12px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+.live-input input { flex: 1; min-width: 0; height: 44px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--paper); color: var(--fg); font-size: 14px; outline: none; }
+.live-input input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.live-input kbd { flex: none; padding: 1px 6px; border: 1px solid var(--line-2); border-radius: 5px; color: var(--fg-3); font-family: inherit; font-size: 11.5px; }
+.live-error { margin: 0; padding: 0 14px 10px; color: var(--red); font-size: 12.5px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

@@ -8,6 +8,7 @@ import {
   DictationTextProviderSchema,
 } from "./dictationPreferences.js";
 import { CaptionTranslationModelSchema, CaptionTranslationProviderSchema } from "./captionPreferences.js";
+import { LiveNotesLanguageSchema, LiveNotesModelSchema, LiveNotesProviderSchema } from "./liveNotesPreferences.js";
 
 export type Daemon =
   | "audiodaemon"
@@ -64,6 +65,12 @@ const CaptionsSchema = z.object({
   translation_model: CaptionTranslationModelSchema.optional(),
 }).passthrough();
 
+const LiveNotesSchema = z.object({
+  provider: LiveNotesProviderSchema.optional(),
+  model: LiveNotesModelSchema.optional(),
+  language: LiveNotesLanguageSchema.optional(),
+}).passthrough();
+
 export const XAI_TEXT_MODEL_DEFAULT = "grok-4.6";
 
 export const TextProviderSelectionSchema = z.union([
@@ -102,6 +109,7 @@ export const SETTINGS: SettingDef[] = [
   { path: "transcription.language",      category: "transcription", label: "语言",   type: "select", validate: z.enum(["zh", "en", "ja", "auto"]), reload: R.none },
   { path: "transcription.engine",        category: "transcription", label: "音频转写引擎", type: "select", validate: z.enum(["local", "xai"]), reload: R.none },
   { path: "transcription.captions",      category: "transcription", label: "实时字幕翻译", type: "text", validate: CaptionsSchema, reload: R.none },
+  { path: "transcription.live_notes",    category: "transcription", label: "实时笔记", type: "text", validate: LiveNotesSchema, reload: R.none },
   { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none, hidden: true },
   { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none, hidden: true },
   { path: "llm.agent.provider",          category: "llm", label: "Agent provider", type: "select",  validate: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw"]), reload: R.none, hidden: true },

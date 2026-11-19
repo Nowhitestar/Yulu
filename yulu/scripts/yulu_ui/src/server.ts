@@ -12,6 +12,7 @@ import { ConfigManager } from "./config.js";
 import { DictationCleanupSchema, DictationTranslationSchema, DictationTextService } from "./dictationText.js";
 import { DictationPreview } from "./dictationPreview.js";
 import { CaptionTranslationService, hasXaiCaptionTextDisclosure } from "./captionTranslation.js";
+import { LiveNotesService, hasXaiLiveNotesDisclosure } from "./liveNotes.js";
 import { transcriptionFailureReason } from "./transcriptionErrors.js";
 import { carryOverRetiredConversationDisclosure, hasXaiDictationTextDisclosure } from "./dictationTextDisclosure.js";
 import { archiveRetiredConversationSessions } from "./retiredConversationData.js";
@@ -381,7 +382,16 @@ async function startLockedServer(
     hasDisclosure: () => hasXaiCaptionTextDisclosure(hostStore),
     glossary: (text) => loadGlossaryContract(dbProxy.vocab, text),
   });
+  const liveNotes = new LiveNotesService({
+    config: configManager,
+    text: xaiText,
+    credentialSource: () => agentConnections.selectedXaiCredentialSource(),
+    hasDisclosure: () => hasXaiLiveNotesDisclosure(hostStore),
+    glossary: (text) => loadGlossaryContract(dbProxy.vocab, text),
+    pubsub: appPubSub,
+  });
   const realtimeTranscription = new RealtimeTranscriptionCoordinator({
+    liveNotes,
     dictationPreview,
     pubsub: appPubSub,
     streaming: audioTranscription,
@@ -411,6 +421,7 @@ async function startLockedServer(
     xaiReadiness,
     supportedAgentSummaryAdapter,
     agentConnections,
+    liveNotes,
     sharing,
     calendarSources,
     db:        dbProxy,

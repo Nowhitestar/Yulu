@@ -69,6 +69,11 @@
       "translate_timeout_sec": 30,
       "note": "Cleanup and translation send dictated text to xAI only when text_provider is xai, the audio engine is xai, and the dictated-text disclosure was accepted in Settings; text_provider none keeps the recognized text as-is and local dictation stays on-device. Levels: light, medium, heavy (natural paragraphs, lists for clear enumerations); cleanup_enabled is the independent off switch. Defaults to medium and casual. Originals remain in history; failed cleanup keeps the recognized text."
     },
+    "live_notes": {
+      "provider": "none",
+      "model": "grok-4.20-0309-non-reasoning",
+      "note": "Live notes send new transcript text, the notes you type and matching glossary terms to xAI only when provider is xai and the live notes disclosure was accepted in Settings; audio is never sent. none keeps meeting text on this Mac and still saves your own notes. language (zh or en) defaults to the interface language."
+    },
     "captions": {
       "translation_provider": "none",
       "translation_model": "grok-4.20-0309-non-reasoning",

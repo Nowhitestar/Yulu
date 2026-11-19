@@ -506,6 +506,12 @@ export class RealtimeTranscriptionCoordinator {
     translationAvailability?: () => CaptionTranslationReadiness;
     defaultTargetLanguage?: () => string;
     defaultTranslationEnabled?: boolean;
+    /** Live notes follow meeting sessions only, never dictation. */
+    liveNotes?: {
+      started(input: { audioPath: string; stem: string; title: string }): void;
+      transcript(input: { audioPath: string; stableText: string }): void;
+      finished(input: { audioPath: string; stableText: string; cancelled?: boolean }): Promise<void>;
+    };
     allowedRoots?: string[];
     chunkSec?: number;
     pollMs?: number;
@@ -617,6 +623,11 @@ export class RealtimeTranscriptionCoordinator {
     rmSync(coveragePath(audioPath), { force: true });
     this.active = session;
     if (session.dictationSessionId) this.options.dictationPreview?.start(session.dictationSessionId);
+    if (!session.dictation) {
+      try {
+        this.options.liveNotes?.started({ audioPath: session.audioPath, stem: session.stem, title: session.title });
+      } catch { /* live notes never block transcription */ }
+    }
     void this.options.warm?.().catch(() => {});
     this.publish(session, "starting", false);
     try {
@@ -704,6 +715,11 @@ export class RealtimeTranscriptionCoordinator {
       ? assessment.reason
       : `realtime transcription failed: ${session.error}`;
     this.writeCoverage(session, totalMs, trusted, reason, true);
+    if (!session.dictation) {
+      // The final notes may take a model request; capture stop never waits for it.
+      void this.options.liveNotes?.finished({ audioPath: session.audioPath, stableText: session.text })
+        .catch(() => {});
+    }
     session.translationGeneration += 1;
     session.queuedTranslation = null;
     session.sequence += 1;
@@ -733,6 +749,10 @@ export class RealtimeTranscriptionCoordinator {
       session.translationGeneration += 1;
       session.queuedTranslation = null;
       this.writeCoverage(session, this.durationMs(session), false, session.error, true);
+      if (!session.dictation) {
+        void this.options.liveNotes?.finished({ audioPath: session.audioPath, stableText: session.text, cancelled: true })
+          .catch(() => {});
+      }
     }
     await this.options.streaming?.abort();
   }
@@ -892,6 +912,7 @@ export class RealtimeTranscriptionCoordinator {
     session.text = stableText;
     if (session.text !== previousStable) {
       atomicWrite(sidecarPath(session.audioPath), session.text ? `${session.text}\n` : "");
+      this.notifyLiveNotes(session);
     }
     let availabilityChanged = false;
     if (accepted.length > 0) {
@@ -963,6 +984,7 @@ export class RealtimeTranscriptionCoordinator {
           session.sourceSegments = session.sourceSegments.slice(-3);
           session.text = cleanTranscriptText([session.text, sourceText].filter(Boolean).join("\n"));
           atomicWrite(sidecarPath(session.audioPath), session.text + "\n");
+          this.notifyLiveNotes(session);
           this.refreshTranslation(session);
           session.translationStatus = this.translationStatusFor(session);
           session.translationGeneration += 1;
@@ -1136,6 +1158,13 @@ export class RealtimeTranscriptionCoordinator {
       reason,
       error: session.error ?? undefined,
     };
+  }
+
+  private notifyLiveNotes(session: Session): void {
+    if (session.dictation) return;
+    try {
+      this.options.liveNotes?.transcript({ audioPath: session.audioPath, stableText: session.text });
+    } catch { /* live notes never interrupt transcription */ }
   }
 
   private publish(

@@ -10,11 +10,11 @@ const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_OUTPUT_CHARS = 131_072;
 const OUTPUT_LIMIT_ERROR = "xAI text response exceeded the output limit";
 
-export type XaiTextCapability = "summary" | "dictation" | "captions";
+export type XaiTextCapability = "summary" | "dictation" | "captions" | "live_notes";
 
-/** Dictation and caption translation are short, interactive requests: they
+/** Dictation, caption translation and live notes are interactive requests: they
  * honor cancellation, use low reasoning effort and require a completed
- * response. Neither ever retries against another model. */
+ * response. None of them ever retries against another model. */
 function isInteractive(capability: XaiTextCapability): boolean {
   return capability !== "summary";
 }
@@ -227,7 +227,9 @@ export class XaiTextClient {
     if (isInteractive(request.capability) && (payload as { status?: string } | null)?.status !== "completed") {
       throw new Error(request.capability === "captions"
         ? "xAI caption translation was incomplete"
-        : "xAI dictation cleanup was incomplete");
+        : request.capability === "live_notes"
+          ? "xAI live notes were incomplete"
+          : "xAI dictation cleanup was incomplete");
     }
     const responseModel = outputModel(payload);
     if (responseModel !== model) {

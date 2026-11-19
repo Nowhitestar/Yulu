@@ -9,6 +9,7 @@ import { CapabilitiesSection } from "../components/settings/CapabilitiesSection.
 import { HotkeySection } from "../components/settings/HotkeySection.js";
 import { AboutSection } from "../components/settings/AboutSection.js";
 import { UpdateSection } from "../components/settings/UpdateSection.js";
+import { LiveNotesSection } from "../components/settings/LiveNotesSection.js";
 import { AudioSection } from "../components/settings/AudioSection.js";
 import { StorageSection } from "../components/settings/StorageSection.js";
 import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
@@ -53,6 +54,7 @@ const CATEGORY_SECTIONS: Record<string, (tracker: SettingsRestartTracker) => Rea
   recording: (tracker) => <>
     <AudioSection tracker={tracker} />
     <TranscriptionSection tracker={tracker} />
+    <LiveNotesSection tracker={tracker} />
     <RecordingProcessingSection tracker={tracker} />
     <StorageSection tracker={tracker} />
   </>,

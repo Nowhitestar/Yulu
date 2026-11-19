@@ -83,6 +83,8 @@ div:has(> div:last-child > .row:last-child) + .row { border-top: 0; }
 .cloud-warn-note { margin-bottom: 8px; color: var(--fg-2); font-size: 12px; }
 .cloud-warn-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .path-btn.cloud-warn-accept { border-color: transparent; background: var(--accent); color: var(--on-accent); }
+.path-btn.path-btn--primary { border-color: transparent; background: var(--accent); color: var(--on-accent); }
+.path-btn.path-btn--primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.06); }
 
 @container (max-width: 560px) {
   .row { grid-template-columns: minmax(0, 1fr); gap: 8px; }

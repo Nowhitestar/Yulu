@@ -1,4 +1,5 @@
 import type { CaptionTranslationUnavailableReason } from "./captionPreferences.js";
+import type { LiveNotesSnapshot } from "./liveNotes.js";
 
 export type Listener<T> = (msg: T) => void;
 
@@ -69,6 +70,8 @@ export type AppChannels = {
     reason?: string | null;
     error?: string;
   };
+  /** The live notes of the meeting being recorded, or null when none is. */
+  "live-notes": LiveNotesSnapshot | null;
 };
 
 export const appPubSub = new PubSub<AppChannels>();
