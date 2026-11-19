@@ -500,6 +500,25 @@ describe("HostStore", () => {
     expect(store!.getDictationTextDisclosure("xai")).toBeNull();
   });
 
+  it("keeps the caption translation disclosure separate from the dictation receipt", () => {
+    createStore();
+    store!.recordDictationTextDisclosure("xai", "xai-dictation-text-v1");
+    expect(store!.getCaptionTranslationDisclosure("xai")).toBeNull();
+    const receipt = store!.recordCaptionTranslationDisclosure(" XAI ", "xai-caption-text-v1");
+    expect(receipt).toEqual({
+      provider: "xai",
+      disclosureVersion: "xai-caption-text-v1",
+      decision: "accepted",
+      decidedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    });
+    expect(store!.getCaptionTranslationDisclosure("xai")).toEqual(receipt);
+    expect(() => store!.recordCaptionTranslationDisclosure("not a provider", "v1")).toThrow(/identity is invalid/);
+    store!.clearDictationTextDisclosure("xai");
+    expect(store!.getCaptionTranslationDisclosure("xai")).toEqual(receipt);
+    store!.clearCaptionTranslationDisclosure("xai");
+    expect(store!.getCaptionTranslationDisclosure("xai")).toBeNull();
+  });
+
   it("migrates the legacy readiness-reason constraint without projecting malformed history", () => {
     root = mkdtempSync(join(tmpdir(), "yulu-host-store-"));
     const databasePath = join(root, "host.sqlite");

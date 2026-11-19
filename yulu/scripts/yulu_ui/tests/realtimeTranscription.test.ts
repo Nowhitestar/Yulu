@@ -8,6 +8,8 @@ import { DictationPreview } from "../src/dictationPreview.js";
 import { DictationTextService } from "../src/dictationText.js";
 import { defaultYuluConfig } from "../src/config.js";
 import { buildGlossaryContract } from "../src/glossaryContract.js";
+import { CaptionTranslationUnavailableError } from "../src/captionTranslation.js";
+import type { CaptionTranslationUnavailableReason } from "../src/captionPreferences.js";
 import {
   RealtimeTranscriptionCoordinator,
   assessRealtimeTranscript,
@@ -904,6 +906,144 @@ describe("RealtimeTranscriptionCoordinator", () => {
     await vi.waitFor(() => expect(events.at(-1)?.translationStatus).toBe("failed"));
 
     expect(events.at(-1)).toMatchObject({ sourceText: "原文仍然可用", translationText: "" });
+    await coordinator.stop(audioPath);
+  });
+
+  function streamingCaptionFixture(name: string) {
+    const root = mkdtempSync(join(tmpdir(), `yulu-realtime-${name}-`));
+    roots.push(root);
+    const audioPath = join(root, `${name}_20261119_120000.wav`);
+    writeStereoWav(audioPath, 0.05);
+    const pubsub = new PubSub<AppChannels>();
+    const events: AppChannels["realtime-transcript"][] = [];
+    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
+    const engine: StreamingCaptionEngine = {
+      provider: "test-streaming",
+      warm: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      feed: vi.fn(async () => ({
+        updates: { mic: { partial: "", stable: [{ text: "第一句", endMs: 50 }], audioMs: 50 } },
+      })),
+      finish: vi.fn(async () => ({ updates: {} })),
+      abort: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+    };
+    return { audioPath, pubsub, events, engine };
+  }
+  function pushCaption(coordinator: RealtimeTranscriptionCoordinator, text: string, endMs: number, partial = "") {
+    const internal = coordinator as unknown as {
+      active: object;
+      applyStreamingUpdate(session: object, response: StreamingCaptionUpdate): void;
+    };
+    internal.applyStreamingUpdate(internal.active, {
+      updates: { mic: { partial, stable: text ? [{ text, endMs }] : [], audioMs: endMs } },
+    });
+  }
+
+  it("says why a requested translation is unavailable, sends nothing, and keeps source captions", async () => {
+    const { audioPath, pubsub, events, engine } = streamingCaptionFixture("translation-unavailable");
+    let readiness: { available: true } | { available: false; reason: CaptionTranslationUnavailableReason } =
+      { available: false, reason: "needs_disclosure" };
+    const translationAvailability = vi.fn(() => readiness);
+    const translate = vi.fn(async (text: string, target: string) => `${target}:${text}`);
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub, streaming: engine, translate, translationAvailability, pollMs: 60_000,
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
+    });
+
+    await coordinator.start({ audioPath, title: "translation-unavailable", language: "zh" });
+    // Source-only captions never consult availability.
+    expect(translationAvailability).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({ translationStatus: "disabled", translationUnavailableReason: null });
+
+    const requested = await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: true });
+    expect(requested).toMatchObject({
+      sourceText: "第一句", translationText: "", translationStatus: "unavailable", translationUnavailableReason: "needs_disclosure",
+    });
+    expect(events.at(-1)).toMatchObject({ translationStatus: "unavailable", translationUnavailableReason: "needs_disclosure" });
+
+    // Partial and stable source captions keep flowing while translation is unavailable.
+    pushCaption(coordinator, "", 80, "正在说");
+    expect(events.at(-1)).toMatchObject({ text: "正在说", translationStatus: "unavailable" });
+    pushCaption(coordinator, "第二句", 100);
+    expect(events.at(-1)).toMatchObject({
+      sourceText: "第二句", translationStatus: "unavailable", translationUnavailableReason: "needs_disclosure",
+    });
+    expect(translate).not.toHaveBeenCalled();
+
+    // Accepting in Settings mid-recording takes effect at the next caption.
+    readiness = { available: true };
+    pushCaption(coordinator, "第三句", 150);
+    await vi.waitFor(() => expect(events.at(-1)).toMatchObject({
+      translationText: "English:第三句", translationStatus: "ready", translationUnavailableReason: null,
+    }));
+    expect(translate).toHaveBeenCalledOnce();
+
+    // Turning the selection off stops sending at the next caption, with its own reason.
+    readiness = { available: false, reason: "provider_off" };
+    pushCaption(coordinator, "第四句", 200);
+    expect(events.at(-1)).toMatchObject({
+      sourceText: "第四句", translationText: "", translationStatus: "unavailable", translationUnavailableReason: "provider_off",
+    });
+    expect(translate).toHaveBeenCalledOnce();
+
+    await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: false });
+    expect(events.at(-1)).toMatchObject({ translationStatus: "disabled", translationUnavailableReason: null });
+    await coordinator.stop(audioPath);
+    expect(translate).toHaveBeenCalledOnce();
+  });
+
+  it("re-reads availability when the overlay mode is chosen again", async () => {
+    const { audioPath, pubsub, events, engine } = streamingCaptionFixture("translation-reselect");
+    let readiness: { available: true } | { available: false; reason: CaptionTranslationUnavailableReason } =
+      { available: false, reason: "needs_xai_audio" };
+    const translate = vi.fn(async (text: string) => `EN:${text}`);
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub, streaming: engine, translate, translationAvailability: () => readiness, pollMs: 60_000,
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
+    });
+    await coordinator.start({ audioPath, title: "translation-reselect", language: "zh" });
+    await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: true });
+    expect(events.at(-1)).toMatchObject({ translationStatus: "unavailable", translationUnavailableReason: "needs_xai_audio" });
+
+    readiness = { available: true };
+    await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: true });
+    await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ translationText: "EN:第一句", translationStatus: "ready" }));
+    expect(translate).toHaveBeenCalledExactlyOnceWith("第一句", "English", []);
+    await coordinator.stop(audioPath);
+  });
+
+  it("reports unavailable, not failed, when the selection changes after a caption was queued", async () => {
+    const { audioPath, pubsub, events, engine } = streamingCaptionFixture("translation-revoked");
+    const translate = vi.fn(async () => { throw new CaptionTranslationUnavailableError("needs_connection"); });
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub, streaming: engine, translate, translationAvailability: () => ({ available: true }), pollMs: 60_000,
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
+    });
+    await coordinator.start({ audioPath, title: "translation-revoked", language: "zh" });
+    await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: true });
+    await vi.waitFor(() => expect(events.at(-1)).toMatchObject({
+      sourceText: "第一句", translationStatus: "unavailable", translationUnavailableReason: "needs_connection",
+    }));
+    expect(events.some((event) => event.translationStatus === "failed")).toBe(false);
+    await coordinator.stop(audioPath);
+  });
+
+  it("treats an availability check that throws as off and keeps captions running", async () => {
+    const { audioPath, pubsub, events, engine } = streamingCaptionFixture("translation-check-throws");
+    const translate = vi.fn(async () => "must not run");
+    const coordinator = new RealtimeTranscriptionCoordinator({
+      pubsub, streaming: engine, translate, pollMs: 60_000,
+      translationAvailability: () => { throw new Error("config unreadable"); },
+      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
+    });
+    await coordinator.start({ audioPath, title: "translation-check-throws", language: "zh" });
+    await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: true });
+    pushCaption(coordinator, "第二句", 100);
+    expect(events.at(-1)).toMatchObject({
+      status: "transcribing", sourceText: "第二句", translationStatus: "unavailable", translationUnavailableReason: "provider_off",
+    });
+    expect(translate).not.toHaveBeenCalled();
     await coordinator.stop(audioPath);
   });
 

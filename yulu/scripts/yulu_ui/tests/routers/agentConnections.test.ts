@@ -2200,6 +2200,7 @@ describe("public Agent Connection Host contract", () => {
       summaryCredentialSource: "oauth",
     });
     setupResult.host.recordDictationTextDisclosure("xai", "xai-dictation-text-v1");
+    setupResult.host.recordCaptionTranslationDisclosure("xai", "xai-caption-text-v1");
     setupResult.host.declineSummaryDataPathDisclosure("xai", "xai-summary-v1");
     setupResult.host.recordCloudTranscriptionConsent("xai-audio-v1");
     const caller = createCaller(agentConnectionsRouter, {
@@ -2243,13 +2244,16 @@ describe("public Agent Connection Host contract", () => {
       removesYuluManagedCredentials: true,
     });
     expect(setupResult.host.getDictationTextDisclosure("xai")).not.toBeNull();
+    expect(setupResult.host.getCaptionTranslationDisclosure("xai")).not.toBeNull();
     await caller.remove({ connectionId: "direct-xai", confirmed: true });
     expect(setupResult.credentials.logout).toHaveBeenCalledOnce();
     expect(setupResult.credentials.clearApiKey).toHaveBeenCalledOnce();
     expect(setupResult.host.getCloudTranscriptionConsent()).toBeNull();
     expect(setupResult.host.getSummaryDataPathDisclosure("xai")).toBeNull();
-    // Removing the connection also revokes the consent to send dictated text.
+    // Removing the connection also revokes the consent to send dictated text
+    // and live-caption text.
     expect(setupResult.host.getDictationTextDisclosure("xai")).toBeNull();
+    expect(setupResult.host.getCaptionTranslationDisclosure("xai")).toBeNull();
     await expect(caller.view()).resolves.toMatchObject({
       connections: [],
       selections: {

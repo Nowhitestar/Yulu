@@ -11,6 +11,7 @@ import { appRouter } from "./routers/_app.js";
 import { ConfigManager } from "./config.js";
 import { DictationCleanupSchema, DictationTranslationSchema, DictationTextService } from "./dictationText.js";
 import { DictationPreview } from "./dictationPreview.js";
+import { CaptionTranslationService, hasXaiCaptionTextDisclosure } from "./captionTranslation.js";
 import { transcriptionFailureReason } from "./transcriptionErrors.js";
 import { carryOverRetiredConversationDisclosure, hasXaiDictationTextDisclosure } from "./dictationTextDisclosure.js";
 import { archiveRetiredConversationSessions } from "./retiredConversationData.js";
@@ -23,9 +24,7 @@ import { mountWsMultiplexer } from "./ws.js";
 import { startInboxWatcher } from "./inboxWatcher.js";
 import { startLogTailer } from "./logTailer.js";
 import { serveStaticFile } from "./staticFile.js";
-import { homedir } from "node:os";
 import type { AppContext } from "./trpc.js";
-import { runAgentCliCommand } from "./agentCliRunner.js";
 import { handleMcpRequest, isAuthorizedToken, isMcpRequest } from "./mcp.js";
 import { HostStore } from "./hostStore.js";
 import { YULU_HOST_IPC_VERSION } from "./runtimeContract.js";
@@ -375,6 +374,13 @@ async function startLockedServer(
     glossary: (text) => loadGlossaryContract(dbProxy.vocab, text),
   });
   const dictationPreview = new DictationPreview(dictationText);
+  const captionTranslation = new CaptionTranslationService({
+    config: configManager,
+    text: xaiText,
+    credentialSource: () => agentConnections.selectedXaiCredentialSource(),
+    hasDisclosure: () => hasXaiCaptionTextDisclosure(hostStore),
+    glossary: (text) => loadGlossaryContract(dbProxy.vocab, text),
+  });
   const realtimeTranscription = new RealtimeTranscriptionCoordinator({
     dictationPreview,
     pubsub: appPubSub,
@@ -382,33 +388,10 @@ async function startLockedServer(
     stabilize: (text) => applyGlossaryContract(text, loadGlossaryContract(dbProxy.vocab)),
     transcribe: (audioPath, language) => recordingPipeline.transcribeOnDemand({ audioPath, language }),
     warm: async () => { await recordingPipeline.warmTranscription(); },
-    translate: async (sourceText, targetLanguage, context) => {
-      const configuredHome = process.env.YULU_HERMES_HOME?.trim() || process.env.HERMES_HOME?.trim();
-      const hermesHome = configuredHome?.startsWith("~/")
-        ? join(homedir(), configuredHome.slice(2))
-        : configuredHome || join(homedir(), ".hermes");
-      const python = join(hermesHome, "hermes-agent", "venv", "bin", "python");
-      if (!existsSync(python)) throw new AgentUnavailableError("Hermes Agent runtime is unavailable");
-      const result = await runAgentCliCommand({
-        runtime: {
-          provider: "custom",
-          label: "Hermes live-caption translation",
-          source: "auto-detected",
-          command: [python, "realtime_translate.py"],
-          cwd: runtimePaths.moviesDir,
-          disabledReason: null,
-        },
-        scriptDir: runtimePaths.scriptDir,
-        configDir: runtimePaths.durableDataDir,
-        timeoutMs: 10_000,
-        prompt: JSON.stringify({ sourceText, targetLanguage, context }),
-      });
-      const translated = result.stdout.trim().replace(/^```(?:\w+)?\s*|\s*```$/g, "").trim();
-      if (result.code !== 0 || !translated) {
-        throw new Error((result.stderr || result.stdout || "realtime translation failed").trim());
-      }
-      return translated;
-    },
+    // ADR-011: captions are translated only through the explicit caption
+    // selection and disclosure; Hermes is an MCP client, not a translator.
+    translate: (sourceText, targetLanguage, context) => captionTranslation.translate(sourceText, targetLanguage, context),
+    translationAvailability: () => captionTranslation.availability(),
     defaultTargetLanguage: () => configManager.read().transcription.dictation.target_language || "English",
     defaultTranslationEnabled: false,
     allowedRoots: [runtimePaths.moviesDir],

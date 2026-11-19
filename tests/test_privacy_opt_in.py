@@ -25,6 +25,8 @@ def test_empty_config_reports_local_yulu_audio_defaults():
     assert "conversation" not in report
     assert report["dictation_text"]["provider"] == "none"
     assert report["dictation_text"]["cloud_text_opt_in"] is False
+    assert report["caption_translation"]["provider"] == "none"
+    assert report["caption_translation"]["cloud_text_opt_in"] is False
     assert report["summary_delivery"]["auto_channel"] == "file"
     assert report["summary_delivery"]["external_opt_in_channels"] == []
 
@@ -86,3 +88,25 @@ def test_dictation_text_reports_only_the_explicit_xai_switch():
     assert selected["dictation_text"]["cloud_text_opt_in"] is True
     assert retired["dictation_text"]["provider"] == "none"
     assert retired["dictation_text"]["cloud_text_opt_in"] is False
+
+
+def test_caption_translation_reports_only_its_own_explicit_switch():
+    mod = load_privacy()
+
+    selected = mod.privacy_opt_in_report({
+        "transcription": {"engine": "xai", "captions": {"translation_provider": "xai"}},
+    })
+    dictation_only = mod.privacy_opt_in_report({
+        "transcription": {"engine": "xai", "dictation": {"text_provider": "xai"}},
+    })
+    unknown = mod.privacy_opt_in_report({
+        "transcription": {"engine": "xai", "captions": {"translation_provider": "hermes"}},
+    })
+
+    assert selected["caption_translation"]["provider"] == "xai"
+    assert selected["caption_translation"]["cloud_text_opt_in"] is True
+    assert selected["caption_translation"]["requires_xai_audio_engine"] is True
+    assert selected["dictation_text"]["cloud_text_opt_in"] is False
+    assert dictation_only["caption_translation"]["provider"] == "none"
+    assert dictation_only["caption_translation"]["cloud_text_opt_in"] is False
+    assert unknown["caption_translation"]["provider"] == "none"
