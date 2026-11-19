@@ -489,7 +489,9 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigat
         configuration.userContentController.add(PanelMessages(owner: self, port: port), name: "yuluPanel")
         configuration.userContentController.addUserScript(WKUserScript(source: """
             if (location.origin === 'http://127.0.0.1:\(port)') {
-              document.documentElement.dataset.yuluPanel = 'true';
+              const markPanel = () => { document.documentElement.dataset.yuluPanel = 'true'; };
+              if (document.documentElement) markPanel();
+              else document.addEventListener('DOMContentLoaded', markPanel, { once: true });
             }
             """, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let page = WKWebView(frame: glass.bounds, configuration: configuration)
