@@ -652,7 +652,7 @@ export const en: Messages = {
   "sharing.loading": "Loading Sharing configuration…",
   "sharing.loadFailed": "Sharing configuration is unavailable. Check Yulu Host and try again.",
   "sharing.actionFailed": "Sharing action failed: {error}",
-  "sharing.noConnections": "No Supported Agent Connection is available. Add one in AI Providers first.",
+  "sharing.noConnections": "No Supported Agent Connection is available. Add one under AI services in Connections first.",
   "sharing.agentConnection": "AI account",
   "sharing.agentConnection.choose": "Choose an Agent Connection…",
   "sharing.connector": "Share to",
@@ -865,7 +865,7 @@ export const en: Messages = {
   "settings.providers.readiness.test.summary": "Test summary",
   "settings.providers.readiness.requestFailedTitle": "Capability test did not complete",
   "settings.providers.readiness.requestFailed": "The capability test did not complete. Review the xAI connection and try again.",
-  "settings.providers.open": "Open AI Providers",
+  "settings.providers.open": "Open AI services",
 
   // ---- Agent Connection Center ----
   "agentConnections.title": "AI services",
@@ -1796,7 +1796,7 @@ export const zh: Messages = {
   "sharing.loading": "正在读取分享配置…",
   "sharing.loadFailed": "分享配置当前不可用。请检查 Yulu Host 后重试。",
   "sharing.actionFailed": "分享操作失败：{error}",
-  "sharing.noConnections": "当前没有可用的 Supported Agent Connection。请先在智能服务中添加。",
+  "sharing.noConnections": "当前没有可用的 Supported Agent Connection。请先在「连接」的 AI 服务中添加。",
   "sharing.agentConnection": "AI 账号",
   "sharing.agentConnection.choose": "选择 Agent Connection…",
   "sharing.connector": "分享到",
@@ -2007,7 +2007,7 @@ export const zh: Messages = {
   "settings.providers.readiness.test.summary": "测试摘要",
   "settings.providers.readiness.requestFailedTitle": "能力测试未完成",
   "settings.providers.readiness.requestFailed": "能力测试未完成。请检查 xAI 连接后重试。",
-  "settings.providers.open": "打开智能服务设置",
+  "settings.providers.open": "打开 AI 服务设置",
 
   // ---- Agent 连接中心 ----
   "agentConnections.title": "AI 服务",
