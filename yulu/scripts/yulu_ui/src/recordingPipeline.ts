@@ -34,6 +34,7 @@ import {
 } from "./glossaryContract.js";
 import {
   normalizeTranscriptionLanguage,
+  readReusableRealtimeTranscript,
   type TranscriptionResult,
   type TranscriptionLanguage,
 } from "./realtimeTranscription.js";
@@ -704,11 +705,20 @@ export class RecordingPipeline {
         };
         this.options.pubsub.publish("recordings-changed", { reason: "changed" });
       } else {
-        const rawTranscription = await this.options.transcription.transcribeFile(
-          task.audioPath,
-          task.transcriptionLanguage,
-          glossary,
-        );
+        // The live transcript written during the recording is the transcript
+        // when it covers the whole recording with the same engine; otherwise
+        // the same selected engine transcribes the WAV once, as before.
+        const live = readReusableRealtimeTranscript(task.audioPath, {
+          language: task.transcriptionLanguage,
+          provider: this.options.transcription.provider,
+        });
+        const rawTranscription: TranscriptionResult = live.transcript !== null
+          ? { transcript: live.transcript, provider: live.provider, chunks: live.chunks, language: task.transcriptionLanguage }
+          : await this.options.transcription.transcribeFile(
+            task.audioPath,
+            task.transcriptionLanguage,
+            glossary,
+          );
         const transcript = glossary
           ? applyGlossaryContract(rawTranscription.transcript, glossary)
           : rawTranscription.transcript;
@@ -716,6 +726,8 @@ export class RecordingPipeline {
         const record = this.options.artifacts.commitTranscript(task, transcript, {
           transcriptionProvider: transcription.provider,
           transcriptChunks: transcription.chunks,
+          transcriptSource: live.transcript !== null ? "realtime" : "full",
+          ...(live.transcript === null ? { realtimeNotReused: live.reason } : {}),
           committedBy: "yulu-host",
         });
         this.options.store.recordTranscript(task.id, leaseToken, record);

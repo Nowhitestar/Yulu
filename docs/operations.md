@@ -248,6 +248,16 @@ The Host durably commits the transcript first, then dispatches only to the task'
 pinned Summary Provider. A transcript can therefore remain valid when summary
 generation is unavailable; inspect the Host task state for progress.
 
+The transcript normally comes from the live transcription made during the
+recording (`<stem>.realtime.transcript.txt`), so the audio is not transcribed a
+second time. The Host reuses it only when the live session finished, was trusted,
+used the same audio engine family and language as the task, and covered at least
+98% of the recording. Otherwise the selected engine transcribes the whole WAV once,
+as before; this is the same engine, not a fallback to another one. The transcript
+artifact's provenance records `transcriptSource` (`realtime` or `full`) and, for a
+full pass, `realtimeNotReused` with the reason. **重新转写** in the reading page
+always runs a full pass.
+
 Manual summary regeneration creates the same durable summary-only task shape and
 adopts the already committed transcript; it does not re-run audio transcription.
 Successful xAI artifacts record the exact provider/model and storage-disabled
