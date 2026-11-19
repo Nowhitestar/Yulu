@@ -11,6 +11,8 @@ struct YuluNotice {
         case processingAttention = "processing_attention"
         case audioUnavailable = "audio_unavailable"
         case calendarEmpty = "calendar_empty"
+        /// Announced only by the App's own updater, never accepted over IPC.
+        case updateAvailable = "update_available"
     }
 
     let kind: Kind
@@ -43,8 +45,12 @@ struct YuluNotice {
     }
 
     var key: String { "\(kind.rawValue):\(id)" }
-    // A newer result replaces the saved/progress notice for the same recording.
-    var group: String { stem.map { "recording:\($0)" } ?? "\(kind.rawValue):\(id)" }
+    // A newer result replaces the saved/progress notice for the same recording,
+    // and a newer version replaces an older update notice.
+    var group: String {
+        if kind == .updateAvailable { return kind.rawValue }
+        return stem.map { "recording:\($0)" } ?? "\(kind.rawValue):\(id)"
+    }
     var route: String {
         if let stem {
             let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
@@ -53,6 +59,7 @@ struct YuluNotice {
         switch kind {
         case .audioUnavailable: return "/health"
         case .calendarEmpty: return "/settings/meetings"
+        case .updateAvailable: return YuluNotificationPresenter.updateRoute
         default: return "/inbox"
         }
     }
@@ -76,6 +83,9 @@ struct YuluNotice {
         case .calendarEmpty:
             return (english ? "Calendar needs checking" : "请检查日历同步",
                     english ? "No meetings returned. Existing reminders were kept." : "未获取到会议，已保留现有提醒。")
+        case .updateAvailable:
+            return (english ? "Yulu \(subject) is available" : "Yulu \(subject) 可以更新了",
+                    english ? "Click to see what's new and install." : "点按查看更新内容并安装。")
         }
     }
 }
@@ -84,6 +94,8 @@ struct YuluNotice {
 /// The delegate is installed at App launch, including launches from a banner.
 public final class YuluNotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     public static let shared = YuluNotificationPresenter()
+    /// Opening this route asks the App's updater to show the waiting update.
+    public static let updateRoute = "/settings/general#updates"
     private var openRoute: ((String) -> Void)?
     private var english: () -> Bool = { false }
     private var center: UNUserNotificationCenter?
@@ -135,7 +147,30 @@ public final class YuluNotificationPresenter: NSObject, UNUserNotificationCenter
     }
 
     func receive(_ payload: [String: Any]) -> [String: Any] {
-        guard let notice = YuluNotice(payload) else { return ["ok": false, "error": "invalid_notification"] }
+        guard let notice = YuluNotice(payload), notice.kind != .updateAvailable else {
+            return ["ok": false, "error": "invalid_notification"]
+        }
+        return present(notice)
+    }
+
+    /// A scheduled check found an update while Yulu was in the background.
+    /// Only the App's updater calls this; IPC callers cannot announce updates.
+    public func announceUpdate(version: String) {
+        guard let notice = YuluNotice([
+            "kind": YuluNotice.Kind.updateAvailable.rawValue, "id": version, "title": version,
+        ]) else { return }
+        _ = present(notice)
+    }
+
+    /// The person has seen the update window; the reminder has done its job.
+    public func withdrawUpdateAnnouncement() {
+        let group = YuluNotice.Kind.updateAvailable.rawValue
+        latest.removeValue(forKey: group)
+        center?.removeDeliveredNotifications(withIdentifiers: [group])
+        center?.removePendingNotificationRequests(withIdentifiers: [group])
+    }
+
+    private func present(_ notice: YuluNotice) -> [String: Any] {
         guard center != nil else { return ["ok": false, "error": "notification_app_unavailable"] }
         let now = Date()
         seen = seen.filter { now.timeIntervalSince($0.value) < 600 }

@@ -254,3 +254,27 @@ jobs:
           set -euo pipefail
           npm exec -- playwright install chromium
           npm exec -- playwright test e2e/critical.spec.ts --grep "Settings — capabilities remain readable"
+
+  sparkle_shell:
+    # The Swift job builds the App without Sparkle; only the release links it.
+    # Compile the update path here so a mistake fails the PR, not the release.
+    name: Yulu.app updater (Sparkle)
+    runs-on: macos-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build the App shell against the locked Sparkle
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/Yulu.app"
+          mkdir -p "$APP/Contents"
+          bash packaging/scripts/prepare_sparkle_framework.sh "$APP"
+          bash yulu/scripts/build_yulu_shell.sh "$RUNNER_TEMP/yulu_app" \
+            -F "$APP/Contents/Frameworks" -framework Sparkle \
+            -Xlinker -rpath -Xlinker "$APP/Contents/Frameworks"
+          "$RUNNER_TEMP/yulu_app" --inspect-sparkle-delegate

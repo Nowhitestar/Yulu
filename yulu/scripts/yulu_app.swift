@@ -4047,12 +4047,17 @@ func runDevelopmentSmoke(layout: BundleLayout, port: Int) throws -> DevelopmentS
 #endif
 
 #if canImport(Sparkle)
-final class SparkleUpdateAdapter: NSObject, SPUUpdaterDelegate {
+final class SparkleUpdateAdapter: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
     private let coordinator: ApplicationUpdateCoordinator
     private let currentBuild: String
+    /// A scheduled check found an update while Yulu was in the background,
+    /// where Sparkle's window could go unseen. Receives the display version.
+    var onBackgroundUpdate: ((String) -> Void)?
+    /// The person has seen the update window.
+    var onUpdateAttended: (() -> Void)?
     private lazy var controller = SPUStandardUpdaterController(
         updaterDelegate: self,
-        userDriverDelegate: nil
+        userDriverDelegate: self
     )
 
     init(coordinator: ApplicationUpdateCoordinator, currentBuild: String) {
@@ -4063,7 +4068,40 @@ final class SparkleUpdateAdapter: NSObject, SPUUpdaterDelegate {
     }
 
     func checkForUpdates() {
+        NSApp.activate(ignoringOtherApps: true)
         controller.checkForUpdates(nil)
+    }
+
+    var canCheckForUpdates: Bool { controller.updater.canCheckForUpdates }
+    var lastUpdateCheckDate: Date? { controller.updater.lastUpdateCheckDate }
+    var automaticallyChecksForUpdates: Bool {
+        get { controller.updater.automaticallyChecksForUpdates }
+        set { controller.updater.automaticallyChecksForUpdates = newValue }
+    }
+
+    // Gentle reminders: Yulu mostly runs in the background, so a scheduled
+    // check that finds an update announces it instead of opening a window
+    // behind other apps. Installing still happens only in Sparkle's window.
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(
+        _ update: SUAppcastItem,
+        andInImmediateFocus immediateFocus: Bool
+    ) -> Bool {
+        immediateFocus
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(
+        _ handleShowingUpdate: Bool,
+        forUpdate update: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        guard !handleShowingUpdate, !state.userInitiated else { return }
+        onBackgroundUpdate?(update.displayVersionString)
+    }
+
+    func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
+        onUpdateAttended?()
     }
 
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
@@ -4152,6 +4190,55 @@ private final class WindowChromeMessages: NSObject, WKScriptMessageHandler {
     }
 }
 
+/// What the Settings page may ask of the App's updater: read its state, start
+/// a check, or turn scheduled checks on or off. Installing is never possible
+/// from the page; Sparkle's own window asks first.
+protocol ApplicationUpdateBridge: AnyObject {
+    func updateBridgeState() -> [String: Any]
+    func updateBridgeCheckNow()
+    func updateBridgeSetAutomaticChecks(_ enabled: Bool)
+}
+
+private final class UpdateMessages: NSObject, WKScriptMessageHandlerWithReply {
+    weak var bridge: ApplicationUpdateBridge?
+    let port: Int
+    init(port: Int, bridge: ApplicationUpdateBridge) {
+        self.port = port
+        self.bridge = bridge
+    }
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage,
+        replyHandler: @escaping (Any?, String?) -> Void
+    ) {
+        let origin = message.frameInfo.securityOrigin
+        guard message.frameInfo.isMainFrame, origin.protocol == "http",
+              origin.host == "127.0.0.1", origin.port == port,
+              let body = message.body as? [String: Any],
+              let action = body["action"] as? String, let bridge else {
+            replyHandler(nil, "unavailable")
+            return
+        }
+        switch action {
+        case "state":
+            break
+        case "check":
+            bridge.updateBridgeCheckNow()
+        case "setAutomaticChecks":
+            guard let enabled = body["enabled"] as? Bool else {
+                replyHandler(nil, "invalid")
+                return
+            }
+            bridge.updateBridgeSetAutomaticChecks(enabled)
+        default:
+            replyHandler(nil, "invalid")
+            return
+        }
+        replyHandler(bridge.updateBridgeState(), nil)
+    }
+}
+
 func configureWindowChrome(_ window: NSWindow) {
     window.styleMask.insert(.fullSizeContentView)
     window.titleVisibility = .hidden
@@ -4180,10 +4267,18 @@ final class ApplicationWebContent: NSObject, WKUIDelegate, WKNavigationDelegate 
         port: Int,
         configuration: WKWebViewConfiguration = WKWebViewConfiguration(),
         initialSize: NSSize = NSSize(width: 960, height: 680),
+        updates: ApplicationUpdateBridge? = nil,
         openExternalURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) {
         chromeMessages = WindowChromeMessages(port: port)
         configuration.userContentController.add(chromeMessages, name: "yuluWindow")
+        if let updates {
+            configuration.userContentController.addScriptMessageHandler(
+                UpdateMessages(port: port, bridge: updates),
+                contentWorld: .page,
+                name: "yuluUpdates"
+            )
+        }
         configuration.userContentController.addUserScript(WKUserScript(source: """
             if (location.origin === 'http://127.0.0.1:\(port)') {
               const markNative = () => { document.documentElement.dataset.yuluNative = 'true'; };
@@ -4684,7 +4779,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if canImport(YuluNativeRecording)
-        YuluNotificationPresenter.shared.configure { [weak self] route in self?.openNativeRoute(route) }
+        YuluNotificationPresenter.shared.configure { [weak self] route in self?.openNativeOrUpdateRoute(route) }
         #endif
         installMainMenu()
         refreshDockIconVisibility()
@@ -4957,8 +5052,26 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
 
     @objc private func onCheckForUpdates() {
         #if canImport(Sparkle)
-        sparkleAdapter?.checkForUpdates()
+        if let sparkleAdapter {
+            sparkleAdapter.checkForUpdates()
+            return
+        }
         #endif
+        // A copy that cannot update itself (outside /Applications, or a
+        // development build) points to the release page instead of doing nothing.
+        if let releases = URL(string: "https://github.com/Nowhitestar/Yulu/releases/latest") {
+            NSWorkspace.shared.open(releases)
+        }
+    }
+
+    private func openNativeOrUpdateRoute(_ route: String) {
+        #if canImport(YuluNativeRecording)
+        if route == YuluNotificationPresenter.updateRoute {
+            onCheckForUpdates()
+            return
+        }
+        #endif
+        openNativeRoute(route)
     }
 
     @objc private func onReturnToPreviousApplication() {
@@ -5182,10 +5295,19 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
               let currentBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String else {
             return
         }
-        sparkleAdapter = SparkleUpdateAdapter(
+        let adapter = SparkleUpdateAdapter(
             coordinator: updateCoordinator,
             currentBuild: currentBuild
         )
+        #if canImport(YuluNativeRecording)
+        adapter.onBackgroundUpdate = { version in
+            YuluNotificationPresenter.shared.announceUpdate(version: version)
+        }
+        adapter.onUpdateAttended = {
+            YuluNotificationPresenter.shared.withdrawUpdateAnnouncement()
+        }
+        #endif
+        sparkleAdapter = adapter
         #endif
     }
 
@@ -5276,7 +5398,8 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             environment["YULU_MANAGE_REMINDERS"] = "1"
             nativeRecording = NativeRecordingControls(
                 environment: environment,
-                openRoute: { [weak self] route in self?.openNativeRoute(route) }
+                openRoute: { [weak self] route in self?.openNativeOrUpdateRoute(route) },
+                checkForUpdates: { [weak self] in self?.onCheckForUpdates() }
             )
         }
         try nativeRecording?.prepare()
@@ -5419,12 +5542,42 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         if let webContent {
             content = webContent
         } else {
-            content = ApplicationWebContent(port: port, initialSize: window.frame.size)
+            content = ApplicationWebContent(port: port, initialSize: window.frame.size, updates: self)
             webContent = content
         }
         content.load(url, in: window)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+extension YuluApplication: ApplicationUpdateBridge {
+    func updateBridgeState() -> [String: Any] {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let release = info["YuluReleaseVersion"] as? String
+        let bundle = info["CFBundleShortVersionString"] as? String
+        var state: [String: Any] = ["version": release ?? bundle ?? "", "available": false]
+        #if canImport(Sparkle)
+        if let sparkleAdapter {
+            state["available"] = true
+            state["automaticChecks"] = sparkleAdapter.automaticallyChecksForUpdates
+            state["canCheck"] = sparkleAdapter.canCheckForUpdates
+            if let checked = sparkleAdapter.lastUpdateCheckDate {
+                state["lastCheck"] = ISO8601DateFormatter().string(from: checked)
+            }
+        }
+        #endif
+        return state
+    }
+
+    func updateBridgeCheckNow() {
+        onCheckForUpdates()
+    }
+
+    func updateBridgeSetAutomaticChecks(_ enabled: Bool) {
+        #if canImport(Sparkle)
+        sparkleAdapter?.automaticallyChecksForUpdates = enabled
+        #endif
     }
 }
 

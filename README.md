@@ -103,10 +103,15 @@ Voice input works in any app, not just Yulu.
 
 ### Around the app
 
-Yulu lives in the menu bar as well as its window; hide the Dock or menu bar
-icon and recording, reminders, and shortcuts keep working. The interface is in
-Chinese and English, with light, dark, and custom themes, and updates install
-from inside the App.
+- **Updates.** Yulu checks for a new version about once a day. When it finds
+  one, it asks before installing and never installs during a recording; if
+  Yulu is in the background, a notification tells you. Check any time from the
+  menu-bar menu (**Check for Updates…**) or **Settings → General**, where
+  automatic checks can also be turned off.
+- **Menu bar and window.** Yulu lives in the menu bar as well as its window;
+  hide the Dock or menu bar icon and recording, reminders, and shortcuts keep
+  working.
+- **Chinese and English**, with light, dark, and custom themes.
 
 ## The window
 

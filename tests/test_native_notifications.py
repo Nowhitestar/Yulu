@@ -87,3 +87,20 @@ def test_unknown_notification_types_and_missing_summary_destination_fail_closed(
     assert present(native_notice_binary, kind="arbitrary") == {"valid": False}
     assert present(native_notice_binary, kind="summary_ready", stem=None) == {"valid": False}
     assert present(native_notice_binary, id="bad\nidentity") == {"valid": False}
+
+
+def test_update_notice_has_fixed_copy_route_and_one_group(native_notice_binary):
+    first = present(native_notice_binary, kind="update_available", id="0.29.0", title="0.29.0", stem=None)
+    later = present(native_notice_binary, kind="update_available", id="0.30.0", title="0.30.0", stem=None, english=True)
+    assert first["title"] == "Yulu 0.29.0 可以更新了"
+    assert later["title"] == "Yulu 0.30.0 is available"
+    assert first["route"] == later["route"] == "/settings/general#updates"
+    assert first["group"] == later["group"] == "update_available"
+    assert first["audible"] is False
+
+
+def test_only_the_app_updater_can_announce_an_update():
+    source = (ROOT / "yulu/scripts/native_notifications.swift").read_text(encoding="utf-8")
+    receive = source.split("func receive(_ payload:", 1)[1].split("public func announceUpdate", 1)[0]
+    assert "notice.kind != .updateAvailable" in receive
+    assert receive.index("notice.kind != .updateAvailable") < receive.index("present(notice)")

@@ -23,11 +23,16 @@ public final class NativeRecordingControls {
     private var prepared = false
     private var active = false
 
-    public init(environment: [String: String], openRoute: @escaping (String) -> Void) {
+    public init(
+        environment: [String: String],
+        openRoute: @escaping (String) -> Void,
+        checkForUpdates: (() -> Void)? = nil
+    ) {
         embeddedEnvironment = environment
         controller = StatusAgentApp()
         reminders = NativeReminderServices(environment: environment)
         controller.openRoute = openRoute
+        controller.checkForUpdates = checkForUpdates
         YuluNotificationPresenter.shared.configure(openRoute: openRoute)
         YuluNotificationPresenter.shared.setLanguage { readAppLanguage() == .en }
     }
@@ -594,6 +599,18 @@ class MenuBuilder {
         settings.target = target
         settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         menu.addItem(settings)
+
+        // Only the App owns an updater; the legacy standalone agent hides this.
+        let updates = NSMenuItem(
+            title: L("检查更新…", "Check for Updates…"),
+            action: #selector(StatusAgentApp.onCheckForUpdates),
+            keyEquivalent: ""
+        )
+        updates.target = target
+        updates.identifier = NSUserInterfaceItemIdentifier("check_for_updates")
+        updates.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
+        updates.isHidden = (target as? StatusAgentApp)?.checkForUpdates == nil
+        menu.addItem(updates)
         menu.addItem(NSMenuItem.separator())
 
         let quit = NSMenuItem(
@@ -2484,6 +2501,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         (AXIsProcessTrusted(), CGPreflightPostEventAccess())
     }
     var openRoute: ((String) -> Void)?
+    var checkForUpdates: (() -> Void)?
     private var configurationGeneration = 0
     var statusItem: NSStatusItem!
     var menu: NSMenu!
@@ -3523,6 +3541,10 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    @objc func onCheckForUpdates() {
+        checkForUpdates?()
+    }
+
     @objc func onOpenSettings() {
         if let openRoute { openRoute("/settings"); return }
         if let url = URL(string: "http://127.0.0.1:7777/settings") {
@@ -3978,6 +4000,11 @@ struct StatusAgentMain {
             assert(menu.items.first(where: { $0.identifier?.rawValue == "current_meeting_label" })?.isHidden == true)
             assert(menu.items.first(where: { $0.identifier?.rawValue == "recent_recordings" })?.submenu != nil)
             assert(menu.items.contains(where: { $0.title == "Settings…" && $0.keyEquivalent == "," }))
+            assert(menu.items.first(where: { $0.identifier?.rawValue == "check_for_updates" })?.isHidden == true)
+            menuTarget.checkForUpdates = {}
+            let appMenu = MenuBuilder.build(target: menuTarget)
+            assert(appMenu.items.first(where: { $0.identifier?.rawValue == "check_for_updates" })?.isHidden == false)
+            assert(appMenu.items.first(where: { $0.identifier?.rawValue == "check_for_updates" })?.title == "Check for Updates…")
             assert(menu.items.last?.title == "Quit Yulu")
             withExtendedLifetime(menuTarget) {}
             print("status_agent self-test ok: \(task.executableURL?.path ?? "missing")")
