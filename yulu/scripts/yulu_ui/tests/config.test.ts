@@ -44,7 +44,7 @@ describe("ConfigManager", () => {
     } finally { cleanup(); }
   });
 
-  it("reads + caches by mtime", () => {
+  it("reads + caches until the file changes", () => {
     const { mgr, cleanup } = makeCfg();
     try {
       const cfg = mgr.read();
@@ -342,7 +342,56 @@ describe("ConfigManager", () => {
         .toThrow(/changed externally/);
     } finally { cleanup(); }
   });
+
+  // Coarse filesystem clocks can give two back-to-back atomic rewrites the same
+  // mtime; the cache must still notice that config.json was replaced.
+  it("re-reads a config another manager replaced within the same mtime tick", () => {
+    const { path, mgr, cleanup } = makeCfg();
+    try {
+      mgr.update("audio.silence_threshold", 0.02);
+      const tick = pinMtime(path);
+      const before = statSync(path);
+      expect(mgr.read().audio.silence_threshold).toBe(0.02);
+
+      new ConfigManager(path).update("audio.silence_threshold", 0.05);
+      pinMtime(path, tick);
+      const after = statSync(path);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+      expect(after.size).toBe(before.size);
+
+      expect(mgr.read().audio.silence_threshold).toBe(0.05);
+    } finally { cleanup(); }
+  });
+
+  it("refuses to write over an external replace that kept the same mtime", () => {
+    const { path, mgr, cleanup } = makeCfg();
+    try {
+      mgr.update("audio.silence_threshold", 0.02);
+      const tick = pinMtime(path);
+      const before = statSync(path);
+      mgr.read();
+
+      // Replace the file the way the Python helpers do: temp file + rename.
+      const external = JSON.parse(readFileSync(path, "utf8"));
+      external.audio.silence_threshold = 0.05;
+      const tmp = `${path}.external.tmp`;
+      fs.writeFileSync(tmp, `${JSON.stringify(external, null, 2)}\n`);
+      fs.renameSync(tmp, path);
+      pinMtime(path, tick);
+      expect(statSync(path).mtimeMs).toBe(before.mtimeMs);
+
+      expect(() => mgr.update("audio.silence_threshold", 0.03))
+        .toThrow(/changed externally/);
+      expect(JSON.parse(readFileSync(path, "utf8")).audio.silence_threshold).toBe(0.05);
+    } finally { cleanup(); }
+  });
 });
+
+/** Set mtime to a whole second, which utimesSync can later restore exactly. */
+function pinMtime(path: string, at = new Date(Math.floor(statSync(path).mtimeMs / 1000) * 1000)): Date {
+  utimesSync(path, at, at);
+  return at;
+}
 
 describe("atomic write", () => {
   it("update 原子写:落盘后不留 .tmp 残file,内容正确", () => {

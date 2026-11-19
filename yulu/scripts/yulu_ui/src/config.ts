@@ -439,9 +439,21 @@ export function migrateRetiredGatewaySelections(path: string): boolean {
   return true;
 }
 
+/**
+ * Identity of the config file's current contents. Every writer replaces
+ * config.json with a temp file + rename, so the inode changes on each replace
+ * even when a coarse filesystem clock leaves mtime unchanged between two
+ * rewrites; size, mtime and ctime also catch in-place writes and touches.
+ * BigInt stats keep the full inode number and nanosecond timestamps.
+ */
+function configFileSignature(path: string): string {
+  const stat = statSync(path, { bigint: true });
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+}
+
 export class ConfigManager {
   private cached: YuluConfig | null = null;
-  private cachedMtime = 0;
+  private cachedSignature = "";
 
   constructor(private readonly path: string) {
     migrateAgentNativeConfig(path);
@@ -451,19 +463,19 @@ export class ConfigManager {
   }
 
   read(): YuluConfig {
-    const mtime = statSync(this.path).mtimeMs;
-    if (this.cached && this.cachedMtime === mtime) return this.cached;
+    const signature = configFileSignature(this.path);
+    if (this.cached && this.cachedSignature === signature) return this.cached;
     const raw = JSON.parse(readFileSync(this.path, "utf8"));
     this.cached = ConfigSchema.parse(raw);
-    this.cachedMtime = mtime;
+    this.cachedSignature = signature;
     return this.cached;
   }
 
   /**
    * Mutate one dotted key (e.g. "audio.silence_threshold"). Writes the
    * file atomically and returns which daemons need restart/sighup per
-   * the spec §11 map. Throws if the file's mtime advanced since the
-   * last read (someone else wrote to it).
+   * the spec §11 map. Throws if the file was replaced or modified since
+   * the last read (someone else wrote to it).
    */
   update(dottedKey: string, value: unknown): UpdateResult {
     return this.updateMany([{ key: dottedKey, value }]);
@@ -497,8 +509,7 @@ export class ConfigManager {
         throw new Error(`setting is retired because Yulu now uses one explicit audio engine: ${key}`);
       }
     }
-    const onDiskMtime = statSync(this.path).mtimeMs;
-    if (this.cached && onDiskMtime !== this.cachedMtime) {
+    if (this.cached && configFileSignature(this.path) !== this.cachedSignature) {
       throw new Error(`Config file changed externally — reload before writing (${this.path})`);
     }
     const cfg = JSON.parse(readFileSync(this.path, "utf8"));
