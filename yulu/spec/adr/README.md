@@ -20,4 +20,5 @@ out*, and *why*. Implementation details belong in the matching spec under
 | [007](007-explicit-audio-transcription-engines.md) | Explicit Yulu audio transcription engines | Audio-engine decision retained; credential source superseded by [ADR-008](008-yulu-owned-xai-oauth.md) | 2026-07-17 |
 | [008](008-yulu-owned-xai-oauth.md) | Yulu-owned xAI OAuth | Connection custody retained; client registration and capability scope superseded by [ADR-009](009-grok-cli-compatible-xai-oauth.md) | 2026-07-28 |
 | [009](009-grok-cli-compatible-xai-oauth.md) | Grok CLI-compatible xAI OAuth across capabilities | Credential reuse retained; conversation scope superseded by [ADR-010](010-retire-yulu-conversation.md) | 2026-08-24 |
-| [010](010-retire-yulu-conversation.md) | Retire Yulu-owned conversation | Accepted | 2026-11-18 |
+| [010](010-retire-yulu-conversation.md) | Retire Yulu-owned conversation | Accepted; live-caption translation added by [ADR-011](011-explicit-live-caption-translation.md) | 2026-11-18 |
+| [011](011-explicit-live-caption-translation.md) | Explicit live-caption translation | Accepted | 2026-11-19 |

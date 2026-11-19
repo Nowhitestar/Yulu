@@ -10,7 +10,14 @@ const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_OUTPUT_CHARS = 131_072;
 const OUTPUT_LIMIT_ERROR = "xAI text response exceeded the output limit";
 
-export type XaiTextCapability = "summary" | "dictation";
+export type XaiTextCapability = "summary" | "dictation" | "captions";
+
+/** Dictation and caption translation are short, interactive requests: they
+ * honor cancellation, use low reasoning effort and require a completed
+ * response. Neither ever retries against another model. */
+function isInteractive(capability: XaiTextCapability): boolean {
+  return capability !== "summary";
+}
 
 export interface XaiTextMessage {
   role: "system" | "user" | "assistant";
@@ -24,7 +31,7 @@ export interface XaiTextRequest {
   input: XaiTextMessage[];
   maxOutputTokens?: number;
   timeoutMs?: number;
-  /** Cancels superseded speculative dictation work; never changes provider. */
+  /** Cancels superseded interactive work; never changes provider. */
   signal?: AbortSignal;
 }
 
@@ -184,14 +191,14 @@ export class XaiTextClient {
           input: request.input,
           max_output_tokens: maxOutputTokens,
           store: false,
-          // These models default to high reasoning; keep dictation editing quick.
-          ...(request.capability === "dictation" && /^grok-4\.[56](?:$|-)/.test(model)
+          // These models default to high reasoning; keep interactive text quick.
+          ...(isInteractive(request.capability) && /^grok-4\.[56](?:$|-)/.test(model)
             ? { reasoning: { effort: "low" } } : {}),
         }),
         signal,
       });
     } catch {
-      if (request.capability === "dictation" && signal.aborted) throw signal.reason;
+      if (isInteractive(request.capability) && signal.aborted) throw signal.reason;
       throw new XaiTextUnknownOutcomeError({
         capability: request.capability,
         model,
@@ -207,7 +214,7 @@ export class XaiTextClient {
       try { payload = JSON.parse(raw); }
       catch { throw new Error("xAI text response was invalid"); }
     } catch (error) {
-      if (request.capability === "dictation" && signal.aborted) throw signal.reason;
+      if (isInteractive(request.capability) && signal.aborted) throw signal.reason;
       if (error instanceof XaiTextResponseTransportError) {
         throw new XaiTextUnknownOutcomeError({
           capability: request.capability,
@@ -217,8 +224,10 @@ export class XaiTextClient {
       }
       throw error;
     }
-    if (request.capability === "dictation" && (payload as { status?: string } | null)?.status !== "completed") {
-      throw new Error("xAI dictation cleanup was incomplete");
+    if (isInteractive(request.capability) && (payload as { status?: string } | null)?.status !== "completed") {
+      throw new Error(request.capability === "captions"
+        ? "xAI caption translation was incomplete"
+        : "xAI dictation cleanup was incomplete");
     }
     const responseModel = outputModel(payload);
     if (responseModel !== model) {

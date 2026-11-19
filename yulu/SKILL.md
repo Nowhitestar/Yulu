@@ -98,6 +98,7 @@ spooled and replayed. Do not add a fallback AI path to the capture process.
 | Manual sharing | selected supported Agent connector | Share Action snapshot, authorization, and verified receipt |
 | Questions about meetings | the user's own Agent | that Agent's history, via Yulu MCP tools |
 | Dictation text | explicitly enabled xAI text provider | `transcription.dictation.text_provider`/`text_model` plus the dictated-text disclosure receipt |
+| Live-caption translation | explicitly enabled xAI text provider (ADR-011) | `transcription.captions.translation_provider`/`translation_model` plus the caption-text disclosure receipt |
 | Search, prompts, glossary | Yulu local data | local SQLite and recording sidecars |
 
 ## Prefer MCP for Agent actions
@@ -194,6 +195,8 @@ Relevant sections:
   separately in Settings and is never a config field;
 - `transcription.language` and `transcription.dictation`: language, prompt,
   context, timeout, deadline, and dictation text provider/model preferences;
+- `transcription.captions`: the separate live-caption translation
+  provider/model selection (ADR-011);
 - `intelligence.summary`: pinned provider, connection, and model selection
   without credentials;
 - `llm.agent.provider` / `llm.command`: legacy migration input only;

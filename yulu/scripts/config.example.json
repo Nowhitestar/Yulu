@@ -68,6 +68,11 @@
       "translate_deadline_sec": 30,
       "translate_timeout_sec": 30,
       "note": "Cleanup and translation send dictated text to xAI only when text_provider is xai, the audio engine is xai, and the dictated-text disclosure was accepted in Settings; text_provider none keeps the recognized text as-is and local dictation stays on-device. Levels: light, medium, heavy (natural paragraphs, lists for clear enumerations); cleanup_enabled is the independent off switch. Defaults to medium and casual. Originals remain in history; failed cleanup keeps the recognized text."
+    },
+    "captions": {
+      "translation_provider": "none",
+      "translation_model": "grok-4.20-0309-non-reasoning",
+      "note": "Bilingual and translation-only live captions send caption text to xAI only when translation_provider is xai, the audio engine is xai, and the caption-text disclosure was accepted in Settings. none keeps captions on this Mac; the overlay then says translation is unavailable. The dictation text_provider does not enable caption translation."
     }
   },
   "intelligence": {

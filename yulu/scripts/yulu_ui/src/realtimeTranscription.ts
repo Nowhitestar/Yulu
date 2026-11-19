@@ -19,6 +19,8 @@ import type {
 } from "./localCaptionEngine.js";
 import type { AppChannels, PubSub } from "./pubsub.js";
 import { speculativeDictationText, type DictationPreview } from "./dictationPreview.js";
+import type { CaptionTranslationUnavailableReason } from "./captionPreferences.js";
+import { CaptionTranslationUnavailableError } from "./captionTranslation.js";
 
 export type TranscriptionLanguage = "zh" | "en" | "ja" | "auto";
 
@@ -64,10 +66,15 @@ interface Session {
   sourceSegments: string[];
   sequence: number;
   startedAt: string;
+  /** The overlay asked for bilingual or translation-only captions. */
+  translationRequested: boolean;
+  /** Set while a requested translation cannot run; nothing is sent then. */
+  translationUnavailableReason: CaptionTranslationUnavailableReason | null;
+  /** Translation runs: requested and currently available. */
   translationEnabled: boolean;
   targetLanguage: string;
   translationText: string;
-  translationStatus: "disabled" | "pending" | "ready" | "failed";
+  translationStatus: TranslationStatus;
   translationGeneration: number;
   translationRunning: boolean;
   queuedTranslation: TranslationRequest | null;
@@ -75,6 +82,12 @@ interface Session {
   pump: Promise<void> | null;
   error: string | null;
 }
+
+type TranslationStatus = "disabled" | "pending" | "ready" | "failed" | "unavailable";
+
+export type CaptionTranslationReadiness =
+  | { available: true }
+  | { available: false; reason: CaptionTranslationUnavailableReason };
 
 interface TranslationRequest {
   generation: number;
@@ -424,6 +437,9 @@ export class RealtimeTranscriptionCoordinator {
     stabilize?: (text: string) => string;
     warm?: () => Promise<void>;
     translate?: (sourceText: string, targetLanguage: string, context: string[]) => Promise<string>;
+    /** Whether a requested translation may run now. Must be cheap; it is read
+     * when the overlay mode changes and again for every new caption. */
+    translationAvailability?: () => CaptionTranslationReadiness;
     defaultTargetLanguage?: () => string;
     defaultTranslationEnabled?: boolean;
     allowedRoots?: string[];
@@ -518,10 +534,12 @@ export class RealtimeTranscriptionCoordinator {
       sourceSegments: [],
       sequence: 0,
       startedAt: new Date().toISOString(),
-      translationEnabled: Boolean(this.options.translate && this.options.defaultTranslationEnabled),
+      translationRequested: Boolean(this.options.translate && this.options.defaultTranslationEnabled),
+      translationUnavailableReason: null,
+      translationEnabled: false,
       targetLanguage: this.options.defaultTargetLanguage?.().trim() || "English",
       translationText: "",
-      translationStatus: this.options.translate && this.options.defaultTranslationEnabled ? "pending" : "disabled",
+      translationStatus: "disabled",
       translationGeneration: 0,
       translationRunning: false,
       queuedTranslation: null,
@@ -529,6 +547,8 @@ export class RealtimeTranscriptionCoordinator {
       pump: null,
       error: null,
     };
+    this.refreshTranslation(session);
+    session.translationStatus = this.translationStatusFor(session);
     rmSync(sidecarPath(audioPath), { force: true });
     rmSync(coveragePath(audioPath), { force: true });
     this.active = session;
@@ -557,15 +577,18 @@ export class RealtimeTranscriptionCoordinator {
     if (!session || realpathSync(input.audioPath) !== session.audioPath) {
       throw new Error("realtime transcription session is not active");
     }
-    const translationEnabled = Boolean(this.options.translate && input.translationEnabled);
+    const requested = Boolean(this.options.translate && input.translationEnabled);
     const targetLanguage = input.targetLanguage.trim() || session.targetLanguage;
-    if (translationEnabled === session.translationEnabled && targetLanguage === session.targetLanguage) {
+    const changed = requested !== session.translationRequested || targetLanguage !== session.targetLanguage;
+    session.translationRequested = requested;
+    session.targetLanguage = targetLanguage;
+    // Re-selecting a mode also re-reads availability, so a user who enabled
+    // translation in Settings during the recording sees it take effect.
+    if (!this.refreshTranslation(session) && !changed) {
       return this.message(session, "transcribing", false);
     }
-    session.translationEnabled = translationEnabled;
-    session.targetLanguage = targetLanguage;
     session.translationText = "";
-    session.translationStatus = session.translationEnabled ? "pending" : "disabled";
+    session.translationStatus = this.translationStatusFor(session);
     session.translationGeneration += 1;
     session.queuedTranslation = null;
     if (session.translationEnabled && session.sourceText) {
@@ -806,16 +829,18 @@ export class RealtimeTranscriptionCoordinator {
     if (session.text !== previousStable) {
       atomicWrite(sidecarPath(session.audioPath), session.text ? `${session.text}\n` : "");
     }
+    let availabilityChanged = false;
     if (accepted.length > 0) {
       session.sourceText = accepted.join("\n");
       session.sourceSegments.push(session.sourceText);
       session.sourceSegments = session.sourceSegments.slice(-3);
-      session.translationStatus = session.translationEnabled ? "pending" : "disabled";
+      availabilityChanged = this.refreshTranslation(session);
+      session.translationStatus = this.translationStatusFor(session);
       session.translationGeneration += 1;
       if (session.translationEnabled) this.queueTranslation(session);
     }
     this.writeCoverage(session, this.durationMs(session), false, null, false);
-    if (!session.translationEnabled && this.displayText(session) !== previousDisplay) {
+    if (!session.translationEnabled && (availabilityChanged || this.displayText(session) !== previousDisplay)) {
       this.publish(session, "transcribing", false);
     }
   }
@@ -874,7 +899,8 @@ export class RealtimeTranscriptionCoordinator {
           session.sourceSegments = session.sourceSegments.slice(-3);
           session.text = cleanTranscriptText([session.text, sourceText].filter(Boolean).join("\n"));
           atomicWrite(sidecarPath(session.audioPath), session.text + "\n");
-          session.translationStatus = session.translationEnabled ? "pending" : "disabled";
+          this.refreshTranslation(session);
+          session.translationStatus = this.translationStatusFor(session);
           session.translationGeneration += 1;
           if (session.translationEnabled) this.queueTranslation(session);
           else this.publish(session, "transcribing", false);
@@ -894,6 +920,38 @@ export class RealtimeTranscriptionCoordinator {
       this.writeCoverage(session, this.durationMs(session), false, null, false);
       if (!force && session.pendingPcm.length === 0) return;
     }
+  }
+
+  /** Re-read whether a requested translation may run. Returns true when the
+   * effective state or reason changed; a change discards queued work. */
+  private refreshTranslation(session: Session): boolean {
+    let reason: CaptionTranslationUnavailableReason | null = null;
+    if (session.translationRequested) {
+      try {
+        const readiness = this.options.translationAvailability?.() ?? { available: true as const };
+        reason = readiness.available ? null : readiness.reason;
+      } catch {
+        // A selection that cannot be read is not an explicit opt-in.
+        reason = "provider_off";
+      }
+    }
+    const enabled = session.translationRequested && reason === null;
+    const changed = enabled !== session.translationEnabled || reason !== session.translationUnavailableReason;
+    session.translationUnavailableReason = reason;
+    if (enabled !== session.translationEnabled) {
+      session.translationEnabled = enabled;
+      session.translationText = "";
+      session.translationGeneration += 1;
+      session.queuedTranslation = null;
+    }
+    if (!enabled) session.translationStatus = this.translationStatusFor(session);
+    return changed;
+  }
+
+  /** Status before a translation result: queued when it runs, otherwise why not. */
+  private translationStatusFor(session: Session): TranslationStatus {
+    if (session.translationEnabled) return "pending";
+    return session.translationRequested ? "unavailable" : "disabled";
   }
 
   private queueTranslation(session: Session): void {
@@ -932,14 +990,24 @@ export class RealtimeTranscriptionCoordinator {
             session.translationStatus = translated ? "ready" : "failed";
             this.publish(session, "transcribing", false);
           }
-        } catch {
+        } catch (error) {
           if (
             this.active === session &&
             session.translationEnabled &&
             request.generation === session.translationGeneration
           ) {
             session.translationText = "";
-            session.translationStatus = "failed";
+            if (error instanceof CaptionTranslationUnavailableError) {
+              // Availability changed after the caption was queued. Nothing was
+              // sent; the next caption checks again.
+              session.translationEnabled = false;
+              session.translationUnavailableReason = error.reason;
+              session.translationStatus = "unavailable";
+              session.translationGeneration += 1;
+              session.queuedTranslation = null;
+            } else {
+              session.translationStatus = "failed";
+            }
             this.publish(session, "transcribing", false);
           }
         }
@@ -998,6 +1066,7 @@ export class RealtimeTranscriptionCoordinator {
       translationText: session.translationText,
       targetLanguage: session.targetLanguage,
       translationStatus: session.translationStatus,
+      translationUnavailableReason: session.translationEnabled ? null : session.translationUnavailableReason,
       startedAt: session.startedAt,
       emittedAt: new Date().toISOString(),
       reason,
