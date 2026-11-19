@@ -66,6 +66,8 @@
   --shadow-pop: 0 0 0 0.5px color-mix(in oklch, var(--fg) 16%, transparent), 0 14px 44px -8px rgba(0, 0, 0, 0.22);
   --shadow-sm: 0 0 0 0.5px color-mix(in oklch, var(--fg) 12%, transparent), 0 1px 3px rgba(0, 0, 0, 0.08);
   --scrim: rgba(20, 22, 28, 0.24);
+  /* Floating layers frost what is under them instead of showing it through. */
+  --blur-pop: blur(28px) saturate(170%);
 
   /* Default: Apple-inspired Liquid Glass */
   --wp-1: oklch(0.98 0.005 250);

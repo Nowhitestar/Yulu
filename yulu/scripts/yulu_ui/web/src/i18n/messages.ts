@@ -788,6 +788,16 @@ export const en: Messages = {
   "settings.about.heading": "About",
   "settings.about.version": "Version",
   "settings.about.installSource": "Install source",
+  "settings.updates.heading": "Updates",
+  "settings.updates.sub": "Yulu checks for new versions and asks before installing. It never installs during a recording.",
+  "settings.updates.automatic": "Check for updates automatically",
+  "settings.updates.automaticHelp": "About once a day. If Yulu is in the background, a notification tells you.",
+  "settings.updates.check": "Check for updates",
+  "settings.updates.checkNow": "Check Now",
+  "settings.updates.lastCheck": "Last checked {time}",
+  "settings.updates.never": "Not checked yet",
+  "settings.updates.unavailable": "This copy of Yulu can't update itself. Install the latest version from GitHub Releases into Applications.",
+  "settings.updates.failed": "Couldn't reach the updater. Try again.",
 
   // ---- Settings: Audio section ----
   "settings.audio.heading": "Recording",
@@ -1930,6 +1940,16 @@ export const zh: Messages = {
   "settings.about.heading": "关于",
   "settings.about.version": "版本",
   "settings.about.installSource": "安装来源",
+  "settings.updates.heading": "更新",
+  "settings.updates.sub": "语录会自动检查新版本，安装前先征求你的同意；录音时不会安装。",
+  "settings.updates.automatic": "自动检查更新",
+  "settings.updates.automaticHelp": "大约每天一次。语录在后台时，发现新版本会发通知提醒你。",
+  "settings.updates.check": "检查更新",
+  "settings.updates.checkNow": "立即检查",
+  "settings.updates.lastCheck": "上次检查：{time}",
+  "settings.updates.never": "还没有检查过",
+  "settings.updates.unavailable": "这份语录不能在应用内更新。请从 GitHub Releases 下载最新版，安装到「应用程序」。",
+  "settings.updates.failed": "暂时连不上更新程序，请重试。",
 
   // ---- Settings: Audio section ----
   "settings.audio.heading": "录音",

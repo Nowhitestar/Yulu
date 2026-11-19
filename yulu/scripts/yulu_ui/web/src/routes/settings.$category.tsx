@@ -8,6 +8,7 @@ import type { SettingsRestartTracker } from "../hooks/useSettingsRestartTracker.
 import { CapabilitiesSection } from "../components/settings/CapabilitiesSection.js";
 import { HotkeySection } from "../components/settings/HotkeySection.js";
 import { AboutSection } from "../components/settings/AboutSection.js";
+import { UpdateSection } from "../components/settings/UpdateSection.js";
 import { AudioSection } from "../components/settings/AudioSection.js";
 import { StorageSection } from "../components/settings/StorageSection.js";
 import { TranscriptionSection } from "../components/settings/TranscriptionSection.js";
@@ -26,6 +27,7 @@ function GeneralSettings({ tracker }: { tracker: SettingsRestartTracker }) {
   return <>
     <HotkeySection tracker={tracker} />
     <AboutSection />
+    <UpdateSection />
     <AdvancedDisclosure title={t("settings.diagnostics")} note={t("settings.diagnostics.note")}>
       <CapabilitiesSection />
       <Link className="settings-text-link" to="/health">{t("settings.diagnostics.open")}</Link>

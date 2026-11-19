@@ -17,6 +17,8 @@
   border-radius: var(--r-lg);
   background: var(--raised);
   box-shadow: var(--shadow-pop);
+  -webkit-backdrop-filter: var(--blur-pop);
+  backdrop-filter: var(--blur-pop);
   overflow: hidden;
   animation: gs-rise 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
   user-select: none;
@@ -51,7 +53,7 @@
 .gs-group { padding: 7px 11px 5px; color: var(--fg-3); font-size: 11.5px; }
 .gs-result {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 11px;
   width: 100%;
@@ -60,13 +62,11 @@
   text-align: left;
 }
 .gs-result.focus { background: var(--fill-2); }
-.gs-result > svg { color: var(--fg-3); }
-.gs-result.focus > svg { color: var(--fg); }
 .gs-result-title { overflow: hidden; font-size: 13.5px; text-overflow: ellipsis; white-space: nowrap; }
 .gs-result-meta { color: var(--fg-3); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .gs-result-snippet {
   display: -webkit-box;
-  grid-column: 2 / -1;
+  grid-column: 1 / -1;
   margin-top: 2px;
   overflow: hidden;
   color: var(--fg-2);

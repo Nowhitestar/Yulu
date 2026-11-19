@@ -87,6 +87,24 @@ owned native work runs, then reject new commands until update completion. A fail
 or timed-out toggle is not replayed automatically; confirm the current recording
 state before explicitly trying again.
 
+### Updates in the product App
+
+The installed App checks its signed update feed about once a day. A found
+update is never installed silently: Sparkle's update window asks first, and the
+App defers installation while native work such as a recording runs. When a
+scheduled check finds an update while Yulu is in the background, the App posts
+an **update available** notification instead of opening that window behind
+other apps; clicking the notification, or choosing **Check for Updates…**,
+brings the window forward.
+
+Manual checks are available from the menu-bar menu (**Check for Updates…**),
+**Settings → General → Updates** (which also turns scheduled checks off or on
+and shows the last check), and the App menu while the Dock icon is shown. The
+Settings controls talk to the App through a loopback-only bridge that can read
+update state, start a check, or change the schedule; it cannot install. A copy
+outside `/Applications` cannot update itself; its **Check for Updates…** opens
+the latest GitHub Release instead.
+
 ### Meeting reminder services in the product App
 
 The installed App also owns the calendar poller, scheduler, and meeting detector.

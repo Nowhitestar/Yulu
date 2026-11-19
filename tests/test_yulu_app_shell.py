@@ -4,6 +4,7 @@ import fcntl
 import io
 import plistlib
 import json
+import re
 import os
 import subprocess
 import shutil
@@ -623,6 +624,60 @@ def test_sparkle_adapter_routes_every_install_handler_through_update_authority()
     assert "startSession(targetVersion: target.version" in retry
     assert "installAuthorized = true" not in retry
     assert "retryInstallAfterTermination = true" in retry
+
+
+def test_background_update_checks_announce_instead_of_installing():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    adapter = source.split("final class SparkleUpdateAdapter", 1)[1].split(
+        "func updater(_ updater: SPUUpdater, willInstallUpdate", 1
+    )[0]
+    assert "SPUStandardUserDriverDelegate" in adapter
+    assert "userDriverDelegate: self" in adapter
+    assert "var supportsGentleScheduledUpdateReminders: Bool { true }" in adapter
+    should_handle = adapter.split("standardUserDriverShouldHandleShowingScheduledUpdate", 1)[1].split("}", 1)[0]
+    assert should_handle.strip().endswith("immediateFocus")
+    will_handle = adapter.split("func standardUserDriverWillHandleShowingUpdate", 1)[1].split("func ", 1)[0]
+    assert "guard !handleShowingUpdate, !state.userInitiated" in will_handle
+    assert "onBackgroundUpdate?(update.displayVersionString)" in will_handle
+    # Reminders never install: the only install path stays the coordinator's.
+    assert "installHandler" not in will_handle
+    configure = source.split("private func configureUpdater()", 1)[1].split("private func refreshServiceWindow", 1)[0]
+    assert "YuluNotificationPresenter.shared.announceUpdate(version: version)" in configure
+    assert "YuluNotificationPresenter.shared.withdrawUpdateAnnouncement()" in configure
+
+
+def test_update_entry_points_reach_the_same_updater():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    route = source.split("private func openNativeOrUpdateRoute", 1)[1].split("private func ", 1)[0]
+    assert "route == YuluNotificationPresenter.updateRoute" in route
+    assert route.index("onCheckForUpdates()") < route.index("openNativeRoute(route)")
+    assert "openRoute: { [weak self] route in self?.openNativeOrUpdateRoute(route) }" in source
+    assert "checkForUpdates: { [weak self] in self?.onCheckForUpdates() }" in source
+    assert "configure { [weak self] route in self?.openNativeOrUpdateRoute(route) }" in source
+    check = source.split("@objc private func onCheckForUpdates()", 1)[1].split("private func openNativeOrUpdateRoute", 1)[0]
+    assert check.index("sparkleAdapter.checkForUpdates()") < check.index("releases/latest")
+
+    menu = (SCRIPTS / "status_agent.swift").read_text(encoding="utf-8")
+    item = menu.split('L("检查更新…", "Check for Updates…")', 1)[1].split("menu.addItem(updates)", 1)[0]
+    assert "#selector(StatusAgentApp.onCheckForUpdates)" in item
+    assert "updates.isHidden = (target as? StatusAgentApp)?.checkForUpdates == nil" in item
+    assert "controller.checkForUpdates = checkForUpdates" in menu
+
+
+def test_settings_page_can_only_read_check_or_schedule_updates():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    handler = source.split("private final class UpdateMessages", 1)[1].split("func configureWindowChrome", 1)[0]
+    assert "message.frameInfo.isMainFrame" in handler
+    assert 'origin.host == "127.0.0.1", origin.port == port' in handler
+    assert 'origin.protocol == "http"' in handler
+    actions = re.findall(r'case "([a-zA-Z]+)":', handler)
+    assert actions == ["state", "check", "setAutomaticChecks"]
+    assert "install" not in handler.lower().replace("installing is never possible", "")
+    assert 'name: "yuluUpdates"' in source
+    assert "updates: self" in source
+    bridge = source.split("extension YuluApplication: ApplicationUpdateBridge", 1)[1].split("\nlet policy", 1)[0]
+    assert "sparkleAdapter?.automaticallyChecksForUpdates = enabled" in bridge
+    assert "onCheckForUpdates()" in bridge
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Native update termination gate")

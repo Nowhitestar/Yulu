@@ -12,6 +12,10 @@
   border-bottom: 1px solid var(--line);
 }
 .row:first-child, :not(.row) + .row { border-top: 1px solid var(--line); }
+/* A row wrapped for layout still continues the list above it, so two
+   hairlines never stack. */
+:is(.row, div:has(> .row:last-child)) + div > .row:first-child,
+div:has(> div:last-child > .row:last-child) + .row { border-top: 0; }
 .row--wide { align-items: flex-start; }
 .row--wide .row-label { padding-top: 5px; }
 .row-label { min-width: 0; color: var(--fg); font-size: 13px; }
