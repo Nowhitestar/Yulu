@@ -4,6 +4,19 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.29.0](https://github.com/Nowhitestar/Yulu/compare/v0.28.0...v0.29.0) (2026-11-19)
+
+
+### Features
+
+* **app:** make update checks visible and announce background updates ([#260](https://github.com/Nowhitestar/Yulu/issues/260)) ([574aff4](https://github.com/Nowhitestar/Yulu/commit/574aff4c6582767568ebe524f1bc06ddf507d808))
+* translate live captions through an explicit xAI selection (ADR-011) ([#263](https://github.com/Nowhitestar/Yulu/issues/263)) ([f76e673](https://github.com/Nowhitestar/Yulu/commit/f76e673135e960e59a5b5d7a16e449d50d95e565))
+
+
+### Bug Fixes
+
+* **ui:** give command palette results their full width and frost floating layers ([574aff4](https://github.com/Nowhitestar/Yulu/commit/574aff4c6582767568ebe524f1bc06ddf507d808))
+
 ## [0.28.0](https://github.com/Nowhitestar/Yulu/compare/v0.27.5...v0.28.0) (2026-11-19)
 
 
