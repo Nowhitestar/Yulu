@@ -4,6 +4,15 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.0](https://github.com/Nowhitestar/Yulu/compare/v0.29.0...v0.30.0) (2026-11-19)
+
+
+### Features
+
+* live notes during meetings, saved with each recording ([#266](https://github.com/Nowhitestar/Yulu/issues/266)) ([29609fe](https://github.com/Nowhitestar/Yulu/commit/29609fe60af1db59d727b7bf223d7bf7047f112c))
+* live notes panel replaces live captions; retire caption translation (ADR-012) ([#268](https://github.com/Nowhitestar/Yulu/issues/268)) ([b7b343f](https://github.com/Nowhitestar/Yulu/commit/b7b343f7699dd2adad8804baa18dd132814a1828))
+* **pipeline:** commit the live transcript instead of transcribing again ([#264](https://github.com/Nowhitestar/Yulu/issues/264)) ([a1ea10f](https://github.com/Nowhitestar/Yulu/commit/a1ea10fc51eed6e66b0e4e7e7463a29c76fdebf7))
+
 ## [0.29.0](https://github.com/Nowhitestar/Yulu/compare/v0.28.0...v0.29.0) (2026-11-19)
 
 
