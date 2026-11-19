@@ -1,70 +1,69 @@
 import { useContext, useEffect, useState } from "react";
-import type { CSSProperties, MouseEvent } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import type { MouseEvent } from "react";
+import { Navigate, NavLink, useLocation, useNavigate, useParams } from "react-router";
 import { QueryClientContext } from "@tanstack/react-query";
-import { Clock, FileText, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { useWsChannel } from "../../ws.js";
-import { MasterDetail } from "../../components/MasterDetail.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
+import { EmptyState } from "../../components/EmptyState.js";
 import { useConfirm } from "../../hooks/useConfirm.js";
-import { useT } from "../../i18n/LanguageProvider.js";
+import { useHotkeys } from "../../hooks/useHotkeys.js";
+import { useLocale, useT, type TFunc } from "../../i18n/LanguageProvider.js";
 import "./recordings.css";
-
-export const handle = { breadcrumb: "breadcrumb.recordings", filters: null };
 
 interface Row {
   stem: string;
   title: string | null;
-  tags: string[];
   recordedAt: string | null;
   durationSeconds: number | null;
-  mtimeMs: number;
-  hasTranscript: boolean;
-  hasSummary: boolean;
-  firstWords: string | null;
   status: string;
   statusError?: string;
-  depth?: number;
-  indentLevel?: number;
 }
 
-function fmtTs(iso: string | null): string {
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** When it happened, as briefly as stays unambiguous: a time, a day, or a date. */
+export function fmtWhen(iso: string | null, locale: string, t: TFunc, now = new Date()): string {
   if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.valueOf())) return "";
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${mm}-${dd} ${hh}:${min}`;
+  const date = new Date(iso);
+  if (Number.isNaN(date.valueOf())) return "";
+  const startOfDay = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).valueOf();
+  const days = Math.round((startOfDay(now) - startOfDay(date)) / DAY_MS);
+  if (days <= 0) return date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", hour12: false });
+  if (days === 1) return t("time.yesterday");
+  if (days < 7) return date.toLocaleDateString(locale, { weekday: "short" });
+  return date.toLocaleDateString(locale, date.getFullYear() === now.getFullYear()
+    ? { month: "short", day: "numeric" }
+    : { year: "numeric", month: "short", day: "numeric" });
 }
 
-function fmtDuration(seconds: number | null | undefined): string {
-  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "--:--";
-  const total = Math.round(seconds);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${m}:${String(s).padStart(2, "0")}`;
+/** How long it ran, rounded to what you would say out loud. */
+export function fmtLength(seconds: number | null | undefined, t: TFunc): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "";
+  if (seconds < 60) return t("duration.seconds", { n: Math.max(1, Math.round(seconds)) });
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return t("duration.minutes", { n: minutes });
+  const rest = minutes % 60;
+  return rest === 0
+    ? t("duration.hours", { h: Math.floor(minutes / 60) })
+    : t("duration.hoursMinutes", { h: Math.floor(minutes / 60), m: rest });
 }
 
-function rowDepth(row: Row): number {
-  const raw = row.indentLevel ?? row.depth ?? 0;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(4, Math.trunc(n)));
-}
+const BUSY_STATES = ["agent_queued", "awaiting_agent", "awaiting_policy", "transcribing", "summarizing", "sending_notion"];
+const isDeleteBlocked = (row: Row) => BUSY_STATES.includes(row.status) ||
+  row.status === "delivery_unverified" || row.status === "execution_unverified";
 
+/** The left pane: every recording, newest first. j / k move through it. */
 export function RecordingsList() {
   const { data, isPending } = trpc.recordings.list.useQuery({});
   const t = useT();
+  const locale = useLocale();
   const confirm = useConfirm();
   const navigate = useNavigate();
   const location = useLocation();
-  // Read the client off context directly (non-throwing) so the component can
-  // render in isolation under just <MemoryRouter> in unit tests.
+  // Read the client off context directly (non-throwing) so the list can render
+  // in isolation under just <MemoryRouter> in unit tests.
   const qc = useContext(QueryClientContext);
   const [menu, setMenu] = useState<{ row: Row; x: number; y: number } | null>(null);
 
@@ -75,22 +74,15 @@ export function RecordingsList() {
   const renameMut = trpc.recordings.rename.useMutation({ onSettled: invalidate });
   const deleteMut = trpc.recordings.delete.useMutation({ onSettled: invalidate });
 
-  useWsChannel("recordings-changed", () => {
-    invalidate();
-  });
-  // Refresh the list when a durable Agent task changes state so a row's
-  // status badge updates promptly (e.g. flips to Failed) without waiting on a
+  useWsChannel("recordings-changed", invalidate);
+  // A durable task changing state updates a row's status without waiting on a
   // filesystem event.
-  useWsChannel("jobs", () => {
-    invalidate();
-  });
+  useWsChannel("jobs", invalidate);
 
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
     window.addEventListener("click", close);
     window.addEventListener("scroll", close, true);
     window.addEventListener("keydown", onKey);
@@ -102,6 +94,15 @@ export function RecordingsList() {
   }, [menu]);
 
   const rows = (data as Row[] | undefined) ?? [];
+  const current = location.pathname.startsWith("/inbox/") ? decodeURIComponent(location.pathname.slice("/inbox/".length)) : null;
+
+  const move = (direction: 1 | -1) => {
+    if (rows.length === 0) return;
+    const index = rows.findIndex((row) => row.stem === current);
+    const next = rows[index < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, index + direction))];
+    if (next) navigate(`/inbox/${next.stem}${location.search}`);
+  };
+  useHotkeys({ j: () => move(1), k: () => move(-1) });
 
   const openMenu = (event: MouseEvent, row: Row) => {
     event.preventDefault();
@@ -109,20 +110,8 @@ export function RecordingsList() {
     setMenu({ row, x: event.clientX, y: event.clientY });
   };
 
-  const closeMenu = () => setMenu(null);
-  const isBusy = (row: Row) => [
-    "agent_queued",
-    "awaiting_agent",
-    "awaiting_policy",
-    "transcribing",
-    "summarizing",
-    "sending_notion",
-  ].includes(row.status);
-  const isDeleteBlocked = (row: Row) => isBusy(row) ||
-    row.status === "delivery_unverified" || row.status === "execution_unverified";
-
   const renameRow = (row: Row) => {
-    closeMenu();
+    setMenu(null);
     const next = window.prompt(t("reader.title.rename"), row.title ?? row.stem);
     if (next === null) return;
     const title = next.trim();
@@ -131,9 +120,8 @@ export function RecordingsList() {
   };
 
   const deleteRow = (row: Row) => {
-    closeMenu();
-    const label = row.title ?? row.stem;
-    if (!confirm(t("reader.delete.confirm", { label }))) return;
+    setMenu(null);
+    if (!confirm(t("reader.delete.confirm", { label: row.title ?? row.stem }))) return;
     deleteMut.mutate({ stem: row.stem }, {
       onSuccess: () => {
         if (location.pathname === `/inbox/${row.stem}`) navigate("/inbox", { replace: true });
@@ -141,109 +129,63 @@ export function RecordingsList() {
     });
   };
 
-  const menuStyle = menu
-    ? {
-      left: Math.min(menu.x, Math.max(8, window.innerWidth - 220)),
-      top: Math.min(menu.y, Math.max(8, window.innerHeight - 180)),
-    }
-    : undefined;
-
-  const listSlot = (
+  return (
     <>
-      <div className="recordings-list-head">
-        <h2>{t("breadcrumb.inbox")}</h2>
-        <button type="button" aria-label={t("common.more")}>•••</button>
-      </div>
-      <div className="recordings-list">
-        {rows.map((r) => {
-          const depth = rowDepth(r);
-          const tags = r.tags ?? [];
-          return (
-          <div
-            key={r.stem}
-            className="recording-row-wrap"
-            data-depth={depth}
-            style={{ "--recording-indent": `${depth * 14}px` } as CSSProperties}
-            onContextMenu={(event) => openMenu(event, r)}
+      <div className="recordings-list" aria-busy={isPending}>
+        {!isPending && rows.length === 0 && <p className="recordings-empty">{t("inbox.none")}</p>}
+        {rows.map((row) => (
+          <NavLink
+            key={row.stem}
+            to={`/inbox/${row.stem}`}
+            data-testid="recording-row"
+            className={({ isActive }) => "recording-row" + (isActive ? " active" : "")}
+            onContextMenu={(event) => openMenu(event, row)}
           >
-            <NavLink
-              to={`/inbox/${r.stem}`}
-              data-testid="recording-row"
-              className={({ isActive }) => "recording-row" + (isActive ? " active" : "")}
-            >
-              <div className="recording-row-top">
-                <span className="recording-row-title">{r.title ?? r.stem}</span>
-              </div>
-              <div className="recording-row-time">
-                <span className="recording-row-time-part">
-                  <Clock size={12} strokeWidth={1.9} />
-                  {fmtDuration(r.durationSeconds)}
-                </span>
-                <span aria-hidden="true">•</span>
-                <span>{fmtTs(r.recordedAt)}</span>
-              </div>
-              <div className="recording-row-footer">
-                <div className="recording-row-tags">
-                  {tags.length > 0 ? (
-                    tags.map((tag) => (
-                      <span key={tag} className="recording-row-tag">{tag}</span>
-                    ))
-                  ) : (
-                    <span className="recording-row-add-tag" role="img" aria-label={t("tag.addAria")} title={t("tag.add")}>
-                      <Plus size={12} strokeWidth={2.1} />
-                    </span>
-                  )}
-                </div>
-                <div className="recording-row-icons" aria-label="Recording outputs">
-                  {r.hasTranscript && <FileText className="recording-row-output" size={13} strokeWidth={1.9} aria-label="Transcript ready" />}
-                  {r.hasSummary && <Sparkles className="recording-row-output" size={13} strokeWidth={1.9} aria-label="Summary ready" />}
-                  <RecordingStatusBadge state={r.status} error={r.statusError} compact />
-                </div>
-              </div>
-            </NavLink>
-          </div>
-          );
-        })}
+            <span className="recording-row-text">
+              <span className="recording-row-title">{row.title ?? row.stem}</span>
+              <span className="recording-row-meta">
+                {[fmtWhen(row.recordedAt, locale, t), fmtLength(row.durationSeconds, t)].filter(Boolean).join(" · ")}
+              </span>
+            </span>
+            <RecordingStatusBadge state={row.status} error={row.statusError} compact />
+          </NavLink>
+        ))}
       </div>
       {menu && (
-        <div className="recording-context-menu" role="menu" style={menuStyle}>
-          <button type="button" role="menuitem" onClick={() => renameRow(menu.row)}>
-            <Pencil size={13} strokeWidth={1.8} />
+        <div className="recording-context-menu menu" role="menu"
+          style={{ left: Math.min(menu.x, Math.max(8, window.innerWidth - 220)), top: Math.min(menu.y, Math.max(8, window.innerHeight - 120)) }}>
+          <button type="button" className="menu-item" role="menuitem" onClick={() => renameRow(menu.row)}>
+            <Pencil size={14} strokeWidth={1.75} />
             <span>{t("reader.context.rename")}</span>
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              closeMenu();
-              navigate(`/inbox/${menu.row.stem}`);
-            }}
-          >
-            <FileText size={13} strokeWidth={1.8} />
-            <span>{t("reader.action.openAtomic")}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="danger"
-            disabled={isDeleteBlocked(menu.row)}
-            onClick={() => deleteRow(menu.row)}
-          >
-            <Trash2 size={13} strokeWidth={1.8} />
+          <button type="button" role="menuitem" className="menu-item danger" disabled={isDeleteBlocked(menu.row)} onClick={() => deleteRow(menu.row)}>
+            <Trash2 size={14} strokeWidth={1.75} />
             <span>{t("reader.context.delete")}</span>
           </button>
         </div>
       )}
     </>
   );
+}
 
-  return (
-    <MasterDetail
-      className="masterdetail--mobile-detail-focus masterdetail--inbox"
-      storageKey="yulu_ui.inbox.recordings.width"
-      listPending={isPending}
-      listSlot={listSlot}
-      detailSlot={<Outlet />}
-    />
-  );
+/**
+ * /inbox with nothing chosen. A wide window opens the newest recording, the
+ * way Notes and Mail do; a narrow one shows only the list.
+ */
+export function InboxIndex() {
+  const { data, isPending } = trpc.recordings.list.useQuery({});
+  const t = useT();
+  const [wide, setWide] = useState(() => window.matchMedia?.("(min-width: 760px)").matches ?? true);
+  useEffect(() => {
+    const query = window.matchMedia?.("(min-width: 760px)");
+    if (!query) return;
+    const change = () => setWide(query.matches);
+    query.addEventListener("change", change);
+    return () => query.removeEventListener("change", change);
+  }, []);
+  const { stem } = useParams();
+  const rows = (data as Row[] | undefined) ?? [];
+  if (isPending || stem) return null;
+  if (rows.length === 0) return <EmptyState label={t("inbox.empty")} />;
+  return wide ? <Navigate to={`/inbox/${rows[0]!.stem}`} replace /> : null;
 }

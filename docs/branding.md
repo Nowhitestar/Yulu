@@ -34,11 +34,11 @@ brand.
 
 ### Logo files
 
-- `yulu/scripts/yulu_ui/web/src/components/Logo.tsx` — UI source of truth.
-- `yulu/scripts/yulu_ui/web/public/favicon.svg` — static app equivalent.
+- `yulu/scripts/yulu_ui/web/public/favicon.svg` — the app's mark. The window
+  itself shows no logo; the mark lives in the App icon, the menu bar, and the tab.
 - `assets/logo.svg` — README and documentation equivalent.
 
-Keep these three representations visually aligned. Generate any raster export
+Keep these two representations visually aligned. Generate any raster export
 from the static SVG rather than recreating the legacy character mark.
 
 ## Typography

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useLayoutEffect } from "react";
 import { Pencil, RotateCcw } from "lucide-react";
 import { DEFAULT_HOTKEYS, HOTKEY_KEYS, MODIFIER_KEYS, HotkeysSchema, formatHotkey, type HotkeyValue } from "../../../../src/hotkeys.js";
 import { trpc } from "../../trpc.js";
@@ -34,7 +34,20 @@ export function HotkeySettings({ hotkeys, disabled, onCommit }: {
   const busy = useRef(false);
   const button = useRef<HTMLButtonElement | null>(null);
   const { mutateAsync: pauseShortcuts } = pause;
-  const close = () => { setEditing(null); button.current?.focus(); };
+  // Closing resumes the global shortcuts and may save, and both briefly disable
+  // the buttons. A disabled button drops focus, so hand it back when that
+  // settles, unless you have moved on to something else meanwhile.
+  const refocus = useRef(false);
+  const close = () => { setEditing(null); refocus.current = true; button.current?.focus(); };
+  useEffect(() => {
+    const moved = (event: FocusEvent) => { if (event.target !== button.current) refocus.current = false; };
+    document.addEventListener("focusin", moved);
+    return () => document.removeEventListener("focusin", moved);
+  }, []);
+  useEffect(() => {
+    if (!refocus.current || editing || saving || pause.isPending) return;
+    if (!document.activeElement || document.activeElement === document.body) button.current?.focus();
+  }, [editing, saving, pause.isPending]);
 
   const save = async (action: Action, shortcut: HotkeyValue) => {
     if (busy.current) return;
@@ -49,7 +62,9 @@ export function HotkeySettings({ hotkeys, disabled, onCommit }: {
     finally { busy.current = false; setSaving(false); }
   };
 
-  useEffect(() => {
+  // Listen from the same commit that shows capture as on, so a key pressed the
+  // instant the button reads "pressed" is never missed.
+  useLayoutEffect(() => {
     if (!editing) return;
     const held = new Map<string, string>();
     let modifierOnly: HotkeyValue | null = null;

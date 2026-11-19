@@ -28,16 +28,19 @@ export function AudioPlayer({ src, initialSeek, onSeek }: AudioPlayerProps) {
     setDuration(0);
     setReady(false);
 
+    // The waveform is drawn on a canvas, which cannot read CSS variables:
+    // resolve the accent once per track. The base colour works in both modes.
+    const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#2c6bd6";
     const ws = WaveSurfer.create({
       container: containerRef.current,
       url: src,
-      waveColor: "rgba(139, 146, 160, 0.55)",
-      progressColor: "var(--accent)",
-      cursorColor: "var(--accent)",
-      barWidth: 4,
-      barRadius: 999,
+      waveColor: "rgba(140, 138, 130, 0.5)",
+      progressColor: accent,
+      cursorColor: "transparent",
+      barWidth: 2,
+      barRadius: 2,
       barGap: 2,
-      height: 40,
+      height: 32,
       normalize: true,
     });
     wsRef.current = ws;

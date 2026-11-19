@@ -74,8 +74,8 @@ export function CurrentMeetingAction({ fallback = null }: { fallback?: ReactNode
             <ChevronDown size={13} strokeWidth={2} />
           </button>
           {menuOpen && (
-            <div className="current-meeting-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => onActionChange(alternateAction)}>
+            <div className="current-meeting-menu menu" role="menu">
+              <button type="button" className="menu-item" role="menuitem" onClick={() => onActionChange(alternateAction)}>
                 {alternateLabel}
               </button>
             </div>

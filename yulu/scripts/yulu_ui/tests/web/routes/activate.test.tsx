@@ -339,7 +339,7 @@ function renderRoute(lang: "zh" | "en") {
   const router = createMemoryRouter(
     [
       { path: "/activate", element: <Activate /> },
-      { path: "/agent-console", element: <h1>Agent Console</h1> },
+      { path: "/inbox", element: <h1>Recordings</h1> },
       { path: "/inbox/:stem", element: <h1>Saved note</h1> },
     ],
     { initialEntries: ["/activate"] },
@@ -444,7 +444,7 @@ describe("/activate", () => {
     expect(activation.queryOptions).toMatchObject({ retry: false });
     await userEvent.click(screen.getByRole("button", { name: "重新检查" }));
     expect(activation.refetch).toHaveBeenCalledOnce();
-    expect(screen.getByRole("link", { name: "继续使用 Yulu" })).toHaveAttribute("href", "/agent-console");
+    expect(screen.getByRole("link", { name: "继续使用 Yulu" })).toHaveAttribute("href", "/inbox");
   });
 
   it("defers the unresolved journey and exits to the normal product", async () => {
@@ -456,8 +456,8 @@ describe("/activate", () => {
     await waitFor(() => expect(heading).toHaveFocus());
     await user.click(screen.getByRole("button", { name: "Do this later" }));
 
-    expect(await screen.findByRole("heading", { name: "Agent Console" })).toBeInTheDocument();
-    expect(router.state.location.pathname).toBe("/agent-console");
+    expect(await screen.findByRole("heading", { name: "Recordings" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/inbox");
     expect(activation.defer).toHaveBeenCalledOnce();
   });
 

@@ -1,26 +1,8 @@
-.rs-root {
-  display: flex;
-  flex-direction: row;
-  height: 100%;
-  position: relative;
-}
+.rs-root { position: relative; display: flex; flex-direction: row; height: 100%; }
 .rs-root[data-side="left"] { flex-direction: row-reverse; }
-
-.rs-pane {
-  height: 100%;
-  overflow: hidden;
-  min-width: 0;
-}
-
-.rs-handle {
-  width: 4px;
-  cursor: col-resize;
-  background: transparent;
-  flex: 0 0 4px;
-  transition: background 100ms;
-  user-select: none;
-}
-.rs-handle:hover,
-.rs-handle:active {
-  background: var(--accent-soft);
-}
+.rs-pane { min-width: 0; height: 100%; overflow: hidden; }
+/* An invisible 7px grab strip straddling the hairline. */
+.rs-handle { position: absolute; top: 0; bottom: 0; right: -4px; z-index: 2; width: 7px; cursor: col-resize; user-select: none; }
+.rs-root[data-side="left"] .rs-handle { right: auto; left: -4px; }
+.rs-handle::after { content: ""; position: absolute; inset: 0 3px; background: transparent; transition: background 0.12s; }
+.rs-handle:hover::after, .rs-handle:active::after { background: var(--accent); }

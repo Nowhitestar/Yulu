@@ -70,7 +70,10 @@ vi.mock("react-router", async (orig) => ({
 }));
 vi.mock("../../web/src/hooks/useConfirm.js", () => ({ useConfirm: () => confirmMock }));
 vi.mock("../../web/src/components/AudioPlayer.js", () => ({ AudioPlayer: () => <div data-testid="audio" /> }));
-vi.mock("../../web/src/components/TranscriptView.js", () => ({ TranscriptView: ({ text }: { text: string }) => <div>{text}</div> }));
+vi.mock("../../web/src/components/TranscriptView.js", async (orig) => ({
+  ...(await orig<typeof import("../../web/src/components/TranscriptView.js")>()),
+  TranscriptView: ({ text }: { text: string }) => <div>{text}</div>,
+}));
 vi.mock("../../web/src/components/MarkdownView.js", () => ({ MarkdownView: ({ text }: { text: string }) => <div data-testid="markdown">{text}</div> }));
 
 import { RecordingReader } from "../../web/src/routes/inbox/recordings.$stem";
@@ -90,6 +93,11 @@ function renderAt(stem: string, lang?: "zh" | "en", search = "") {
       {lang ? <LanguageProvider>{reader}</LanguageProvider> : reader}
     </MemoryRouter>
   );
+}
+
+/** Reprocessing, renaming and deleting wait behind the "more" menu. */
+function openMore() {
+  fireEvent.click(screen.getByRole("button", { name: /^(更多操作|More actions)$/ }));
 }
 
 beforeEach(() => {
@@ -119,7 +127,7 @@ describe("RecordingReader", () => {
     renderAt(baseData.stem, "en", "?activation=complete&activationTaskId=guided-task-131");
 
     expect(screen.getByRole("status")).toHaveTextContent("Core Activation complete");
-    expect(screen.getByRole("button", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("markdown")).toHaveTextContent("s");
     expect(acknowledgeGuidedCompletionMutate).toHaveBeenCalledWith({ taskId: "guided-task-131" });
   });
@@ -127,7 +135,8 @@ describe("RecordingReader", () => {
   it("shows the realtime transcript while the final transcript is not ready", () => {
     getMock.mockReturnValue({ data: { ...baseData, transcript: null, summary: null, realtime: "实时中文内容", hasRealtime: true }, isPending: false });
     renderAt("TeamSync_20260102_090000");
-    fireEvent.click(screen.getByRole("button", { name: /^转写$/i }));
+    openMore();
+    fireEvent.click(screen.getByRole("tab", { name: "转写" }));
     expect(screen.getByText("实时中文内容")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
   });
@@ -135,6 +144,7 @@ describe("RecordingReader", () => {
   it("exposes transcription, summarization, and sharing as separate actions", () => {
     getMock.mockReturnValue({ data: { ...baseData, stem: "Memo_20260101_120000", title: "Memo" }, isPending: false });
     renderAt("Memo_20260101_120000");
+    openMore();
     expect(screen.getByRole("button", { name: /重新转写/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /分享摘要/i })).toBeInTheDocument();
@@ -151,14 +161,22 @@ describe("RecordingReader", () => {
       isPending: false,
     });
     const { container } = renderAt("TeamSync_20260102_090000");
+    openMore();
 
-    expect(container.querySelectorAll(".reader-header-actions select")).toHaveLength(1);
+    const menu = screen.getByRole("menu", { name: "更多操作" });
+    expect(menu.querySelectorAll("select")).toHaveLength(1);
     expect(screen.getByRole("combobox", { name: /摘要模板/i })).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: /转写模型/i })).toBeNull();
     expect(screen.queryByRole("combobox", { name: /说话人数/i })).toBeNull();
-    expect(container.querySelectorAll(".reader-actions select")).toHaveLength(0);
-    expect(container.querySelectorAll(".reader-actions .rpb")).toHaveLength(2);
-    expect(container.querySelector(".reader-header-actions .reader-header-delete")).toBeInTheDocument();
+    expect([...menu.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+      "重新生成摘要", "重新转写", "重命名", "删除",
+    ]);
+    // Up front there is only Share and the way into this menu.
+    const upFront = [...container.querySelectorAll<HTMLElement>(".reader-header-actions button")]
+      .filter((button) => !button.closest('[role="menu"]'));
+    expect(upFront).toHaveLength(2);
+    expect(upFront[0]).toHaveAccessibleName(/分享摘要/);
+    expect(upFront[1]).toHaveAccessibleName("更多操作");
   });
 
   it("shows load errors instead of pretending every recording is missing", () => {
@@ -351,6 +369,7 @@ describe("RecordingReader", () => {
       isPending: false,
     });
     renderAt(baseData.stem);
+    openMore();
 
     expect(screen.getByRole("button", { name: /重新转写/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeEnabled();
@@ -378,6 +397,7 @@ describe("RecordingReader", () => {
     });
     const promptSpy = vi.spyOn(window, "prompt").mockReturnValueOnce("https://app.notion.com/p/0123456789abcdef0123456789abcdef");
     renderAt(baseData.stem);
+    openMore();
 
     expect(screen.getByRole("button", { name: /重新转写/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
@@ -414,12 +434,13 @@ describe("RecordingReader", () => {
       isPending: false,
     });
     renderAt(baseData.stem);
+    openMore();
 
     expect(screen.getByText(/xAI · grok-4\.6-pinned/i)).toBeInTheDocument();
     const retry = screen.getByRole("button", { name: /重试同一服务/i });
-    const settings = screen.getByRole("link", { name: /打开智能服务设置/i });
+    const settings = screen.getByRole("link", { name: /打开 AI 服务设置/i });
     const keepPaused = screen.getByRole("button", { name: /保持暂停/i });
-    expect(getComputedStyle(retry.parentElement as HTMLElement).flexWrap).toBe("wrap");
+    expect(retry.parentElement).toHaveClass("reader-reconciliation-actions");
     expect(settings).toHaveAttribute("href", "/settings/llm?connection=direct-xai&capability=summary");
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
 
@@ -455,7 +476,7 @@ describe("RecordingReader", () => {
     expect(screen.getByText("Provider paused")).toBeInTheDocument();
     expect(screen.getByText("xAI · grok-4.6-pinned failed. Yulu did not switch providers.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry same provider" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Open AI services" })).toHaveAttribute(
       "href",
       "/settings/llm?connection=direct-xai&capability=summary",
     );
@@ -486,7 +507,7 @@ describe("RecordingReader", () => {
     expect(alert).toHaveTextContent("claude-code · claude-sonnet-5");
     expect(alert).toHaveTextContent("Claude Code Summary outcome is unknown");
     expect(screen.queryByRole("button", { name: "Retry same provider" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Open AI services" })).toHaveAttribute(
       "href",
       "/settings/llm?connection=claude-code&capability=summary",
     );
@@ -502,6 +523,7 @@ describe("RecordingReader", () => {
   it("re-transcribes without also summarizing or sharing", () => {
     getMock.mockReturnValue({ data: baseData, isPending: false });
     renderAt(baseData.stem);
+    openMore();
     expect(screen.queryByRole("combobox", { name: /转写模型/i })).toBeNull();
     expect(screen.queryByRole("combobox", { name: /说话人数/i })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /重新转写/i }));
@@ -523,6 +545,7 @@ describe("RecordingReader", () => {
       isPending: false,
     });
     renderAt(baseData.stem);
+    openMore();
     fireEvent.change(screen.getByRole("combobox", { name: /摘要模板/i }), { target: { value: "p-decision" } });
     fireEvent.click(screen.getByRole("button", { name: /重新生成摘要/i }));
     expect(summarizeMutate).toHaveBeenCalledWith(
@@ -538,6 +561,7 @@ describe("RecordingReader", () => {
       isPending: false,
     });
     renderAt(baseData.stem);
+    openMore();
     expect(screen.getByRole("button", { name: /重新转写/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /分享摘要/i })).toBeDisabled();
@@ -558,11 +582,13 @@ describe("RecordingReader", () => {
       isPending: false,
     });
     const { container } = renderAt(baseData.stem);
+    openMore();
 
-    const actionButtons = [...container.querySelectorAll<HTMLButtonElement>(".reader-actions button")];
-    expect(actionButtons).toHaveLength(3);
-    expect(actionButtons.every((button) => button.disabled)).toBe(true);
+    expect(screen.getByRole("button", { name: /分享摘要/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /重新生成摘要/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /重新转写/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /删除录音/i })).toBeDisabled();
+    expect(container.querySelector(".reader-actions")).toBeNull();
     expect(screen.getByText("已排队等待处理")).toBeInTheDocument();
   });
 
@@ -582,6 +608,7 @@ describe("RecordingReader", () => {
       isPending: false,
     });
     renderAt(baseData.stem);
+    openMore();
 
     const transcribeButton = screen.getByRole("button", { name: /重新转写/i });
     const summarizeButton = screen.getByRole("button", { name: /重新生成摘要/i });
@@ -611,6 +638,7 @@ describe("RecordingReader", () => {
         isPending: false,
       });
       renderAt(baseData.stem);
+      openMore();
 
       expect(screen.queryByTestId("agent-task-status")).toBeNull();
       expect(screen.getByRole("button", { name: /重新转写/i })).toBeEnabled();
@@ -684,6 +712,7 @@ describe("RecordingReader", () => {
       isPending: false,
     });
     renderAt(baseData.stem);
+    openMore();
 
     expect(screen.getByRole("button", { name: /删除录音/i })).toBeDisabled();
   });
@@ -718,10 +747,13 @@ describe("RecordingReader", () => {
       opts.onError?.(new Error("Job already running for this recording"));
     });
     renderAt(baseData.stem);
+    openMore();
     fireEvent.click(screen.getByRole("button", { name: /重新转写/i }));
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Job already running/ })).toBeInTheDocument();
     });
+    // The reason is also stated in the page, not only on the menu item.
+    expect(screen.getByRole("alert")).toHaveTextContent("Job already running for this recording");
   });
 
   it("renders the summary through MarkdownView, not a raw <pre>", () => {
@@ -797,6 +829,9 @@ describe("RecordingReader", () => {
       isPending: false,
     });
     renderAt(baseData.stem);
+    // Speakers belong to the transcript, so they appear with it.
+    expect(screen.queryByText("说话人")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "转写" }));
     expect(screen.getByText("说话人")).toBeInTheDocument();
     const input = screen.getByLabelText("Speaker 1 的说话人名称");
     fireEvent.change(input, { target: { value: "Lewis" } });
@@ -811,6 +846,7 @@ describe("RecordingReader", () => {
     getMock.mockReturnValue({ data: baseData, isPending: false });
     deleteMutate.mockImplementation((_args: unknown, opts: { onSuccess?: () => void }) => opts.onSuccess?.());
     renderAt(baseData.stem);
+    openMore();
     fireEvent.click(screen.getByRole("button", { name: /删除录音/i }));
     expect(confirmMock).toHaveBeenCalled();
     expect(deleteMutate).toHaveBeenCalledWith({ stem: baseData.stem }, expect.anything());
@@ -821,6 +857,7 @@ describe("RecordingReader", () => {
     confirmMock.mockReturnValue(false);
     getMock.mockReturnValue({ data: baseData, isPending: false });
     renderAt(baseData.stem);
+    openMore();
     fireEvent.click(screen.getByRole("button", { name: /删除录音/i }));
     expect(deleteMutate).not.toHaveBeenCalled();
   });

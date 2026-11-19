@@ -168,7 +168,7 @@ describe("TranscriptionSection", () => {
   it("keeps xAI authorization on the shared provider route", () => {
     engine = "xai";
     mount();
-    expect(screen.getByRole("link", { name: "打开智能服务设置" })).toHaveAttribute("href", "/settings/connections?connection=direct-xai&capability=transcription#ai-connections");
+    expect(screen.getByRole("link", { name: "打开 AI 服务设置" })).toHaveAttribute("href", "/settings/connections?connection=direct-xai&capability=transcription#ai-connections");
   });
 
   it("keeps the compact xAI projection localized without rendering backend detail", () => {
@@ -178,7 +178,7 @@ describe("TranscriptionSection", () => {
     expect(screen.getByText("xAI connection")).toBeInTheDocument();
     expect(screen.getByText("Not connected")).toBeInTheDocument();
     expect(screen.getByText("Not tested")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/connections?connection=direct-xai&capability=transcription#ai-connections");
+    expect(screen.getByRole("link", { name: "Open AI services" })).toHaveAttribute("href", "/settings/connections?connection=direct-xai&capability=transcription#ai-connections");
     expect(screen.queryByText("需要在 Yulu 中连接 xAI")).toBeNull();
   });
 });

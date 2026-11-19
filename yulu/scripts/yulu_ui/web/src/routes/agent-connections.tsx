@@ -5,7 +5,6 @@ import { trpc } from "../trpc.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./agent-connections.css";
 
-export const handle = { breadcrumb: "breadcrumb.agentConnections", filters: null };
 
 export function LegacyAgentConnectionsRedirect() {
   const { search } = useLocation();
@@ -13,19 +12,21 @@ export function LegacyAgentConnectionsRedirect() {
 }
 
 type Capability = "transcription" | "summary" | "conversation";
+/** Yulu no longer has a conversation surface, so only these are offered here. */
+type UsedCapability = Exclude<Capability, "conversation">;
+const USED_CAPABILITIES = ["transcription", "summary"] as const;
+const isUsed = (capability: string): capability is UsedCapability =>
+  (USED_CAPABILITIES as readonly string[]).includes(capability);
 
 const SUPPORTED_RUNTIME_GUIDANCE = [
   { adapter: "codex", label: "Codex", command: "codex" },
   { adapter: "claude-code", label: "Claude Code", command: "claude" },
-  { adapter: "hermes", label: "Hermes", command: "hermes" },
-  { adapter: "openclaw", label: "OpenClaw", command: "openclaw" },
 ] as const;
 
 interface DeletionImpact {
   connectionId: string;
   selectedCapabilities: Capability[];
   pinnedTasks: Array<{ id: string; title: string; recordingStem: string }>;
-  pinnedConversations: Array<{ id: string; title: string }>;
   removesRuntimeAuthorization: boolean;
   removesYuluManagedCredentials: boolean;
 }
@@ -35,10 +36,7 @@ function capabilityLabel(t: ReturnType<typeof useT>, capability: Capability): st
 }
 
 function supportedAgentCopy(adapter: string) {
-  if (adapter === "claude-code") return "agentConnections.claude";
-  if (adapter === "hermes") return "agentConnections.hermes";
-  if (adapter === "openclaw") return "agentConnections.openclaw";
-  return "agentConnections.codex";
+  return adapter === "claude-code" ? "agentConnections.claude" : "agentConnections.codex";
 }
 
 function authorizationClassLabel(
@@ -55,10 +53,7 @@ function authorizationClassLabel(
 }
 
 function candidateModel(adapter: string) {
-  if (adapter === "claude-code") return "claude-sonnet-5";
-  if (adapter === "hermes") return "grok-4.6";
-  if (adapter === "openclaw") return "openai-codex/gpt-5.5";
-  return "gpt-5.6-sol";
+  return adapter === "claude-code" ? "claude-sonnet-5" : "gpt-5.6-sol";
 }
 
 function actionFailureReason(error: unknown): string {
@@ -69,7 +64,7 @@ function actionFailureReason(error: unknown): string {
 
 function readinessFailure(
   t: ReturnType<typeof useT>,
-  capability: Capability,
+  capability: UsedCapability,
   readiness: {
     model: string;
     credentialSource?: "oauth" | "api-key" | null;
@@ -83,9 +78,7 @@ function readinessFailure(
       ? t("agentConnections.credentialSource.oauth")
       : t("agentConnections.credentialSource.none");
   if (readiness.reason === "unknown_outcome") {
-    return t(capability === "conversation"
-      ? "agentConnections.remediation.conversationUnknownOutcome"
-      : "agentConnections.remediation.unknownOutcome", { model: readiness.model, source });
+    return t("agentConnections.remediation.unknownOutcome", { model: readiness.model, source });
   }
   if (capability === "transcription") {
     if (readiness.reason === "missing_credentials") {
@@ -132,7 +125,7 @@ function revealConnection(id: string) {
   target.scrollIntoView?.({ block: "nearest" });
 }
 
-export function AgentConnections({ embedded = false }: { embedded?: boolean } = {}) {
+export function AgentConnections() {
   const t = useT();
   const [searchParams] = useSearchParams();
   const view = trpc.agentConnections.view.useQuery();
@@ -144,7 +137,6 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   const select = trpc.agentConnections.select.useMutation();
   const selectCredentialSource = trpc.agentConnections.selectCredentialSource.useMutation();
   const probe = trpc.agentConnections.probe.useMutation();
-  const createConversationProbeAttempt = trpc.agentConnections.createConversationProbeAttempt.useMutation();
   const acceptDisclosure = trpc.agentConnections.acceptDisclosure.useMutation();
   const restoreDirectXai = trpc.agentConnections.restoreDirectXai.useMutation();
   const authorize = trpc.agentConnections.authorize.useMutation();
@@ -155,7 +147,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   const deletionImpact = trpc.agentConnections.deletionImpact.useMutation();
   const remove = trpc.agentConnections.remove.useMutation();
   const [apiKey, setApiKeyValue] = useState("");
-  const [modelDrafts, setModelDrafts] = useState<Partial<Record<Capability, string>>>({});
+  const [modelDrafts, setModelDrafts] = useState<Partial<Record<UsedCapability, string>>>({});
   const [agentModelDrafts, setAgentModelDrafts] = useState<Record<string, string>>({});
   const [acceptedSupportedDisclosures, setAcceptedSupportedDisclosures] = useState<Set<string>>(() => new Set());
   const [nativeLoginStarted, setNativeLoginStarted] = useState<string | null>(null);
@@ -166,9 +158,9 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   const deletionDialogRef = useRef<HTMLElement>(null);
   const focusedRemediation = useRef<string | null>(null);
   const remediationConnection = searchParams.get("connection");
-  const remediationCapability = searchParams.get("capability") as Capability | null;
-  const remediationTargetId = remediationConnection && remediationCapability &&
-    ["transcription", "summary", "conversation"].includes(remediationCapability)
+  const requestedCapability = searchParams.get("capability") ?? "";
+  const remediationCapability = isUsed(requestedCapability) ? requestedCapability : null;
+  const remediationTargetId = remediationConnection && remediationCapability
     ? `agent-connection-${remediationConnection}-${remediationCapability}`
     : remediationConnection ? `agent-connection-${remediationConnection}`
     : searchParams.get("candidate") ? `agent-candidate-${searchParams.get("candidate")}`
@@ -250,7 +242,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
   if (view.isError || !view.data) {
     return (
       <section className="agent-connections-page">
-        <h1>{t("agentConnections.title")}</h1>
+        <h2>{t("agentConnections.title")}</h2>
         <p role="alert">{t("agentConnections.loadFailed")}</p>
       </section>
     );
@@ -261,11 +253,12 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
     ConnectionView,
     { adapter: "direct-xai" }
   > => item.adapter === "direct-xai");
+  // Conversation-only runtimes (Hermes, OpenClaw) have nothing to configure here.
   const supportedAgentConnections = view.data.connections.filter((item): item is Extract<
     ConnectionView,
-    { adapter: "codex" | "claude-code" | "hermes" | "openclaw" }
-  > => item.adapter === "codex" || item.adapter === "claude-code" ||
-    item.adapter === "hermes" || item.adapter === "openclaw");
+    { adapter: "codex" | "claude-code" }
+  > => item.adapter === "codex" || item.adapter === "claude-code");
+  const candidates = view.data.candidates.filter((candidate) => candidate.capabilities.some(isUsed));
   const deletionConnection = impact
     ? view.data.connections.find((item) => item.id === impact.connectionId)
     : undefined;
@@ -292,19 +285,15 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
     });
   };
 
-  const Page = embedded ? "section" : "main";
-  const Title = embedded ? "h2" : "h1";
   return (
-    <Page className={`agent-connections-page${embedded ? " embedded" : ""}`} aria-labelledby="agent-connections-title">
+    <section className="agent-connections-page" aria-labelledby="agent-connections-title">
       <header className="agent-connections-hero">
-        <div>
-            <Title id="agent-connections-title">{t("agentConnections.title")}</Title>
-          <p>{t("agentConnections.subtitle")}</p>
-        </div>
+        <h2 id="agent-connections-title">{t("agentConnections.title")}</h2>
+        <p>{t("agentConnections.subtitle")}</p>
       </header>
 
       <div className="agent-usage-list" aria-label={t("agentConnections.usage")}>
-        {(["transcription", "summary", "conversation"] as const).map((capability) => {
+        {USED_CAPABILITIES.map((capability) => {
           const selection = view.data.selections[capability];
           const selected = view.data.connections.find((item) => item.id === selection.connectionId);
           const readiness = selected?.capabilities.find((item) => item.capability === capability)?.currentReadiness;
@@ -506,15 +495,13 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
 
           <div className="agent-connection-capabilities">
             {connection.capabilities.map((item) => {
-              const capability = item.capability as Capability;
+              const capability = item.capability;
+              if (!isUsed(capability)) return null;
               const testing = probe.isPending && probe.variables?.capability === capability;
               const history = item.readinessHistory[0];
               const model = modelDrafts[capability] ?? item.currentReadiness.model;
               const modelChanged = model !== item.currentReadiness.model;
               const current = testing ? "testing" : modelChanged ? "untested" : item.currentReadiness.status;
-              const requiresNewAttempt = capability === "conversation" &&
-                ((item.currentReadiness.reason === "unknown_outcome" && item.currentReadiness.model === model) ||
-                  (history?.reason === "unknown_outcome" && history.model === model));
               return (
                 <details
                   id={`agent-connection-${connection.id}-${capability}`}
@@ -596,20 +583,10 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                     <button
                       type="button"
                       disabled={!connection.authorization.connected || !item.selected || modelChanged ||
-                        item.disclosure?.required === true || probe.isPending ||
-                        createConversationProbeAttempt.isPending}
-                      onClick={() => void run(() => requiresNewAttempt
-                        ? createConversationProbeAttempt.mutateAsync({
-                            connectionId: connection.id,
-                            model,
-                          })
-                        : probe.mutateAsync({ connectionId: connection.id, capability }))}
+                        item.disclosure?.required === true || probe.isPending}
+                      onClick={() => void run(() => probe.mutateAsync({ connectionId: connection.id, capability }))}
                     >
-                      {testing
-                        ? t("agentConnections.readiness.testing")
-                        : requiresNewAttempt
-                          ? t("agentConnections.test.newConversationAttempt")
-                          : t(`agentConnections.test.${capability}`)}
+                      {testing ? t("agentConnections.readiness.testing") : t(`agentConnections.test.${capability}`)}
                     </button>
                   </div>
                 </details>
@@ -666,9 +643,6 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
               <div>
                 <h2 id={`${agent.id}-title`}>{agent.label}</h2>
                 <p>{t(`${copy}.description`)}</p>
-                {"summaryUnsupported" in agent && (
-                  <p className="agent-capability-detail">{t(`${copy}.summaryUnsupported`)}</p>
-                )}
               </div>
               <span
                 className={`agent-connection-state ${agent.authorization.connected ? "ready" : "muted"}`}
@@ -725,19 +699,13 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             <div className="agent-connection-capabilities">
               {agent.capabilities.map((item) => {
                 const capability = item.capability;
+                if (!isUsed(capability)) return null;
                 const modelKey = `${agent.id}:${capability}`;
-                const configuredModel = capability === "summary"
-                  ? ("summaryModel" in agent.settings ? agent.settings.summaryModel : undefined) ??
-                    agent.settings.conversationModel
-                  : agent.settings.conversationModel;
+                const configuredModel = agent.settings.summaryModel ?? agent.settings.conversationModel;
                 const model = agentModelDrafts[modelKey] ?? configuredModel;
                 const testing = probe.isPending && probe.variables?.connectionId === agent.id &&
                   probe.variables.capability === capability;
                 const current = testing ? "testing" : model !== item.currentReadiness.model ? "untested" : item.currentReadiness.status;
-                const history = item.readinessHistory[0];
-                const requiresNewAttempt = capability === "conversation" &&
-                  ((item.currentReadiness.reason === "unknown_outcome" && item.currentReadiness.model === model) ||
-                    (history?.reason === "unknown_outcome" && history.model === model));
                 const disclosureAcceptedLocally = acceptedSupportedDisclosures.has(modelKey);
                 return (
                   <details
@@ -808,24 +776,10 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
                       <button
                         type="button"
                         disabled={!agent.authorization.connected || probe.isPending ||
-                          createConversationProbeAttempt.isPending ||
                           (item.disclosure?.required === true && !disclosureAcceptedLocally)}
-                        onClick={() => void run(() => requiresNewAttempt
-                          ? createConversationProbeAttempt.mutateAsync({
-                              connectionId: agent.id,
-                              model,
-                            })
-                          : probe.mutateAsync({
-                              connectionId: agent.id,
-                              capability,
-                              model,
-                            }))}
+                        onClick={() => void run(() => probe.mutateAsync({ connectionId: agent.id, capability, model }))}
                       >
-                        {testing
-                          ? t("agentConnections.readiness.testing")
-                          : requiresNewAttempt
-                            ? t("agentConnections.test.newConversationAttempt")
-                            : t(`agentConnections.test.${capability}`)}
+                        {testing ? t("agentConnections.readiness.testing") : t(`agentConnections.test.${capability}`)}
                       </button>
                     </div>
                   </details>
@@ -864,7 +818,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
       <section className="agent-connections-list" aria-labelledby="agent-candidates-title">
         <h2 id="agent-candidates-title">{t("agentConnections.candidates.title")}</h2>
         <p>{t("agentConnections.candidates.explanation")}</p>
-        {view.data.candidates.map((candidate) => (
+        {candidates.map((candidate) => (
           <details
             className="agent-connection-card compact"
             data-testid={`agent-candidate-${candidate.adapter}`}
@@ -879,15 +833,14 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             <p>{t("agentConnections.candidates.notReady")}</p>
             <dl>
               <div><dt>{t("agentConnections.detectedPath")}</dt><dd><code>{candidate.detectedPath ?? t("agentConnections.migrated")}</code></dd></div>
-              <div><dt>{t("agentConnections.declaredCapabilities")}</dt><dd>{candidate.capabilities.map((item) => capabilityLabel(t, item as Capability)).join(" · ")}</dd></div>
+              <div><dt>{t("agentConnections.declaredCapabilities")}</dt><dd>{candidate.capabilities.filter(isUsed).map((item) => capabilityLabel(t, item)).join(" · ")}</dd></div>
             </dl>
-            {(candidate.adapter === "codex" || candidate.adapter === "claude-code" ||
-              candidate.adapter === "hermes" || candidate.adapter === "openclaw") && candidate.detectedPath && (
+            {(candidate.adapter === "codex" || candidate.adapter === "claude-code") && candidate.detectedPath && (
               <div className="agent-connection-candidate-action">
-                <label className="agent-connection-model" htmlFor={`${candidate.id}-conversation-model`}>
+                <label className="agent-connection-model" htmlFor={`${candidate.id}-model`}>
                   <span>{t(`${supportedAgentCopy(candidate.adapter)}.model`)}</span>
                   <input
-                    id={`${candidate.id}-conversation-model`}
+                    id={`${candidate.id}-model`}
                     type="text"
                     maxLength={128}
                     value={agentModelDrafts[candidate.id] ?? candidateModel(candidate.adapter)}
@@ -912,7 +865,7 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             )}
           </details>
         ))}
-        {view.data.candidates.length === 0 && <p>{t("agentConnections.candidates.empty")}</p>}
+        {candidates.length === 0 && <p>{t("agentConnections.candidates.empty")}</p>}
       </section>
 
         <AdvancedDisclosure title={t("agentConnections.install.title")} note="">
@@ -951,14 +904,6 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
         </details>
       )}
 
-      {!embedded && (
-        <nav className="agent-connections-backlinks" aria-label={t("agentConnections.backlinks") }>
-          <Link to="/activate">{t("breadcrumb.activate")}</Link>
-          <Link to="/settings/llm">{t("breadcrumb.settings")}</Link>
-          <Link to="/agent-console">{t("breadcrumb.agentConsole")}</Link>
-        </nav>
-      )}
-
       {impact && deletionConnection && (
         <div className="agent-connection-dialog-backdrop">
           <section
@@ -976,12 +921,12 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
             <h2 id="delete-agent-connection-title">{t("agentConnections.delete.title", { name: deletionConnection.label })}</h2>
             <p id="delete-agent-connection-body">{t("agentConnections.delete.body")}</p>
             <p>{t("agentConnections.delete.selected", {
-              capabilities: impact.selectedCapabilities.map((item) => capabilityLabel(t, item)).join(" · ") || t("agentConnections.none"),
+              capabilities: impact.selectedCapabilities.filter(isUsed).map((item) => capabilityLabel(t, item)).join(" · ") || t("agentConnections.none"),
             })}</p>
-            <h3>{t("agentConnections.delete.tasks")}</h3>
-            <ul>{impact.pinnedTasks.map((task) => <li key={task.id}>{task.title} · {task.recordingStem}</li>)}</ul>
-            <h3>{t("agentConnections.delete.conversations")}</h3>
-            <ul>{impact.pinnedConversations.map((session) => <li key={session.id}>{session.title}</li>)}</ul>
+            {impact.pinnedTasks.length > 0 && <>
+              <h3>{t("agentConnections.delete.tasks")}</h3>
+              <ul>{impact.pinnedTasks.map((task) => <li key={task.id}>{task.title} · {task.recordingStem}</li>)}</ul>
+            </>}
             <p>{t(deletionConnection.adapter !== "direct-xai"
                 ? "agentConnections.delete.runtimeBoundary"
                 : "agentConnections.delete.oauthBoundary")}</p>
@@ -1005,6 +950,6 @@ export function AgentConnections({ embedded = false }: { embedded?: boolean } = 
           </section>
         </div>
       )}
-    </Page>
+    </section>
   );
 }

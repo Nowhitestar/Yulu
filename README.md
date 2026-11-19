@@ -56,8 +56,8 @@ Requires **macOS 13+ and Apple Silicon** for official releases.
    for global shortcuts and automatic text insertion.
 3. Install the local speech model, or explicitly connect xAI for cloud
    transcription. Choose a summary provider if you want AI meeting notes.
-4. Start a recording from the App or menu bar. Use **Fn** for dictation,
-   **Fn+Shift** for translation, and **Fn+Space** for voice questions.
+4. Start a recording from the App or menu bar. Use **Fn** for dictation and
+   **Fn+Shift** for translation.
 
 Settings let you customize shortcuts and hide the Dock and menu bar icons
 independently. The App includes its runtime and supports in-app updates;

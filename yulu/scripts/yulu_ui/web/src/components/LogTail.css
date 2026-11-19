@@ -3,11 +3,10 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  background: var(--surface-solid);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-panel);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
   overflow: hidden;
-  box-shadow: var(--edge-shadow);
 }
 .logtail-pre {
   flex: 1;

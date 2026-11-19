@@ -7,16 +7,29 @@ crash.
 
 ## Pages
 
-- `/agent-console` — selected general Agent, recording controls, and recent durable task state
-- `/voice-input` — dictation and translation through the explicitly selected local/xAI audio engine
-- `/inbox` `/inbox/:stem` — recordings, playback, committed transcript/summary, and task/delivery actions
-- `/settings/{general,audio,transcription,voice,automation}` — current local preferences
-- `/knowledge/prompts` `/knowledge/prompts/:id` — Agent instruction prompt master-detail
-- `/knowledge/glossary` — vocabulary table with inline-edit + bulk delete
-- `/health` — Doctor, durable task queue, scheduler, installed services, and logs
+The window is two panes: recordings on the left, the open recording on the
+right. The left pane becomes the settings list inside Settings and can be
+hidden (toolbar toggle or `Ctrl-Cmd-S`). The toolbar holds only that toggle,
+Settings, and the record control; `Cmd-K` opens a command palette that jumps to
+any page and searches recordings, summaries, and settings.
 
-Legacy inbox/settings/health deep links redirect to their current consolidated
-pages.
+- `/inbox` `/inbox/:stem` — recordings and the reader: playback, committed
+  summary/transcript, Share, and a More menu (template, regenerate, re-transcribe,
+  rename, delete)
+- `/settings/{general,recording,meetings,voice,connections}` — preferences.
+  `voice` includes shortcuts and recent dictation; `connections` registers
+  Yulu's MCP endpoint with detected Agents, and selects AI services for
+  transcription and summary
+- `/knowledge/prompts` `/knowledge/prompts/:id` — summary and dictation templates
+- `/knowledge/glossary` — terms transcription should spell your way
+- `/health` — runtime status, with Doctor, the task queue, scheduler, installed
+  services, and logs under advanced diagnostics
+- `/onboarding` `/activate` — first-run setup and the first recording
+
+There is no assistant page: other Agents read and control meetings through
+MCP. `/agent-console`, `/voice-chat`, `/voice-input`, and older inbox, settings,
+and health deep links redirect to their current pages. The Host still serves the
+conversation APIs; retiring them is a separate decision.
 
 ## Layout
 

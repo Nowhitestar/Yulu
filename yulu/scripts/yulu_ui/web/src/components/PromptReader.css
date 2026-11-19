@@ -1,121 +1,29 @@
-/* web/src/components/PromptReader.css */
-.preader {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 24px 32px 90px;
-  max-width: 896px;
-}
-.preader-field {
-  display: grid;
-  grid-template-columns: 100px 1fr;
-  align-items: center;
-  gap: 10px;
-}
+/* One template: a few fields, then the text Yulu sends with the transcript. */
+.preader { display: flex; flex-direction: column; gap: 12px; max-width: 760px; padding: 8px 40px 72px; }
+.preader-field { display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 12px; }
 .preader-field-content { align-items: flex-start; }
-.preader-label {
-  font-size: 11px;
-  color: var(--fg-3);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 700;
-}
-.preader-input {
-  padding: 8px 11px;
-  border-radius: 12px;
-  background: var(--field-bg);
-  color: var(--fg);
-  font-size: 13px;
-  border: 1px solid var(--edge);
-  outline: 2px solid transparent;
-}
-.preader-input:focus { outline-color: var(--accent-soft); }
-.preader-textarea {
-  padding: 12px;
-  border-radius: 16px;
-  background: var(--glass-paper);
-  color: var(--fg);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  border: 1px solid var(--edge);
-  outline: 2px solid transparent;
-  resize: vertical;
-}
-.preader-textarea:focus { outline-color: var(--accent-soft); }
-.preader-toggle {
-  width: 36px;
-  height: 20px;
-  border-radius: 999px;
-  background: var(--row-hover);
-  position: relative;
-  transition: background 120ms;
-  box-shadow: inset 0 0 0 1px var(--edge);
-}
+.preader-field-content .preader-label { padding-top: 8px; }
+.preader-label { color: var(--fg-2); font-size: 12.5px; }
+.preader-input, .preader-textarea { width: 100%; min-width: 0; border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--paper); color: var(--fg); outline: none; transition: border-color 0.12s, box-shadow 0.12s; }
+.preader-input { min-height: 30px; padding: 0 10px; font-size: 13px; }
+.preader-textarea { padding: 10px 12px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; resize: vertical; }
+.preader-input:focus, .preader-textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.preader-toggle { position: relative; width: 36px; height: 22px; border-radius: var(--r-pill); background: var(--fill-2); transition: background 0.14s; }
 .preader-toggle.on { background: var(--accent); }
-.preader-toggle:disabled { cursor: not-allowed; opacity: 0.45; }
-.preader-help {
-  grid-column: 2;
-  color: var(--fg-3);
-  font-size: 11px;
-  line-height: 1.4;
-}
-.preader-toggle-knob {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: white;
-  transition: transform 120ms;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
-}
-.preader-toggle.on .preader-toggle-knob { transform: translateX(16px); }
-.preader-actions {
-  display: flex;
-  gap: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--edge);
-}
-.preader-btn {
-  padding: 7px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--edge);
-  font-size: 12px;
-}
-.preader-btn.primary {
-  background: var(--accent);
-  color: white;
-  border-color: transparent;
-}
-.preader-btn.primary:hover { opacity: 0.9; }
-.preader-btn.primary:disabled { opacity: 0.4; cursor: not-allowed; }
-.preader-btn.danger {
-  background: var(--glass);
-  color: var(--red);
-}
-.preader-btn.danger:hover { background: var(--red); color: white; }
-
-@media (max-width: 760px) {
-  .preader {
-    padding: 8px 6px 96px;
-  }
-
-  .preader-field {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-  }
-
-  .preader-input,
-  .preader-textarea {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .preader-actions {
-    flex-wrap: wrap;
-  }
-
+.preader-toggle:disabled { opacity: 0.45; }
+.preader-toggle-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 0.14s; }
+.preader-toggle.on .preader-toggle-knob { transform: translateX(14px); }
+.preader-help { grid-column: 2; color: var(--fg-2); font-size: 12px; line-height: 1.5; }
+.preader-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+.preader-btn { min-height: 28px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: var(--r-md); font-size: 12.5px; font-weight: 500; transition: background 0.12s; }
+.preader-btn.primary { border-color: transparent; background: var(--accent); color: var(--on-accent); }
+.preader-btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, #000); }
+.preader-btn.primary:disabled { opacity: 0.4; }
+.preader-btn.danger { border-color: transparent; color: var(--red); }
+.preader-btn.danger:hover { background: var(--red-soft); }
+@container (max-width: 560px) {
+  .preader { padding: 8px 18px 56px; }
+  .preader-field { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .preader-field-content .preader-label { padding-top: 0; }
   .preader-help { grid-column: 1; }
 }

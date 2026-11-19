@@ -4,12 +4,9 @@
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
-  background: var(--glass-3);
-  border: 1px solid var(--edge);
-  border-radius: 16px;
-  box-shadow: var(--shadow-card);
-  backdrop-filter: var(--blur-pill);
-  -webkit-backdrop-filter: var(--blur-pill);
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
   min-width: 0;
 }
 .daemon-card-header {
@@ -32,10 +29,9 @@
   border-radius: 999px;
   font-size: 10px;
   font-weight: 700;
-  box-shadow: inset 0 1px 0 var(--edge-top);
 }
 .status-pill[data-status="running"] {
-  background: rgba(186, 230, 126, 0.18);
+  background: var(--green-soft);
   color: var(--green);
 }
 .status-pill[data-status="idle"] {
@@ -43,11 +39,11 @@
   color: var(--blue);
 }
 .status-pill[data-status="stopped"] {
-  background: var(--row-hover);
+  background: var(--fill);
   color: var(--fg-3);
 }
 .status-pill[data-status="crashed"] {
-  background: rgba(255, 123, 114, 0.18);
+  background: var(--red-soft);
   color: var(--red);
 }
 .status-pill-glyph { font-size: 9px; }
@@ -74,7 +70,7 @@
   display: flex;
   gap: 6px;
   padding-top: 4px;
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--line);
 }
 .daemon-card-btn {
   display: inline-flex;
@@ -82,18 +78,18 @@
   gap: 4px;
   padding: 5px 10px;
   font-size: 11px;
-  border-radius: 10px;
+  border-radius: var(--r-md);
   text-decoration: none;
-  background: var(--glass);
+  background: transparent;
   color: var(--fg-2);
-  border: 1px solid var(--edge);
+  border: 1px solid var(--line);
   cursor: pointer;
 }
-.daemon-card-btn:hover { color: var(--fg); background: var(--glass-3); }
+.daemon-card-btn:hover { color: var(--fg); background: var(--fill); }
 .daemon-card-btn.restart { color: var(--accent); }
 .daemon-card-btn.restart:hover { background: var(--accent-soft); }
 .daemon-card-btn.stop { color: var(--red); }
-.daemon-card-btn.stop:hover { background: rgba(255, 123, 114, 0.18); }
+.daemon-card-btn.stop:hover { background: var(--red-soft); }
 .daemon-card-btn.link { color: var(--fg-3); margin-left: auto; }
 .daemon-card-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 

@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
 
+// A test may end while a passthrough route is still fetching; that is not a failure.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 test("cleanup preferences persist and original text remains available", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("yulu_ui.lang", "zh"));
   await page.route("**/trpc/config.get*", async (route) => {
@@ -46,14 +51,17 @@ test("cleanup preferences persist and original text remains available", async ({
   for (const width of [1280, 960, 420, 360]) {
     await page.setViewportSize({ width, height: 1000 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-    expect(await page.locator(".settings-content").evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
-    if (width === 1280 || width === 420) await preferences.screenshot({ path: `/private/tmp/yulu-cleanup-settings-${width}.png` });
+    expect(await page.locator(".root-body").evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    if (width === 1280 || width === 420) await preferences.screenshot({ path: test.info().outputPath(`cleanup-settings-${width}.png`) });
   }
   await page.route("**/trpc/recording.history*", route => route.fulfill({ json: { result: { data: [{
     id: "synthetic", createdAt: "2026-09-21T09:00:00", action: "dictate", text: "明天下午四点开会，先不要发草稿",
     rawText: "嗯，明天下午三点。不对，四点。我们开会。先不要发草稿。", cleanupStatus: "cleaned", cleanupWarning: "",
   }] } } }));
+  // Recent dictation lives under the same settings page; the old address still gets there.
   await page.goto("/voice-input");
+  await expect(page).toHaveURL(/\/settings\/voice$/);
+  await expect(page.locator("#voice-history")).toContainText("明天下午四点开会，先不要发草稿");
   await page.getByText("查看识别原文").click();
   await expect(page.getByText("嗯，明天下午三点。不对，四点。我们开会。先不要发草稿。", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "复制原文" })).toBeVisible();

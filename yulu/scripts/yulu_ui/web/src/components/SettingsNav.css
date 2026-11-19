@@ -1,0 +1,18 @@
+.settings-nav { display: flex; flex-direction: column; min-height: 0; padding-bottom: 14px; overflow-y: auto; }
+.settings-nav-group { display: flex; flex-direction: column; gap: 1px; }
+.settings-nav-group + .settings-nav-group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.settings-nav-item, .settings-nav-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: var(--r-md);
+  color: var(--fg-2);
+  font-size: 14px;
+  transition: background 0.12s, color 0.12s;
+}
+.settings-nav-back { margin-bottom: 10px; }
+.settings-nav-item:hover, .settings-nav-back:hover { background: var(--fill); color: var(--fg); }
+.settings-nav-item.active { background: var(--fill-2); color: var(--fg); font-weight: 500; }
+.settings-nav-item:focus-visible, .settings-nav-back:focus-visible { outline-offset: -2px; }

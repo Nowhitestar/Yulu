@@ -130,11 +130,10 @@ describe("/onboarding", () => {
     expect(screen.getByRole("heading", { name: "Onboarding Home" })).toBeInTheDocument();
     expect(screen.getByText("Previously completed · new options available")).toBeInTheDocument();
 
-    const conversation = screen.getByTestId("onboarding-capability-conversation");
-    expect(conversation).toHaveTextContent("Adopted");
-    expect(conversation).toHaveTextContent("Current readiness: Needs attention");
-    expect(conversation).toHaveTextContent("Current probe expired");
-    expect(conversation.querySelector('a[href="/settings/llm?capability=conversation"]')).not.toBeNull();
+    // Yulu no longer has a conversation surface, so those steps are not offered.
+    expect(screen.queryByTestId("onboarding-capability-conversation")).toBeNull();
+    expect(screen.queryByTestId("onboarding-capability-agent-calendar-connector")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Conversation|Agent Calendar Connector/ })).toBeNull();
 
     const sharing = screen.getByTestId("onboarding-capability-sharing");
     expect(sharing).toHaveTextContent("Deferred");
@@ -156,25 +155,6 @@ describe("/onboarding", () => {
     expect(onboarding.invalidate).toHaveBeenCalledOnce();
   });
 
-  it("explicitly adopts a selected and proven Conversation without changing its settings", async () => {
-    const conversation = onboarding.data.optionalCapabilities[0]!;
-    const savedOutcome = conversation.outcome;
-    const savedReadiness = conversation.readiness;
-    conversation.outcome = null as never;
-    conversation.readiness = { state: "ready", detail: "Exact Codex probe passed" };
-    const user = userEvent.setup();
-    renderRoute();
-
-    const card = screen.getByTestId("onboarding-capability-conversation");
-    await user.click(screen.getByRole("button", { name: "Adopt proven Conversation" }));
-
-    expect(onboarding.adoptConversation).toHaveBeenCalledWith();
-    expect(onboarding.invalidate).toHaveBeenCalledOnce();
-    expect(card.querySelector('a[href="/settings/llm?capability=conversation"]')).not.toBeNull();
-    conversation.outcome = savedOutcome;
-    conversation.readiness = savedReadiness;
-  });
-
   it("explicitly adopts a selected and proven Calendar Source", async () => {
     const calendarSource = onboarding.data.optionalCapabilities[2]!;
     calendarSource.readiness = { state: "ready", detail: "EventKit enumeration passed with 0 events" };
@@ -185,19 +165,6 @@ describe("/onboarding", () => {
 
     expect(onboarding.adoptCalendarSource).toHaveBeenCalledWith();
     expect(onboarding.invalidate).toHaveBeenCalledOnce();
-  });
-
-  it("opens and adopts the Agent Calendar Connector independently", async () => {
-    const user = userEvent.setup();
-    renderRoute();
-
-    const card = screen.getByTestId("onboarding-capability-agent-calendar-connector");
-    expect(card.querySelector('a[href="/settings/integrations#agent-calendar-connector"]')).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: "Adopt proven Agent Calendar Connector" }));
-
-    expect(onboarding.adoptAgentCalendarConnector).toHaveBeenCalledWith();
-    expect(onboarding.invalidate).toHaveBeenCalledOnce();
-    expect(onboarding.deferOptional).not.toHaveBeenCalled();
   });
 
   it("opens the authoritative Sharing surface and explicitly adopts its verified Test Share", async () => {

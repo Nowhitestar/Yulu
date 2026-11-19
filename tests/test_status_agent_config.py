@@ -27,7 +27,7 @@ def test_load_defaults_when_block_missing(tmp_path, monkeypatch):
     assert block["voice_input_mode"] == "toggle"
     assert block["hotkeys"]["dictate"]["key"] == "Fn"
     assert block["hotkeys"]["translate"]["target_language"] == "English"
-    assert block["hotkeys"]["voice_chat"]["key"] == "Space"
+    assert "voice_chat" not in block["hotkeys"]
 
 
 def test_load_defaults_when_config_file_missing(tmp_path, monkeypatch):
@@ -64,7 +64,7 @@ def test_save_creates_config_when_missing(tmp_path, monkeypatch):
 def test_status_agent_hotkeys_shape(tmp_path, monkeypatch):
     _stub_config(tmp_path, monkeypatch, {})
     hotkeys = sac.status_agent_hotkeys()
-    assert [item["action"] for item in hotkeys] == ["dictate", "translate", "voice_chat"]
+    assert [item["action"] for item in hotkeys] == ["dictate", "translate"]
     assert hotkeys[0]["keyCode"] == 63
     assert hotkeys[0]["modifierMask"] == 0
     assert hotkeys[1]["targetLanguage"] == "English"
@@ -73,7 +73,7 @@ def test_status_agent_hotkeys_shape(tmp_path, monkeypatch):
 
 def test_status_agent_hold_mode_applies_to_all_voice_shortcuts(tmp_path, monkeypatch):
     _stub_config(tmp_path, monkeypatch, {"status_agent": {"voice_input_mode": "hold"}})
-    assert [item["inputMode"] for item in sac.status_agent_hotkeys()] == ["hold"] * 3
+    assert [item["inputMode"] for item in sac.status_agent_hotkeys()] == ["hold"] * 2
 
 
 def test_status_agent_unknown_input_mode_keeps_toggle_default(tmp_path, monkeypatch):
@@ -349,7 +349,7 @@ def test_status_agent_menu_matches_approved_hierarchy():
     assert menu.index('"Current Meeting"') < menu.index('"Start Recording"')
     assert menu.index('"Start Recording"') < menu.index('"Start Dictation"')
     assert menu.index('"Start Dictation"') < menu.index('"Translate to English"')
-    assert menu.index('"Translate to English"') < menu.index('"Ask Agent by Voice"')
+    assert '"Ask Agent by Voice"' not in menu
     assert menu.index('"Open Yulu"') < menu.index('"Open Agent Console"')
     assert menu.index('"Open Agent Console"') < menu.index('"Recent Recordings"')
     assert menu.index('"Recent Recordings"') < menu.index('"Settings…"')
@@ -379,20 +379,13 @@ def test_native_ui_uses_config_backed_language_and_current_logo():
         assert 'let value = ui["language"] as? String' in native
 
 
-def test_status_agent_has_voice_chat_entry():
+def test_status_agent_has_no_voice_chat_shortcut_or_menu_entry():
     src = _swift_source()
-    assert '"Ask Agent by Voice"' in src
-    assert '"voice_chat"' in src
-    assert '"open_voice_chat"' in src
-    assert "WKWebView" in src
-    assert "http://127.0.0.1:7777/voice-chat" in src
-    assert "launchVoiceChatToggle" in src
-    assert '"dictate.py", "ask-toggle"' in src
-    assert "voiceChatWindowStatus" in src
-    assert '"voice_chat_window_visible"' in src
-    assert '"Stop Voice Chat"' in src
-    dictate = src[src.index("@objc func onDictateToggle()") : src.index("@objc func onVoiceChat()")]
-    assert dictate.count('if stopping && activeDictationIntent() == "voice_chat" { return }') == 2
+    assert '"Ask Agent by Voice"' not in src
+    specs = src[src.index("func defaultHotkeySpecs()") : src.index("func readHotkeysFromConfig()")]
+    assert '"voice_chat"' not in specs
+    assert '"dictate"' in specs
+    assert '"translate"' in specs
 
 
 def test_status_agent_has_paste_clipboard_ipc():

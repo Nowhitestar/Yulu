@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
 
+// A test may end while a passthrough route is still fetching; that is not a failure.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("yulu_ui.lang", "zh"));
   await page.route("**/trpc/config.get*", async (route) => {
@@ -39,11 +44,12 @@ test("permissions and Fn settings fit both window sizes and refresh on return", 
   granted = true;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(input).toContainText("已就绪");
-  await page.screenshot({ path: "/private/tmp/yulu-patch-permissions-wide.png" });
+  await page.screenshot({ path: test.info().outputPath("permissions-wide.png") });
 
   await page.goto("/settings/voice");
   await expect(page.getByRole("button", { name: "恢复默认快捷键" })).toBeVisible();
-  await expect(page.locator(".voice-hotkey-display kbd")).toHaveText(["Fn", "Fn + ⇧", "Fn + Space"]);
+  // Dictate and translate; there is no shortcut for asking an assistant.
+  await expect(page.locator(".voice-hotkey-display kbd")).toHaveText(["Fn", "Fn + ⇧"]);
   await page.getByRole("button", { name: "听写快捷键 更改" }).click();
   await expect(page.getByRole("group", { name: "编辑快捷键" })).toBeVisible();
   await page.getByLabel("主按键", { exact: true }).selectOption("RightCommand");
@@ -51,10 +57,10 @@ test("permissions and Fn settings fit both window sizes and refresh on return", 
   for (const width of [1280, 960, 420, 360]) {
     await page.setViewportSize({ width, height: 900 });
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-    expect(await page.locator(".settings-content").evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    expect(await page.locator(".root-body").evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     if (width === 1280 || width === 420) {
       await page.locator(".hotkey-settings").scrollIntoViewIfNeeded();
-      await page.screenshot({ path: `/private/tmp/yulu-patch-shortcuts-${width}.png` });
+      await page.screenshot({ path: test.info().outputPath(`shortcuts-${width}.png`) });
     }
   }
 });

@@ -21,7 +21,7 @@ export function HotkeySection({ tracker }: { tracker: SettingsRestartTracker }) 
         <div className="row-value"><LanguageToggle /></div>
         <div className="row-status" />
       </div>
-      <div className="settings-appearance"><ThemePresetPicker compact /></div>
+      <div className="settings-appearance"><ThemePresetPicker /></div>
       {cfg && <>
         <InlineEditRow
           label={t("settings.general.dockIcon")}

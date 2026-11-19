@@ -551,15 +551,6 @@ class MenuBuilder {
         translateItem.image = NSImage(systemSymbolName: "character.bubble", accessibilityDescription: nil)
         menu.addItem(translateItem)
 
-        let voiceChatItem = NSMenuItem(
-            title: L("语音询问 Agent", "Ask Agent by Voice"),
-            action: #selector(StatusAgentApp.onVoiceChat),
-            keyEquivalent: ""
-        )
-        voiceChatItem.target = target
-        voiceChatItem.identifier = NSUserInterfaceItemIdentifier("voice_chat")
-        voiceChatItem.image = NSImage(systemSymbolName: "bubble.left.and.waveform", accessibilityDescription: nil)
-        menu.addItem(voiceChatItem)
         menu.addItem(NSMenuItem.separator())
 
         let openInbox = NSMenuItem(
@@ -1128,7 +1119,6 @@ func defaultHotkeySpecs() -> [HotkeySpec] {
     [
         HotkeySpec(action: "dictate", keyCode: 63, modifierMask: 0, label: "Fn", targetLanguage: "", key: "Fn"),
         HotkeySpec(action: "translate", keyCode: 63, modifierMask: 0x200, label: "Fn + ⇧", targetLanguage: "English", key: "Fn", modifiers: ["shift"]),
-        HotkeySpec(action: "voice_chat", keyCode: 49, modifierMask: 0, label: "Fn + Space", targetLanguage: "", key: "Space", modifiers: ["fn"]),
     ]
 }
 
@@ -2677,7 +2667,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             switch spec.action {
             case "dictate": identifier = "dictate_once"
             case "translate": identifier = "dictate_translate"
-            case "voice_chat": identifier = "voice_chat"
             default: continue
             }
             if let item = menu.items.first(where: {
@@ -2728,8 +2717,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onDictateToggle()
         case "translate":
             onDictateTranslate(targetLanguage: spec.targetLanguage)
-        case "voice_chat":
-            onVoiceChat()
         default:
             break
         }
@@ -3198,10 +3185,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if let item = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("dictate_translate") }) {
             item.isEnabled = (new == .idle || new == .processing)
-        }
-        if let item = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("voice_chat") }) {
-            item.title = voiceChatActive ? L("停止语音对话", "Stop Voice Chat") : L("语音询问 Agent", "Ask Agent by Voice")
-            item.isEnabled = (new == .idle || new == .processing || voiceChatActive)
         }
     }
 

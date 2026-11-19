@@ -62,10 +62,6 @@ export function VoiceInputSection({ tracker }: VoiceInputSectionProps) {
         options={[{ value: "toggle", label: t("settings.voice.modeToggle") }, { value: "hold", label: t("settings.voice.modeHold") }]}
         onCommit={commit("status_agent.voice_input_mode") as (value: string) => void}
         disabled={isBlocked("status_agent.voice_input_mode")} status={tracker.statusFor("status_agent.voice_input_mode")} />
-      <InlineEditRow label={t("settings.voice.askScope")} help={t("settings.voice.askScopeHelp")}
-        type="select" value={dictation.voice_chat_scope ?? "general"}
-        options={[{ value: "general", label: t("assistant.scopeGeneral") }, { value: "meetings", label: t("assistant.scopeMeetings") }]}
-        onCommit={commit("transcription.dictation.voice_chat_scope") as (value: string) => void} />
       <div className="voice-feedback">
       <InlineEditRow
         label={t("settings.voice.feedbackSounds")}

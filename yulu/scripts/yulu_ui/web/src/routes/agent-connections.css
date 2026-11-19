@@ -1,270 +1,144 @@
-.agent-connections-page {
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 32px;
-  color: var(--fg);
-}
+/* AI services: who transcribes and who summarizes, then one row per account.
+   An account opens in place to show its sign-in and the models it runs. */
+.agent-connections-page { margin-top: 30px; font-size: 13px; }
+.agent-connections-page :is(summary, button, a, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agent-connections-hero h2 { font-size: 13px; font-weight: 600; }
+.agent-connections-hero p { margin: 3px 0 10px; color: var(--fg-2); font-size: 12.5px; line-height: 1.55; }
 
-.agent-connections-page.embedded {
-  max-width: none;
-  margin: 0;
-  padding: 0;
-}
-
-.agent-connections-hero,
-.agent-connection-card-head,
-.agent-connection-capability-head,
-.agent-connection-actions,
-.agent-connection-api-key > div,
-.agent-connections-backlinks {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.agent-connections-hero,
-.agent-connection-card-head,
-.agent-connection-capability-head {
-  justify-content: space-between;
-}
-
-.agent-connections-hero h1,
-.agent-connection-card h2,
-.agent-connection-capability h3 {
-  margin: 0;
-}
-
-.agent-connections-eyebrow {
-  margin: 0 0 4px;
-  color: var(--accent);
-  font: 600 12px/1 var(--font-mono, monospace);
-  text-transform: uppercase;
-  letter-spacing: .12em;
-}
-
-.agent-connections-shared-note,
-.agent-connection-guidance,
-.agent-connection-error {
-  margin: 20px 0;
-  padding: 12px 14px;
-  border: 1px solid var(--edge);
-  border-radius: 10px;
-  background: var(--glass-2);
-}
-
-.agent-connection-error { border-color: var(--red); }
-
-.agent-connection-card,
-.agent-connections-list {
-  margin-top: 22px;
-  padding: 20px;
-  border: 1px solid var(--edge);
-  border-radius: 14px;
-  background: var(--glass-paper);
-}
-
-.agent-connection-card.compact { margin-top: 12px; padding: 14px; }
-.agent-connection-card.compact summary { display: flex; justify-content: space-between; cursor: pointer; }
-
-.agent-connection-state,
-.agent-capability-state,
-.agent-connection-card.compact summary span {
-  border: 1px solid var(--edge);
-  border-radius: 999px;
-  padding: 4px 9px;
-  font-size: 12px;
-}
-
-.agent-connection-state.ready,
-.agent-capability-state.ready { color: var(--green); }
-.agent-capability-state.failed { color: var(--red); }
-.agent-connection-state.muted,
-.agent-capability-state.untested,
-.agent-capability-state.testing { color: var(--fg-3); }
-
-.agent-connection-actions { flex-wrap: wrap; margin-top: 12px; }
-.agent-connection-credential-source {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  margin: 16px 0;
-  padding: 12px;
-  border: 1px solid var(--edge);
-  border-radius: 10px;
-}
-.agent-connection-credential-source label { display: inline-flex; gap: 6px; align-items: center; }
-.agent-connection-credential-source small { color: var(--fg-3); }
-.agent-connection-actions button,
-.agent-connection-button,
-.agent-connection-api-key button,
-.agent-connection-delete {
-  min-height: 36px;
-  border: 1px solid var(--edge);
-  border-radius: 8px;
-  background: var(--surface-solid);
-  color: var(--fg);
-  cursor: pointer;
-}
-
-.agent-connection-actions button:focus-visible,
-.agent-connection-button:focus-visible,
-.agent-connection-api-key button:focus-visible,
-.agent-connection-delete:focus-visible,
-.agent-connection-card summary:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.agent-connection-api-key { margin-top: 18px; }
-.agent-connection-runtime-details > div {
-  display: grid;
-  grid-template-columns: 180px 1fr;
-  gap: 12px;
-}
-.agent-connection-runtime-details dt { color: var(--fg-3); }
-.agent-connection-runtime-details dd { margin: 0; overflow-wrap: anywhere; }
-.agent-connection-candidate-action { display: grid; gap: 12px; margin-top: 16px; }
-.agent-connection-candidate-action > button { justify-self: start; min-height: 36px; }
-.agent-connection-api-key label,
-.agent-connection-api-key small { display: block; margin-bottom: 7px; }
-.agent-connection-api-key input { min-width: 260px; min-height: 34px; }
-
-.agent-connection-capabilities {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
-  gap: 12px;
-  margin-top: 20px;
-}
-
-.agent-connection-capability {
-  padding: 14px;
-  border: 1px solid var(--edge);
-  border-radius: 10px;
-}
-
-.agent-connection-card[aria-current="location"],
-.agent-connection-capability[aria-current="location"] {
-  outline: 3px solid var(--accent);
-  outline-offset: 3px;
-}
-
-.agent-connection-capability[aria-current="location"]::before {
-  content: "→";
-  display: block;
-  margin-bottom: 6px;
-  font-weight: 700;
-}
-
-.agent-connection-capability p { color: var(--fg-3); overflow-wrap: anywhere; }
-.agent-connection-model { display: grid; gap: 6px; color: var(--fg-2); font-size: 12px; }
-.agent-connection-model input {
-  min-width: 0;
-  min-height: 34px;
-  border: 1px solid var(--edge-card);
-  border-radius: 8px;
-  background: var(--field-bg);
-  color: var(--fg);
-}
-.agent-readiness-history { font-size: 12px; }
-.agent-connection-delete { margin-top: 20px; border-color: var(--red); color: var(--red); }
-.agent-connections-list dl > div { display: grid; grid-template-columns: 160px 1fr; gap: 12px; }
-.agent-connections-list dt { color: var(--fg-3); }
-.agent-connections-list dd { margin: 0; overflow-wrap: anywhere; }
-.agent-connections-backlinks { margin-top: 24px; }
-
-.agent-connection-dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: rgba(0, 0, 0, .55);
-}
-
-.agent-connection-dialog {
-  width: min(620px, 100%);
-  max-height: 80vh;
-  overflow: auto;
-  padding: 24px;
-  border: 1px solid var(--edge);
-  border-radius: 14px;
-  background: var(--surface-solid);
-}
-
-@media (max-width: 760px) {
-  .agent-connections-page { padding: 20px 14px; }
-  .agent-connections-hero { align-items: flex-start; flex-direction: column; }
-  .agent-connection-capabilities { grid-template-columns: 1fr; }
-  .agent-connection-api-key > div { align-items: stretch; flex-direction: column; }
-  .agent-connection-api-key input { min-width: 0; width: 100%; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .agent-connections-page *,
-  .agent-connections-page *::before,
-  .agent-connections-page *::after {
-    scroll-behavior: auto !important;
-    transition-duration: .01ms !important;
-    animation-duration: .01ms !important;
-    animation-iteration-count: 1 !important;
-  }
-}
-
-/* Task overview first, one account or capability's setup at a time. */
-.agent-connections-page { font-size: 13px; line-height: 1.6; }
-.agent-connections-hero h2 { margin: 0; font-size: 14px; }
-.agent-connections-hero p { margin: 4px 0 16px; color: var(--fg-2); font-size: 12px; }
-.agent-usage-list { padding: 0 16px; border-radius: 10px; background: var(--glass-2); }
-.agent-usage-row { display: flex; align-items: center; gap: 18px; padding: 14px 0; }
-.agent-usage-row + .agent-usage-row { border-top: 1px solid var(--edge); }
-.agent-usage-row > div { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; min-width: 0; }
-.agent-usage-row strong { width: 52px; font-size: 13px; }
+.agent-usage-row { display: flex; align-items: center; gap: 16px; min-height: 28px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.agent-usage-row:first-child { border-top: 1px solid var(--line); }
+.agent-usage-row > div { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; }
+.agent-usage-row strong { min-width: 52px; font-weight: 400; }
 .agent-usage-row span { color: var(--fg-2); overflow-wrap: anywhere; }
-.agent-usage-status { color: var(--fg-2); font-size: 11px; }
-.agent-usage-status.failed { color: var(--red); }
+.agent-usage-status { color: var(--fg-3); font-size: 12px; }
 .agent-usage-status.ready { color: var(--green); }
-.agent-usage-row > :is(button, a) { flex-shrink: 0; border: 0; background: transparent; cursor: pointer; }
-.agent-provider-details { padding: 14px 0; margin: 0; border: 0; border-bottom: 1px solid var(--edge); border-radius: 0; background: transparent; }
-.agent-provider-details > summary { cursor: pointer; gap: 10px; }
-.agent-provider-details > summary > div { flex: 1; min-width: 0; }
-.agent-provider-details > summary h2 { font-size: 14px; font-weight: 600; }
-.agent-provider-details > summary p { margin: 3px 0 0; color: var(--fg-2); font-size: 12px; }
-.agent-provider-details > summary::after, .agent-connection-capability > summary::after { content: "›"; color: var(--fg-2); font-size: 20px; line-height: 1; }
-.agent-provider-details[open] > summary::after, .agent-connection-capability[open] > summary::after { transform: rotate(90deg); }
-.agent-provider-details summary::-webkit-details-marker { display: none; }
-.agent-provider-details > .agent-connection-capabilities { grid-template-columns: 1fr; gap: 0; margin-top: 12px; padding: 0 12px; border-radius: 8px; background: var(--glass-2); }
-.agent-connection-capability { min-width: 0; padding: 12px 0; border: 0; border-radius: 0; }
-.agent-connection-capability + .agent-connection-capability { border-top: 1px solid var(--edge); }
-.agent-connection-capability > summary { cursor: pointer; gap: 10px; }
-.agent-connection-capability > summary > div { flex: 1; min-width: 0; }
-.agent-connection-capability > summary h3 { font-size: 13px; font-weight: 500; }
-.agent-connection-capability > summary p { margin: 2px 0 0; font-size: 11px; color: var(--fg-2); }
-.agent-selected-label { margin-left: 8px; color: var(--green); font-size: 10px; font-weight: 400; }
-.agent-connection-state, .agent-capability-state { flex-shrink: 0; padding: 2px 6px; font-size: 11px; border: 0; }
-.agent-auth-details { margin-top: 12px; font-size: 12px; }
-.agent-auth-details > summary, .agent-add-details > summary { padding: 8px 0; cursor: pointer; color: var(--fg-2); }
-.agent-connection-model { margin: 12px 0; }
-.agent-connection-model input { padding: 8px 10px; box-sizing: border-box; width: 100%; }
-.agent-connection-api-key > div { flex-wrap: wrap; }
-.agent-connection-api-key input { min-width: 0; flex: 1; max-width: 100%; }
-.agent-connection-credential-source { flex-wrap: wrap; }
-.agent-connection-runtime-details > div { grid-template-columns: minmax(80px, .5fr) minmax(0, 1fr); gap: 10px; margin: 6px 0; }
-.agent-connection-guidance { margin: 12px 0; background: transparent; font-size: 12px; overflow-wrap: anywhere; }
-.agent-connection-guidance button { display: block; margin-top: 10px; }
-.agent-connection-actions button, .agent-connection-button, .agent-connection-api-key button, .agent-connection-delete { padding: 7px 11px; font-size: 12px; line-height: 1.5; }
-.agent-connection-delete { margin-top: 12px; background: transparent; border: 0; padding-left: 0; }
-.agent-add-details { margin: 14px 0; padding: 0; border: 0; }
-.agent-add-details .agent-connections-list { margin: 12px 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
-.agent-add-details .agent-connections-list h2 { font-size: 13px; }
-.agent-add-details .agent-connection-card { padding: 12px; border-radius: 8px; }
-.agent-connections-page :is(summary, button, a, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-@media (max-width: 759px) {
-  .agent-usage-row > div { column-gap: 8px; }
-  .agent-usage-status { width: 100%; padding-left: 60px; }
-  .agent-provider-details > summary { flex-wrap: wrap; }
-  .agent-provider-details > summary > div { flex-basis: 55%; }
-  .agent-connection-state { white-space: normal; max-width: 40%; text-align: right; }
-  .agent-connection-dialog { box-sizing: border-box; }
-  .agent-connections-list dl > div { grid-template-columns: 1fr; gap: 4px; }
+.agent-usage-status.failed { color: var(--red); }
+
+/* Accounts */
+.agent-connection-card { border-bottom: 1px solid var(--line); }
+:not(.agent-connection-card) + .agent-connection-card { border-top: 1px solid var(--line); }
+.agent-connection-card:not(details) { padding: 12px 0; }
+.agent-connection-card h2 { font-size: 13px; font-weight: 400; }
+.agent-connection-card > p, .agent-connection-card-head p { margin-top: 1px; color: var(--fg-2); font-size: 12px; line-height: 1.5; }
+.agent-connection-card[aria-current="location"], .agent-connection-capability[aria-current="location"] { border-radius: var(--r-sm); outline: 2px solid var(--accent); outline-offset: 4px; }
+.agent-connection-card-head, .agent-connection-capability-head, .agent-add-details > summary, .agent-connection-card.compact > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.agent-connections-page summary::-webkit-details-marker { display: none; }
+.agent-connection-card-head { min-height: 28px; padding: 10px 0; }
+.agent-connection-card-head > div, .agent-connection-capability-head > div { flex: 1; min-width: 0; }
+.agent-connection-card-head::after, .agent-connection-capability-head::after, .agent-add-details > summary::after {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0 4px 0 2px;
+  border-right: 1.5px solid var(--fg-3);
+  border-bottom: 1.5px solid var(--fg-3);
+  transform: rotate(-45deg);
+  transition: transform 0.14s;
+}
+details[open] > :is(.agent-connection-card-head, .agent-connection-capability-head)::after, .agent-add-details[open] > summary::after { transform: rotate(45deg); }
+.agent-connection-state, .agent-capability-state { display: inline-flex; flex: none; align-items: center; gap: 6px; color: var(--fg-2); font-size: 12.5px; }
+.agent-connection-state::before, .agent-capability-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--fg-3); }
+.agent-connection-state.ready::before, .agent-capability-state.ready::before { background: var(--green); }
+.agent-capability-state.failed::before { background: var(--red); }
+.agent-capability-state.testing::before { background: var(--amber); }
+.agent-provider-details[open] { padding-bottom: 14px; }
+
+.agent-auth-details { font-size: 12.5px; }
+.agent-auth-details > summary { width: fit-content; padding: 4px 0; color: var(--fg-2); cursor: pointer; }
+.agent-connection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.agent-connection-actions button, .agent-connection-button, .agent-connection-api-key button, .agent-connection-candidate-action > button {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+.agent-connection-actions button:hover:not(:disabled), .agent-connection-button:hover:not(:disabled), .agent-connection-api-key button:hover:not(:disabled) { background: var(--fill); }
+.agent-connections-page button:disabled { opacity: 0.45; }
+.agent-connection-button { margin-top: 10px; }
+.agent-connection-delete { margin-top: 12px; color: var(--red); font-size: 12.5px; font-weight: 500; }
+.agent-connection-delete:hover { text-decoration: underline; text-underline-offset: 2px; }
+.agent-connection-actions .agent-connection-delete { margin-top: 0; color: var(--red); }
+.agent-connection-guidance { margin: 10px 0; padding: 11px 13px; border-radius: var(--r-md); background: var(--fill); color: var(--fg-2); font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; }
+.agent-connection-guidance button { display: flex; margin-top: 8px; color: var(--accent); font-weight: 500; }
+.agent-connection-guidance code { font-size: 11.5px; }
+.agent-connection-error, .agent-capability-detail { margin: 8px 0; color: var(--red); font-size: 12.5px; line-height: 1.55; overflow-wrap: anywhere; }
+.agent-connection-credential-source { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 12px 0; padding: 0; border: 0; }
+.agent-connection-credential-source legend { margin-bottom: 4px; padding: 0; color: var(--fg-2); }
+.agent-connection-credential-source label { display: inline-flex; align-items: center; gap: 6px; }
+.agent-connection-credential-source small { color: var(--fg-3); }
+.agent-connection-api-key label, .agent-connection-api-key small { display: block; margin: 6px 0; color: var(--fg-2); font-size: 12px; }
+.agent-connection-api-key > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.agent-connection-model { display: grid; gap: 5px; margin: 10px 0; color: var(--fg-2); font-size: 12px; }
+.agent-connection-model input, .agent-connection-api-key input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--paper);
+  color: var(--fg);
+  outline: none;
+}
+.agent-connection-model input:focus, .agent-connection-api-key input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.agent-connection-runtime-details > div, .agent-connections-list dl > div { display: grid; grid-template-columns: minmax(90px, 0.4fr) minmax(0, 1fr); gap: 10px; margin: 6px 0; font-size: 12px; }
+.agent-connection-runtime-details dt, .agent-connections-list dt { color: var(--fg-3); }
+.agent-connection-runtime-details dd, .agent-connections-list dd { overflow-wrap: anywhere; }
+
+/* What this account does, one model per job */
+.agent-connection-capabilities { margin-top: 10px; padding: 0 14px; border-radius: var(--r-md); background: var(--fill); }
+.agent-connection-capability + .agent-connection-capability { border-top: 1px solid var(--line); }
+.agent-connection-capability[open] { padding-bottom: 12px; }
+.agent-connection-capability-head { min-height: 44px; }
+.agent-connection-capability-head h3 { font-size: 13px; font-weight: 400; }
+.agent-connection-capability-head p { color: var(--fg-3); font-size: 12px; overflow-wrap: anywhere; }
+.agent-selected-label { margin-left: 8px; color: var(--green); font-size: 11.5px; font-weight: 400; }
+.agent-readiness-history { color: var(--fg-2); font-size: 12px; }
+
+/* Adding an account */
+.agent-add-details { border-bottom: 1px solid var(--line); }
+.agent-add-details > summary { min-height: 42px; }
+.agent-add-details > summary::after { margin-left: auto; }
+.agent-add-details[open] { padding-bottom: 14px; }
+.agent-add-details > p { color: var(--fg-2); font-size: 12.5px; }
+.agent-connections-list { margin-top: 14px; }
+.agent-connections-list h2 { font-size: 13px; font-weight: 600; }
+.agent-connections-list > p, .agent-connections-list ul { margin-top: 3px; color: var(--fg-2); font-size: 12.5px; line-height: 1.55; }
+.agent-connections-list ul { padding-left: 18px; }
+.agent-connection-card.compact { padding: 10px 0; }
+.agent-connection-card.compact > summary { justify-content: space-between; }
+.agent-connection-card.compact > summary strong { font-weight: 400; }
+.agent-connection-card.compact > summary span { color: var(--fg-3); font-size: 12px; }
+.agent-connection-candidate-action { display: grid; justify-items: start; gap: 4px; margin-top: 8px; }
+.agent-connection-candidate-action > .agent-connection-model { width: 100%; }
+
+/* Removing an account says what stops working first. */
+.agent-connection-dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: var(--scrim); }
+.agent-connection-dialog { width: min(520px, 100%); max-height: 80vh; overflow: auto; padding: 20px 22px; border-radius: var(--r-lg); background: var(--raised); box-shadow: var(--shadow-pop); font-size: 12.5px; line-height: 1.55; }
+.agent-connection-dialog h2 { margin-bottom: 6px; font-size: 15px; font-weight: 600; }
+.agent-connection-dialog h3 { margin-top: 12px; color: var(--fg-2); font-size: 12.5px; font-weight: 500; }
+.agent-connection-dialog p { margin-top: 6px; color: var(--fg-2); }
+.agent-connection-dialog ul { padding-left: 18px; }
+.agent-connection-dialog .agent-connection-actions { justify-content: flex-end; margin-top: 16px; }
+
+@container (max-width: 560px) {
+  .agent-usage-status { width: 100%; }
+  .agent-connection-card-head { flex-wrap: wrap; }
+  .agent-connection-runtime-details > div, .agent-connections-list dl > div { grid-template-columns: 1fr; gap: 2px; }
 }

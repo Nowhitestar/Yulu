@@ -12,7 +12,6 @@ export interface HotkeyValue { key: string; modifiers: string[] }
 export const DEFAULT_HOTKEYS = {
   dictate: { key: "Fn", modifiers: [] },
   translate: { key: "Fn", modifiers: ["shift"] },
-  voice_chat: { key: "Space", modifiers: ["fn"] },
 } satisfies Record<string, { key: string; modifiers: typeof MODIFIERS[number][] }>;
 
 const group = (modifier: string) => modifier.split("_").at(-1)!;
@@ -38,7 +37,7 @@ export function hotkeysOverlap(a: HotkeyValue, b: HotkeyValue) {
 }
 
 export function validateHotkeyConflicts(hotkeys: Record<string, HotkeyValue>, ctx: z.RefinementCtx) {
-  const actions = ["dictate", "translate", "voice_chat"];
+  const actions = ["dictate", "translate"];
   for (let i = 0; i < actions.length; i++) for (let j = i + 1; j < actions.length; j++) {
     const a = hotkeys[actions[i]!], b = hotkeys[actions[j]!];
     if (a && b && hotkeysOverlap(a, b)) ctx.addIssue({ code: "custom", message: "Voice shortcuts must be different", path: [actions[j]!] });

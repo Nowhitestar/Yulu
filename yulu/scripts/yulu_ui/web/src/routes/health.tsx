@@ -10,7 +10,6 @@ import { LogsSection } from "../components/health/LogsSection.js";
 import { useT } from "../i18n/LanguageProvider.js";
 import "./health.css";
 
-export const handle = { breadcrumb: "breadcrumb.health", filters: null };
 type Tab = "doctor" | "queue" | "scheduler" | "daemons" | "logs";
 const TABS: Tab[] = ["doctor", "queue", "scheduler", "daemons", "logs"];
 function tabFromHash(hash: string): Tab | null { const value = hash.slice(1) as Tab; return TABS.includes(value) ? value : null; }

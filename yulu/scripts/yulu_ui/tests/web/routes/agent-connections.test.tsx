@@ -422,7 +422,7 @@ describe("shared AI services", () => {
     expect(screen.getByLabelText("Services in use")).toHaveTextContent("xAI");
     await userEvent.setup().click(screen.getByRole("button", { name: "Configure Summary" }));
     expect(screen.getByTestId("connection-capability-summary")).toHaveAttribute("open");
-    expect(screen.getByTestId("connection-capability-conversation")).not.toHaveAttribute("open");
+    expect(screen.getByTestId("connection-capability-transcription")).not.toHaveAttribute("open");
     expect(mocks.select).not.toHaveBeenCalled();
     expect(mocks.probe).not.toHaveBeenCalled();
     expect(mocks.acceptDisclosure).not.toHaveBeenCalled();
@@ -465,79 +465,34 @@ describe("shared AI services", () => {
     }
   });
 
-  it("requires an explicit new Conversation probe attempt after Unknown Outcome", async () => {
-    const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
-    const conversation = direct.capabilities.find((capability) => capability.capability === "conversation")!;
-    const saved = conversation.currentReadiness;
-    const savedHistory = conversation.readinessHistory;
-    conversation.currentReadiness = {
-      status: "untested",
-      model: "grok-conversation",
-      credentialSource: null,
-      testedAt: null,
-      detail: "Not tested in this Host process",
-    } as never;
-    conversation.readinessHistory = [{
-      status: "failed",
-      model: "grok-conversation",
-      credentialSource: "oauth",
-      testedAt: "2026-08-29T00:00:00.000Z",
-      detail: "Conversation probe entered Unknown Outcome",
-      reason: "unknown_outcome",
-    }] as never;
+  it("offers Transcription and Summary only: no Conversation capability, probe or runtime", () => {
     mount("en");
-    const user = userEvent.setup();
-    const capability = screen.getByTestId("connection-capability-conversation");
 
-    expect(within(capability).queryByRole("button", { name: "Test conversation" }))
-      .not.toBeInTheDocument();
-    await user.click(within(capability).getByRole("button", {
-      name: "Create new Conversation test attempt",
-    }));
-
-    expect(mocks.createConversationProbeAttempt).toHaveBeenCalledWith({
-      connectionId: "direct-xai",
-      model: "grok-conversation",
-    });
-    expect(mocks.probe).not.toHaveBeenCalled();
-    conversation.currentReadiness = saved;
-    conversation.readinessHistory = savedHistory;
+    expect([...screen.getByLabelText("Services in use").querySelectorAll("strong")].map((item) => item.textContent))
+      .toEqual(["Transcription", "Summary"]);
+    for (const id of [
+      "connection-capability-conversation",
+      "connection-capability-codex-conversation",
+      "connection-capability-claude-code-conversation",
+      // Hermes and OpenClaw only ever served conversations.
+      "agent-connection-hermes",
+      "agent-connection-openclaw",
+      "agent-candidate-hermes",
+      "agent-candidate-openclaw",
+    ]) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
+    expect(screen.queryByRole("heading", { name: /conversation/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /conversation/i })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: /conversation/i })).toBeNull();
+    expect(mocks.createConversationProbeAttempt).not.toHaveBeenCalled();
   });
 
-  it("does not apply an old-model Conversation Unknown fence to a new model draft", async () => {
-    const direct = mocks.view.connections.find((connection) => connection.id === "direct-xai")!;
-    const conversation = direct.capabilities.find((capability) => capability.capability === "conversation")!;
-    const saved = conversation.currentReadiness;
-    const savedHistory = conversation.readinessHistory;
-    conversation.currentReadiness = {
-      status: "untested",
-      model: "grok-old",
-      credentialSource: null,
-      testedAt: null,
-      detail: "Not tested in this Host process",
-      reason: "unknown_outcome",
-    } as never;
-    conversation.readinessHistory = [{
-      status: "failed",
-      model: "grok-old",
-      credentialSource: null,
-      reason: "unknown_outcome",
-      testedAt: "2026-08-29T00:00:00.000Z",
-      detail: "Conversation probe entered Unknown Outcome",
-    }] as never;
-    mount("en");
-    const user = userEvent.setup();
-    const capability = screen.getByTestId("connection-capability-conversation");
-    await user.clear(within(capability).getByRole("textbox"));
-    await user.type(within(capability).getByRole("textbox"), "grok-new");
+  it("treats a retired Conversation deep link as a link to the account", () => {
+    mount("en", "/settings/llm?connection=direct-xai&capability=conversation");
 
-    expect(within(capability).getByRole("button", { name: "Test conversation" }))
-      .toBeInTheDocument();
-    expect(within(capability).queryByRole("button", {
-      name: "Create new Conversation test attempt",
-    })).not.toBeInTheDocument();
-    conversation.currentReadiness = saved;
-    conversation.readinessHistory = savedHistory;
+    expect(screen.getByRole("region", { name: "xAI" })).toHaveAttribute("aria-current", "location");
+    expect(mocks.probe).not.toHaveBeenCalled();
   });
 
   it("preserves exact remediation parameters when redirecting the legacy center path", async () => {
@@ -598,7 +553,7 @@ describe("shared AI services", () => {
     mount();
 
     expect(screen.getByRole("heading", { name: "AI 服务" })).toBeInTheDocument();
-    expect(screen.getAllByText("候选连接，不是已连接")).toHaveLength(4);
+    expect(screen.getAllByText("候选连接，不是已连接")).toHaveLength(2);
     expect(screen.getByText("旧版自定义连接不能证明能力就绪")).toBeInTheDocument();
     const summary = screen.getByTestId("connection-capability-summary");
     expect(within(summary).getByText("需要修复")).toHaveAttribute("role", "alert");
@@ -621,8 +576,7 @@ describe("shared AI services", () => {
       .toBeInTheDocument();
     expect(within(guidance).getByText(/Codex.*codex executable.*Yulu Host PATH/i)).toBeInTheDocument();
     expect(within(guidance).getByText(/Claude Code.*claude executable.*Yulu Host PATH/i)).toBeInTheDocument();
-    expect(within(guidance).getByText(/Hermes.*hermes executable.*Yulu Host PATH/i)).toBeInTheDocument();
-    expect(within(guidance).getByText(/OpenClaw.*openclaw executable.*Yulu Host PATH/i)).toBeInTheDocument();
+    expect(within(guidance).queryByText(/Hermes|OpenClaw/)).toBeNull();
     expect(mocks.confirmCandidate).not.toHaveBeenCalled();
     expect(mocks.select).not.toHaveBeenCalled();
     expect(mocks.probe).not.toHaveBeenCalled();
@@ -668,10 +622,6 @@ describe("shared AI services", () => {
     expect(within(summary).getByText("Summary Data Path Disclosure · xai-summary-v1"))
       .toBeInTheDocument();
     expect(within(summary).getByRole("button", { name: "Test summary" })).toBeDisabled();
-    const conversation = screen.getByTestId("connection-capability-conversation");
-    expect(within(conversation).getByText("Conversation Data Path Disclosure · xai-conversation-v1"))
-      .toBeInTheDocument();
-    expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeDisabled();
     expect(within(screen.getByRole("heading", { name: "xAI" }).closest("details")!)
       .getByRole("button", { name: "Reconnect Grok OAuth" })).toBeEnabled();
     expect(mocks.probe).not.toHaveBeenCalled();
@@ -777,44 +727,28 @@ describe("shared AI services", () => {
     Object.assign(codex!.authorization, originalAuthorization);
   });
 
-  it("explicitly confirms a Codex candidate, accepts only Conversation disclosure, probes, and selects", async () => {
+  it("explicitly confirms a Codex candidate with the summary model you name", async () => {
     mount("en");
     const user = userEvent.setup();
     const candidate = screen.getByTestId("agent-candidate-codex");
 
-    await user.clear(within(candidate).getByRole("textbox", { name: "Codex initial Summary and Conversation model" }));
-    await user.type(within(candidate).getByRole("textbox", { name: "Codex initial Summary and Conversation model" }), "gpt-5.6-sol");
+    await user.clear(within(candidate).getByRole("textbox", { name: "Codex summary model" }));
+    await user.type(within(candidate).getByRole("textbox", { name: "Codex summary model" }), "gpt-5.6-sol");
     await user.click(within(candidate).getByRole("button", { name: "Connect Codex runtime" }));
     expect(mocks.confirmCandidate).toHaveBeenCalledWith({
       candidateId: "candidate:codex",
       model: "gpt-5.6-sol",
     });
-
-    const codex = screen.getByTestId("agent-connection-codex");
-    await user.click(within(codex).getByRole("button", { name: "Accept Conversation Data Path Disclosure" }));
-    expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: "codex", capability: "conversation" });
-    await user.click(within(codex).getByRole("button", { name: "Test conversation" }));
-    expect(mocks.probe).toHaveBeenCalledWith({
-      connectionId: "codex",
-      capability: "conversation",
-      model: "gpt-5.6-sol",
-    });
-    await user.click(within(codex).getByRole("button", { name: "Select Codex for future conversations" }));
-    expect(mocks.select).toHaveBeenCalledWith({
-      connectionId: "codex",
-      capability: "conversation",
-      model: "gpt-5.6-sol",
-    });
+    expect(mocks.select).not.toHaveBeenCalled();
+    expect(mocks.probe).not.toHaveBeenCalled();
   });
 
-  it("renders and routes Codex Summary independently from Conversation", async () => {
+  it("discloses, tests and selects Codex for Summary", async () => {
     mount("en");
     const user = userEvent.setup();
     const summary = screen.getByTestId("connection-capability-codex-summary");
-    const conversation = screen.getByTestId("connection-capability-codex-conversation");
 
     expect(within(summary).getByRole("heading", { name: "Summary" })).toBeInTheDocument();
-    expect(within(conversation).getByRole("heading", { name: "Conversation" })).toBeInTheDocument();
     await user.click(within(summary).getByRole("button", { name: "Accept Summary Data Path Disclosure" }));
     expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: "codex", capability: "summary" });
     await user.click(within(summary).getByRole("button", { name: "Test summary" }));
@@ -831,13 +765,13 @@ describe("shared AI services", () => {
     });
   });
 
-  it("connects Claude Code and routes Summary independently from Conversation", async () => {
+  it("connects Claude Code and keeps Summary unselectable until its test passes", async () => {
     mount("en");
     const user = userEvent.setup();
     const candidate = screen.getByTestId("agent-candidate-claude-code");
 
-    await user.clear(within(candidate).getByRole("textbox", { name: "Claude Code initial Summary and Conversation model" }));
-    await user.type(within(candidate).getByRole("textbox", { name: "Claude Code initial Summary and Conversation model" }), "claude-sonnet-5");
+    await user.clear(within(candidate).getByRole("textbox", { name: "Claude Code summary model" }));
+    await user.type(within(candidate).getByRole("textbox", { name: "Claude Code summary model" }), "claude-sonnet-5");
     await user.click(within(candidate).getByRole("button", { name: "Connect Claude Code runtime" }));
     expect(mocks.confirmCandidate).toHaveBeenCalledWith({
       candidateId: "candidate:claude-code",
@@ -847,7 +781,6 @@ describe("shared AI services", () => {
     const claude = screen.getByTestId("agent-connection-claude-code");
     expect(within(claude).getByText("/fake/bin/claude auth login")).toBeInTheDocument();
     const summary = within(claude).getByTestId("connection-capability-claude-code-summary");
-    const conversation = within(claude).getByTestId("connection-capability-claude-code-conversation");
     expect(within(summary).getByText(/policy-managed hooks.*Summary remains unavailable/)).toBeInTheDocument();
     await user.click(within(summary).getByRole("button", { name: "Accept Claude Code Summary Data Path Disclosure" }));
     expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: "claude-code", capability: "summary" });
@@ -858,58 +791,6 @@ describe("shared AI services", () => {
       model: "claude-sonnet-5",
     });
     expect(within(summary).getByRole("button", { name: "Select Claude Code for future summaries" })).toBeDisabled();
-    await user.click(within(conversation).getByRole("button", { name: "Accept Claude Code Conversation Data Path Disclosure" }));
-    expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: "claude-code", capability: "conversation" });
-    await user.click(within(conversation).getByRole("button", { name: "Test conversation" }));
-    expect(mocks.probe).toHaveBeenCalledWith({
-      connectionId: "claude-code",
-      capability: "conversation",
-      model: "claude-sonnet-5",
-    });
-    await user.click(within(conversation).getByRole("button", { name: "Select Claude Code for future conversations" }));
-    expect(mocks.select).toHaveBeenCalledWith({
-      connectionId: "claude-code",
-      capability: "conversation",
-      model: "claude-sonnet-5",
-    });
-  });
-
-  it.each([
-    ["hermes", "Hermes", "grok-4.6"],
-    ["openclaw", "OpenClaw", "openai-codex/gpt-5.5"],
-  ] as const)("connects %s as Conversation-only with runtime-owned authorization", async (adapter, label, model) => {
-    mount("en");
-    const user = userEvent.setup();
-    const candidate = screen.getByTestId(`agent-candidate-${adapter}`);
-
-    await user.clear(within(candidate).getByRole("textbox", { name: `${label} Conversation model` }));
-    await user.type(within(candidate).getByRole("textbox", { name: `${label} Conversation model` }), model);
-    await user.click(within(candidate).getByRole("button", { name: `Connect ${label} runtime` }));
-    expect(mocks.confirmCandidate).toHaveBeenCalledWith({ candidateId: `candidate:${adapter}`, model });
-
-    const card = screen.getByTestId(`agent-connection-${adapter}`);
-    expect(within(card).queryByRole("heading", { name: "Summary" })).not.toBeInTheDocument();
-    expect(within(card).getByText(/Supports conversations only/)).toBeInTheDocument();
-    expect(within(card).getByText(/never reads or copies.*credentials/i)).toBeInTheDocument();
-    const conversation = within(card).getByTestId(`connection-capability-${adapter}-conversation`);
-    expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeDisabled();
-    await user.click(within(conversation).getByRole("button", { name: `Accept ${label} Conversation Data Path Disclosure` }));
-    expect(mocks.acceptDisclosure).toHaveBeenCalledWith({ connectionId: adapter, capability: "conversation" });
-    expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeEnabled();
-    await user.click(within(conversation).getByRole("button", { name: "Test conversation" }));
-    expect(mocks.probe).toHaveBeenCalledWith({ connectionId: adapter, capability: "conversation", model });
-    await user.click(within(conversation).getByRole("button", { name: `Select ${label} for future conversations` }));
-    expect(mocks.select).toHaveBeenCalledWith({ connectionId: adapter, capability: "conversation", model });
-
-    await user.click(within(card).getByRole("button", { name: "Delete connection" }));
-    expect(mocks.deletionImpact).toHaveBeenCalledWith({ connectionId: adapter });
-    const dialog = await screen.findByRole("dialog", { name: `Delete ${label} connection` });
-    expect(within(dialog).getByText(/native OAuth login and runtime configuration remain unchanged/i)).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Confirm deletion" }));
-    expect(mocks.remove).toHaveBeenCalledWith({ connectionId: adapter, confirmed: true });
-    expect(within(conversation).getByRole("button", { name: `Accept ${label} Conversation Data Path Disclosure` }))
-      .toBeInTheDocument();
-    expect(within(conversation).getByRole("button", { name: "Test conversation" })).toBeDisabled();
   });
 
   it.each([
@@ -953,13 +834,10 @@ describe("shared AI services", () => {
 
     const card = screen.getByTestId("agent-connection-claude-code");
     const summary = within(card).getByTestId("connection-capability-claude-code-summary");
-    const conversation = within(card).getByTestId("connection-capability-claude-code-conversation");
     expect(within(summary).getByRole("textbox", { name: "Claude Code Summary model" }))
       .toHaveValue("claude-sonnet-5");
     expect(within(summary).getByText(/policy-managed hooks.*Summary remains unavailable/)).toBeInTheDocument();
     expect(within(summary).getByRole("button", { name: "Select Claude Code for future summaries" })).toBeDisabled();
-    expect(within(conversation).getByRole("button", { name: "Select Claude Code for future conversations" }))
-      .toBeEnabled();
   });
 
   it("runs only the explicit capability action and previews deletion impact before confirmation", async () => {
@@ -991,7 +869,8 @@ describe("shared AI services", () => {
     const dialog = await screen.findByRole("dialog", { name: "删除 xAI 连接" });
     expect(dialog).toHaveFocus();
     expect(within(dialog).getByText(/Planning/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/Launch plan/)).toBeInTheDocument();
+    // Old conversations pinned to the account are no longer something you can open.
+    expect(within(dialog).queryByText(/Launch plan/)).toBeNull();
     expect(mocks.remove).not.toHaveBeenCalled();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "删除 xAI 连接" })).not.toBeInTheDocument();
@@ -1007,8 +886,8 @@ describe("shared AI services", () => {
     mount("en");
 
     expect(screen.getByRole("heading", { name: "AI services" })).toBeInTheDocument();
-    expect(screen.getAllByText("Connection candidate, not connected")).toHaveLength(4);
-    expect(screen.getByText(/Changes apply to new work/)).toBeInTheDocument();
+    expect(screen.getAllByText("Connection candidate, not connected")).toHaveLength(2);
+    expect(screen.getByText(/Changes apply to new recordings/)).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "xAI connection status" })).toHaveTextContent("Connected");
   });
 

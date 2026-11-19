@@ -1,66 +1,20 @@
-.health-page {
-  min-height: 100%;
-  padding: 16px;
-  border: 1px solid var(--edge-card);
-  border-radius: var(--radius-panel);
-  background: var(--glass);
-  backdrop-filter: var(--blur-glass);
-  -webkit-backdrop-filter: var(--blur-glass);
-  box-shadow: var(--shadow);
-}
-.health-tabs {
-  display: inline-flex;
-  gap: 4px;
-  padding: 4px;
-  border: 0;
-  border-radius: var(--radius-inner);
-  background: color-mix(in oklch, var(--fg) 5%, transparent);
-  margin-bottom: 18px;
-  box-shadow: none;
-}
-.health-tab {
-  min-height: 30px;
-  padding: 6px 16px;
-  font-size: 12px;
-  color: var(--fg-2);
-  cursor: pointer;
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-control);
-}
-.health-tab:hover { color: var(--fg); }
-.health-tab.active {
-  color: var(--fg);
-  background: var(--glass-paper);
-  font-weight: 650;
-  box-shadow: var(--shadow-card);
-}
-
-@media (max-width: 760px) {
-  .health-page {
-    padding: 2px 2px 96px;
-  }
-
-  .health-tabs {
-    width: 100%;
-    overflow-x: auto;
-    margin-bottom: 12px;
-  }
-
-  .health-tab {
-    flex: 1 0 auto;
-    padding: 8px 12px;
-  }
-}
-.health-page { width: 100%; max-width: 960px; margin: 0 auto; box-sizing: border-box; min-height: 100%; padding: 30px clamp(18px, 4vw, 46px); }
-.runtime-diagnostics { margin-top: 28px; }
-.runtime-diagnostics-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 12px; padding: 16px 0; border: 0; background: transparent; text-align: left; color: var(--fg-2); cursor: pointer; }
-.runtime-diagnostics-toggle strong { font-weight: 600; font-size: 13px; color: var(--fg); }
-.runtime-diagnostics-toggle small { display: block; font-size: 11px; margin-top: 5px; line-height: 1.6; }
+/* Runtime status: the plain-language summary first; the service-level tools
+   stay folded under "advanced". */
+.health-page { width: 100%; max-width: 760px; margin: 0 auto; padding: 36px 40px 72px; }
+.health-page :is(button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.runtime-diagnostics { margin-top: 30px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.runtime-diagnostics-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 42px; padding: 8px 0; color: var(--fg-2); text-align: left; }
+.runtime-diagnostics-toggle strong { color: var(--fg); font-size: 13px; font-weight: 400; }
+.runtime-diagnostics-toggle small { display: block; margin-top: 1px; font-size: 12px; line-height: 1.5; }
+.runtime-diagnostics-toggle > svg { flex: none; color: var(--fg-3); transition: transform 0.14s; }
 .runtime-diagnostics-toggle[aria-expanded="true"] > svg { transform: rotate(180deg); }
-.health-page :is(button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.health-tabs { display: flex; max-width: 100%; overflow-x: auto; margin: 12px 0 18px; }
-.health-tab { flex-shrink: 0; }
-.health-tabpanel, .control-card, .control-toolbar-title { min-width: 0; }
-.control-pre { max-width: 100%; overflow-x: auto; box-sizing: border-box; }
-@media (max-width: 760px) { .health-page { padding: 22px 14px 32px; } .control-toolbar { flex-wrap: wrap; } .health-tab { padding: 8px 10px; } }
+.health-tabs { display: inline-flex; gap: 2px; max-width: 100%; margin: 6px 0 18px; padding: 2px; overflow-x: auto; border-radius: var(--r-md); background: var(--fill); }
+.health-tab { flex: none; min-height: 24px; padding: 0 11px; border-radius: 7px; color: var(--fg-2); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.health-tab:hover { color: var(--fg); }
+.health-tab.active { background: var(--raised); color: var(--fg); box-shadow: var(--shadow-sm); }
+.health-tabpanel { min-width: 0; padding-bottom: 20px; }
+.control-pre { max-width: 100%; overflow-x: auto; }
+@container (max-width: 560px) {
+  .health-page { padding: 12px 18px 56px; }
+  .control-toolbar { flex-wrap: wrap; }
+}
