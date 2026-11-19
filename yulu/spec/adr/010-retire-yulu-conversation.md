@@ -122,9 +122,9 @@ Nothing is replayed, and no stored conversation is sent anywhere.
   names what is actually sent.
 - A user who relied on Agent Console must use an Agent with Yulu MCP. Earlier
   conversations are readable only from the archive file.
-- Quick translation uses the same `text_model` as cleanup. A user who had
-  chosen the fast cleanup model while translation followed the Conversation
-  model now translates with the fast model too.
+- Voice translation keeps using the cleanup model, now stored as
+  `text_model`; it already followed the cleanup model selection, so no user's
+  translation model changes.
 - To change the Sharing connector model, the user removes and re-adds the
   Agent Connection.
 - The xAI text client keeps only bounded, non-streaming requests for Summary
