@@ -14,7 +14,7 @@ Yulu 是 macOS 原生会议记录器和可信本地控制面：
 
 - `Yulu.app` 负责 ScreenCaptureKit 系统音频、AVFoundation 麦克风和 macOS 权限；
 - Yulu Host 负责持久化任务、幂等、租约、恢复、产物原子提交和审计；
-- Yulu 明确选择的本地/xAI 音频引擎负责实时字幕、最终转写和听写，绝不自动回退；
+- Yulu 明确选择的本地/xAI 音频引擎负责实时转写、最终转写和听写，绝不自动回退；
 - Yulu 使用兼容 Grok CLI 的 OAuth 并把自己的 xAI grant 保存在 macOS 钥匙串；
 - 用户明确选择的 xAI、Codex 或 Claude Code 负责会议纪要，任务固定创建时的服务与模型且绝不自动切换；
 - Yulu 不提供对话（ADR-010）：用户在自己的 Agent（包括 Hermes、OpenClaw）里通过 Yulu MCP 询问会议内容，对话历史和连接器都归该 Agent；
@@ -51,7 +51,7 @@ DMG 不会安装全局 `yulu` 命令。本指南中的 CLI 回退只适用于已
 | `recording_start` | 以可选标题开始原生录音 |
 | `recording_stop` | 停止录音并进入同一条持久化处理链 |
 | `recordings_list` | 列出历史录音 |
-| `recording_get` | 读取一条录音的 metadata、转录、纪要及关联任务状态 |
+| `recording_get` | 读取一条录音的 metadata、转录、纪要、会中实时笔记（含参会者自己记下的笔记）及关联任务状态 |
 | `recording_task_get` | 查看持久化任务、阶段和审计事件 |
 | `recording_search` | 搜索本地转录和纪要 |
 | `recording_rename` | 重命名一条录音 |

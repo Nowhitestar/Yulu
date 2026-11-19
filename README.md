@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/logo.svg" width="88" alt="Yulu logo" />
   <h1>Yulu</h1>
-  <p><b>Native meeting capture. Live captions. Agent-ready memory.</b></p>
+  <p><b>Native meeting capture. Live notes. Agent-ready memory.</b></p>
   <p><b>English</b> · <a href="README.zh-CN.md">简体中文</a></p>
   <p><a href="https://github.com/Nowhitestar/Yulu/releases/latest">Download for macOS</a> · <a href="CHANGELOG.md">Changelog</a> · <a href="LICENSE">MIT License</a></p>
 </div>
@@ -21,15 +21,16 @@ you are using. No Yulu account or virtual audio device required.
   Through [MCP](docs/operations.md#dmg-and-cli-entry-points), your own Agent can
   control recording, search meeting history, and answer questions about it.
 - **Capture directly on your Mac.** System audio and microphone capture need
-  no meeting bot or virtual audio device. Movable captions, bilingual
-  translation, calendar reminders, and meeting detection support the workflow.
+  no meeting bot or virtual audio device. Live notes, calendar reminders, and
+  meeting detection support the workflow.
 - **Voice input beyond meetings.** Dictate into your current app or translate
   with a global shortcut. Optional xAI cleanup has three editing levels and
   separate punctuation styles; the original text stays available.
 
-[What's new in v0.28.0](docs/release-notes/v0.28.0.md):
-a simpler window with one recordings list, one reading sheet, and ⌘K for
-everything else. Questions about meetings now go to your own Agent over MCP.
+[What's new in v0.30.0](docs/release-notes/v0.30.0.md):
+live notes replace live captions. Key points, tables and diagrams build up
+beside the meeting, you can add your own notes, and both are saved with the
+recording. A complete live transcript is no longer transcribed again.
 
 ## Features
 
@@ -44,10 +45,18 @@ everything else. Questions about meetings now go to your own Agent over MCP.
 - **Meeting detection.** Yulu can also notice a meeting window that is not on
   your calendar, such as Zoom, and ask whether to record. Nothing records until
   you choose.
-- **Live captions.** A caption bar appears at the bottom of the screen while you
-  record. Drag it anywhere or collapse it to the Yulu logo. With the xAI audio
-  engine, it can also show a translation beside the original or instead of it,
-  once you turn on caption translation in **Settings → Recording & summaries**.
+- **Live notes.** While you record, a panel on the right edge of the screen
+  keeps the meeting's key points as rich text: lists, tables, even small
+  architecture diagrams, in Chinese or English. Type your own notes into the
+  same panel without leaving the meeting app. Collapse it to the Yulu logo
+  whenever you like. Live notes use a fast xAI model and are off until you turn
+  them on in **Settings → Recording & summaries**; your own notes are kept
+  either way.
+- **Notes, summary and transcript together.** Each recording keeps its live
+  notes next to its summary and transcript. When the live transcript already
+  covers the whole recording, Yulu keeps it instead of transcribing again.
+
+![The live notes panel beside a video call: decisions, owners, an architecture diagram, and your own notes](assets/demos/readme-live-en.png)
 
 ### Transcripts and summaries
 
@@ -158,8 +167,8 @@ references were the Claude desktop app, Apple's own apps, and Bear.
   the macOS sidebar shortcut. Yulu remembers the choice.
 - **Times that read like speech.** Today's meetings show a time, then
   *Yesterday*, then a weekday, then a date.
-- **Summary first.** A recording opens on its summary, the transcript is the
-  second tab, and **Copy Markdown** sits beside them.
+- **Summary first.** A recording opens on its summary, with the live notes and
+  the transcript in the next tabs and **Copy Markdown** beside them.
 - **A toolbar that is also a title bar.** Its empty space drags the window,
   and a double-click zooms it.
 - **Every theme kept.** Light, dark, follow-system, Ayu, Paper, and custom
@@ -200,12 +209,15 @@ the DMG does not install a global `yulu` shell command.
 Calendar reminders and meeting detection can prompt you, but recording starts
 only when you choose; for a calendar meeting with a link, the button offers
 **Record and join**. While recording, the button shows the elapsed time, a level
-meter, and a stop control. When you stop, the selected audio engine writes the
-transcript, then the selected summary provider writes the summary; the list
+meter, and a stop control. While you record, the live notes panel keeps the key points
+and takes your own notes. When you stop, the live transcript becomes the
+transcript (or the selected audio engine writes one if it is incomplete), then
+the selected summary provider writes the summary; the list
 shows a spinner until both are saved.
 
-**Read.** Select a recording. It opens on the summary, and the **Transcript**
-tab has the full text. Play the audio from the waveform, add tags under the title, and use **Copy Markdown** to take the
+**Read.** Select a recording. It opens on the summary; the **Notes** tab has
+the live notes and your own notes, and the **Transcript** tab has the full
+text. Play the audio from the waveform, add tags under the title, and use **Copy Markdown** to take the
 summary elsewhere. **⋯** holds the summary template, re-generate, re-transcribe,
 rename, and delete; right-click a row in the list to rename or delete it.
 
@@ -241,8 +253,9 @@ at the bottom of that page.
   default to `~/Movies/Yulu`; local speech recognition stays on-device.
 - Cloud features are opt-in: xAI transcription sends audio to xAI; AI summaries
   send transcripts, dictation cleanup and translation send dictated text, and
-  caption translation sends caption text, to the selected provider. Dictation
-  and caption translation each have their own switch and disclosure.
+  live notes send new transcript text and your notes (never audio), to the
+  selected provider. Dictation and live notes each have their own switch and
+  disclosure.
   Providers are selected explicitly, with no silent fallback.
 - Sharing a summary requires a separate manual confirmation. Yulu stores its xAI
   credentials in macOS Keychain; Agent connector credentials stay with the Agent.

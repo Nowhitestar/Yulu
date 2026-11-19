@@ -10,8 +10,10 @@ separate from the selected Summary Provider.
 - `Yulu.app` owns native capture and macOS privacy permissions.
 - The local Yulu Host owns path validation, durable tasks, idempotency, leases,
   recovery, artifact commits, authorization, and audit.
-- The explicitly selected Yulu audio engine owns realtime captions, final
-  transcripts, and dictation. `local` is the default; `xai` connects directly
+- The explicitly selected Yulu audio engine owns the live transcript, final
+  transcripts, and dictation. A complete live transcript from that engine is
+  committed as the final transcript; otherwise the same engine transcribes the
+  file once. `local` is the default; `xai` connects directly
   to xAI using Yulu-owned OAuth stored in macOS Keychain.
 - The exact Summary Provider pinned when work is created owns summary generation.
   Current Summary Providers are direct xAI, Codex, or Claude Code.
@@ -21,10 +23,11 @@ separate from the selected Summary Provider.
 - xAI dictation cleanup and translation send dictated text only when
   `transcription.dictation.text_provider` is `xai`, the audio engine is `xai`,
   and the dictated-text disclosure was accepted.
-- xAI live-caption translation sends caption text only when
-  `transcription.captions.translation_provider` is `xai`, the audio engine is
-  `xai`, and the caption-text disclosure was accepted. The overlay's translated
-  modes are requests, not consent; Hermes never translates captions.
+- xAI live notes send new transcript text, the attendee's typed notes, and
+  matching glossary entries only when `transcription.live_notes.provider` is
+  `xai` and the live notes disclosure was accepted, with either audio engine.
+  Audio is never sent for live notes. The attendee's own notes stay on the Mac
+  either way. Live-caption translation is retired.
 - Python is capture/scheduling/desktop glue. It is not an AI runtime.
 
 Do not add automatic fallback between audio engines or Summary Providers, a
@@ -33,7 +36,7 @@ Yulu. The accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-dura
 [`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md),
 [`ADR-009`](yulu/spec/adr/009-grok-cli-compatible-xai-oauth.md),
 [`ADR-010`](yulu/spec/adr/010-retire-yulu-conversation.md), and
-[`ADR-011`](yulu/spec/adr/011-explicit-live-caption-translation.md).
+[`ADR-012`](yulu/spec/adr/012-live-notes.md).
 
 ### Constraints
 
@@ -90,7 +93,7 @@ Yulu's separate xAI audio OAuth grant is stored in macOS Keychain.
 - `~/.config/yulu/` is a legacy read-only migration source.
 
 Relevant config sections are `audio`, `transcription` (engine, language,
-dictation context and text provider, and caption translation), `intelligence` (summary), `agent_pipeline`,
+dictation context and text provider, and live notes), `intelligence` (summary), `agent_pipeline`,
 `llm`, `status_agent`, `calendars`, `meeting_detection`, and `ui`.
 
 ### Build and verification
@@ -234,6 +237,7 @@ User's own Agent -> authenticated Yulu MCP -> local meetings and summaries
 | `agentRuntime.ts` | Supported local Agent runtime resolution for explicitly selected capabilities |
 | prompt/glossary/search stores | Local context and discovery |
 | `xaiText.ts` / `dictationText.ts` | Strict stateless xAI text requests for summaries and explicitly enabled dictation cleanup/translation |
+| `liveNotes.ts` / `recorder_status.swift` | Explicitly enabled xAI live notes, the attendee's own notes, and the floating panel that shows `/live` during a recording |
 
 ### Installed services
 
@@ -289,8 +293,9 @@ sending -> delivery_reported -> completed
 - ADR-010 retires Yulu-owned conversation, the Agent Console, voice chat, and the
   Agent Calendar Connector, superseding the conversation parts of ADR-005 and
   ADR-009.
-- ADR-011 gives live-caption translation its own explicit xAI selection and
-  disclosure and removes the Hermes caption translator.
+- ADR-012 replaces live captions with live notes, retires live-caption
+  translation (superseding ADR-011), and commits a complete live transcript
+  instead of transcribing again.
 - ADR-002 remains relevant for glossary data; the selected audio engine consumes that context.
 - Historical ADR bodies remain history and must not be treated as active
   implementation instructions.
@@ -306,8 +311,9 @@ sending -> delivery_reported -> completed
   Agent Console outside ADR-010.
 - Sending dictated text to xAI without the explicit dictation text switch and
   its accepted disclosure.
-- Sending caption text to xAI without the explicit caption translation switch
-  and its accepted disclosure, or running an Agent runtime to translate captions.
+- Sending meeting text to xAI for live notes without the explicit live notes
+  switch and its accepted disclosure, or sending audio for live notes.
+- Reintroducing live-caption translation or the caption strip outside a new ADR.
 - Writing final transcript/summary files outside the Host commit contract.
 - Calling Notion without task opt-in, Host begin authorization, and Host result
   commit.

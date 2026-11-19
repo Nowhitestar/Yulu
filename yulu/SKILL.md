@@ -12,8 +12,9 @@ Yulu is an Agent-native macOS recorder. Preserve its responsibility boundary:
 
 - Yulu owns native capture, permissions, durable tasks, idempotency, leases,
   artifact commit, authorization, recovery, and audit.
-- Yulu's explicitly selected local/xAI audio engine owns realtime captions,
-  final transcription, and dictation, with no automatic fallback.
+- Yulu's explicitly selected local/xAI audio engine owns the live transcript,
+  final transcription, and dictation, with no automatic fallback. A complete
+  live transcript becomes the final transcript (ADR-012).
 - Yulu uses the public Grok CLI-compatible OAuth client and stores its own xAI
   grant in macOS Keychain.
 - The recording's pinned xAI, Codex, or Claude Code provider owns its summary.
@@ -98,7 +99,7 @@ spooled and replayed. Do not add a fallback AI path to the capture process.
 | Manual sharing | selected supported Agent connector | Share Action snapshot, authorization, and verified receipt |
 | Questions about meetings | the user's own Agent | that Agent's history, via Yulu MCP tools |
 | Dictation text | explicitly enabled xAI text provider | `transcription.dictation.text_provider`/`text_model` plus the dictated-text disclosure receipt |
-| Live-caption translation | explicitly enabled xAI text provider (ADR-011) | `transcription.captions.translation_provider`/`translation_model` plus the caption-text disclosure receipt |
+| Live notes | explicitly enabled xAI text provider (ADR-012) | `transcription.live_notes.provider`/`model` plus the live notes disclosure receipt; `<stem>.notes.md` and `<stem>.mynotes.json` next to the recording |
 | Search, prompts, glossary | Yulu local data | local SQLite and recording sidecars |
 
 ## Prefer MCP for Agent actions
@@ -195,8 +196,9 @@ Relevant sections:
   separately in Settings and is never a config field;
 - `transcription.language` and `transcription.dictation`: language, prompt,
   context, timeout, deadline, and dictation text provider/model preferences;
-- `transcription.captions`: the separate live-caption translation
-  provider/model selection (ADR-011);
+- `transcription.live_notes`: the separate live notes provider/model/language
+  selection (ADR-012); the retired `transcription.captions` is archived on
+  upgrade and rejected on write;
 - `intelligence.summary`: pinned provider, connection, and model selection
   without credentials;
 - `llm.agent.provider` / `llm.command`: legacy migration input only;
@@ -318,9 +320,10 @@ See [`docs/operations.md`](../docs/operations.md) for exact checks.
 ## 中文摘要
 
 Yulu 的产品边界是：macOS 原生录音 + 本地可信 Host。Yulu 明确选择本地或 xAI
-音频引擎，统一负责实时字幕、最终转写和听写，不做自动回退；Yulu 使用兼容 Grok CLI
+音频引擎，统一负责实时转写、最终转写和听写，不做自动回退，完整的实时转写直接作为最终转写；Yulu 使用兼容 Grok CLI
 的 OAuth，并把自己的 xAI grant 保存到 macOS 钥匙串。录音会固定 direct xAI、Codex
 或 Claude Code 作为摘要服务；Hermes 与 OpenClaw 只作为 MCP 客户端接入。分享只从
 录音详情页发起新的手动 Share Action，录音完成本身绝不分享。Yulu 不再提供对话
 （ADR-010）：用户在自己的 Agent 里通过 Yulu MCP 询问会议内容；听写文字只有在显式
-开启 xAI 文字整理并接受披露后才会发送给 xAI。Python 只做录音边缘控制和 Host 事件投递。
+开启 xAI 文字整理并接受披露后才会发送给 xAI；实时笔记同样需要单独开启并接受披露，
+只发送转写文字和你的笔记，不发送音频。实时字幕翻译已移除（ADR-012）。Python 只做录音边缘控制和 Host 事件投递。

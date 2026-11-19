@@ -7,8 +7,8 @@ and Agent selection only; it must not contain Agent or connector secrets.
 `~/.config/yulu/config.json` is a legacy, read-only migration input.
 
 The current schema separates the audio engine, Summary Provider, dictation text
-provider, caption translation provider, and connectors. The explicitly selected audio engine handles realtime
-captions, final transcription, and dictation; local is the default and no
+provider, live notes provider, and connectors. The explicitly selected audio engine handles the live
+transcript, final transcription, and dictation; local is the default and no
 capability silently falls back to another provider or model. Yulu owns no
 conversation (ADR-010); ask about meetings in your own Agent through Yulu MCP.
 
@@ -37,9 +37,9 @@ conversation (ADR-010); ask about meetings in your own Agent through Yulu MCP.
       "translate_deadline_sec": 30,
       "translate_timeout_sec": 30
     },
-    "captions": {
-      "translation_provider": "none",
-      "translation_model": "grok-4.20-0309-non-reasoning"
+    "live_notes": {
+      "provider": "none",
+      "model": "grok-4.20-0309-non-reasoning"
     }
   },
   "intelligence": {
@@ -177,8 +177,9 @@ Console history in `agent-sessions.json` is renamed once to a mode-`0600`
 
 ## `transcription`
 
-One explicit Yulu audio engine handles realtime captions, final transcription,
-and dictation. The default is local and there is no automatic fallback.
+One explicit Yulu audio engine handles the live transcript, final transcription,
+and dictation. A complete live transcript from that engine becomes the final
+transcript; otherwise the same engine transcribes the file once. The default is local and there is no automatic fallback.
 
 | Field | Installer value | Meaning |
 |---|---:|---|
@@ -191,7 +192,7 @@ and dictation. The default is local and there is no automatic fallback.
 | `dictation.style` | `"casual"` | `formal` uses full punctuation and normal capitalization; `casual` reduces punctuation; `very_casual` also lowercases ordinary English sentence starts while preserving proper names and code. Applies when cleanup is enabled. |
 | `dictation.prompt_slug` | `"dictation-cleanup"` | Legacy compatibility only: `none` retains an existing cleanup opt-out. Normal dictation no longer loads a prompt template. |
 | `dictation.translate_prompt_slug` | `"dictation-translate"` | Legacy compatibility only; ignored. Quick translation uses built-in rules and the selected target language. |
-| `dictation.target_language` | `"English"` | Default target for dictation translation and the realtime-caption language selector. It does not enable caption translation. |
+| `dictation.target_language` | `"English"` | Default target for dictation translation. |
 | `dictation.context_limit` | `240` | Legacy compatibility only; ignored. Built-in translation rules are not truncated. |
 | `dictation.deadline_sec` | `30` | End-to-end post-capture budget used by installed shortcuts. |
 | `dictation.timeout_sec` | `30` | Host/Agent request budget used by installed shortcuts. |
@@ -296,38 +297,40 @@ They reach Yulu as MCP clients (`yulu mcp install`, or the bundled
 `provision.mcp` command for DMG installs; see `docs/operations.md`). Rows saved
 for them by earlier versions stay inert.
 
-### `transcription.captions`
+### `transcription.live_notes`
 
-Live-caption translation has its own explicit selection and disclosure
-(ADR-011). It is separate from the dictation text provider: neither switch turns
-on the other.
+Live notes have their own explicit selection and disclosure (ADR-012). They are
+separate from the dictation text provider and the Summary Provider, and they
+work with either audio engine.
 
 | Field | Installer value | Meaning |
 |---|---:|---|
-| `captions.translation_provider` | `"none"` | `none` keeps caption text on the Mac. With `xai`, bilingual and translation-only overlay modes send caption text to xAI, but only with the `xai` audio engine, a connected xAI credential, and the accepted `xai-caption-text-v1` disclosure. Turn it on in Settings → Recording & summaries → Transcription. An upgrade never sets `xai`. |
-| `captions.translation_model` | `"grok-4.20-0309-non-reasoning"` | Exact xAI text model for caption translation. Settings offers the fast model and `grok-4.6`. It is never replaced by another model on failure. |
+| `live_notes.provider` | `"none"` | `none` keeps meeting text on the Mac; your own notes are still saved. With `xai`, new transcript text, your notes and matching glossary entries go to xAI while a meeting is recorded, but only with a connected xAI credential and the accepted `xai-live-notes-v1` disclosure. Audio is never sent. Turn it on in Settings → Recording & summaries. An upgrade never sets `xai`. |
+| `live_notes.model` | `"grok-4.20-0309-non-reasoning"` | Exact xAI text model for live notes, chosen for speed. It is never replaced by another model on failure. |
+| `live_notes.language` | interface language | `zh` or `en`: the language of new live notes. The panel can switch it for one recording. |
 
-Each request carries one caption segment, up to two earlier segments as
-read-only context, the overlay's target language, and matching glossary
-entries. Requests run one at a time with an 8-second limit and response storage
-turned off; a newer caption replaces one still waiting. When a translated
-overlay mode is chosen but any requirement is missing, the Host sends nothing
-and publishes `translationStatus: "unavailable"` with
-`translationUnavailableReason` set to `provider_off`, `needs_xai_audio`,
-`needs_disclosure` or `needs_connection`. The overlay shows that reason next to
-the source captions. A request error marks that one caption `failed`. See
-"Realtime captions" in `docs/operations.md`.
+Each update carries the previous notes, the transcript text added since the last
+update (at most 12,000 characters), a short recent window, your notes, the
+language and matching glossary entries. Requests have no tools or history and
+response storage is turned off. When a requirement is missing, the Host sends
+nothing and the panel names the missing step: `provider_off`,
+`needs_disclosure` or `needs_connection`. A failed update keeps the earlier
+notes. See "Live notes" in `docs/operations.md`.
 
-Removing the xAI connection clears the caption disclosure along with the other
-xAI receipts. The Host no longer runs Hermes, or reads `YULU_HERMES_HOME`,
-`HERMES_HOME` or `~/.hermes`, to translate captions.
+`transcription.captions` (live-caption translation, ADR-011) is retired. An
+upgrade archives it with mode `0600` to
+`config.legacy-transcription.<stamp>.json` and removes it, and writes to it are
+rejected.
+
+Removing the xAI connection clears the live notes disclosure along with the
+other xAI receipts.
 
 ## `llm`
 
 `llm` is legacy migration input. It does not select transcription, summaries,
-dictation text, or caption translation: those use `transcription.engine`,
+dictation text, or live notes: those use `transcription.engine`,
 `intelligence.summary`, `transcription.dictation.text_provider`, and
-`transcription.captions.translation_provider`.
+`transcription.live_notes.provider`.
 
 | Field | Default | Meaning |
 |---|---:|---|
@@ -339,7 +342,7 @@ If the pinned Summary Provider is unavailable, a recording transcript remains
 committed while its summary task waits in `awaiting_provider`.
 
 To pause automatic recording processing, set `agent_pipeline.enabled=false`.
-Realtime captions, transcription, and dictation remain controlled by the selected
+The live transcript, transcription, and dictation remain controlled by the selected
 audio engine. `llm.enabled` controls only the legacy general-Agent path.
 
 Credentials, OAuth state, connector tools, and actual connection settings
