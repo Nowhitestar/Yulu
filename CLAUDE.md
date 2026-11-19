@@ -21,14 +21,19 @@ separate from the selected Summary Provider.
 - xAI dictation cleanup and translation send dictated text only when
   `transcription.dictation.text_provider` is `xai`, the audio engine is `xai`,
   and the dictated-text disclosure was accepted.
+- xAI live-caption translation sends caption text only when
+  `transcription.captions.translation_provider` is `xai`, the audio engine is
+  `xai`, and the caption-text disclosure was accepted. The overlay's translated
+  modes are requests, not consent; Hermes never translates captions.
 - Python is capture/scheduling/desktop glue. It is not an AI runtime.
 
 Do not add automatic fallback between audio engines or Summary Providers, a
 chat engine or Agent Console, connector executor, or file-only work queue to
 Yulu. The accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-recording-pipeline.md),
 [`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md),
-[`ADR-009`](yulu/spec/adr/009-grok-cli-compatible-xai-oauth.md), and
-[`ADR-010`](yulu/spec/adr/010-retire-yulu-conversation.md).
+[`ADR-009`](yulu/spec/adr/009-grok-cli-compatible-xai-oauth.md),
+[`ADR-010`](yulu/spec/adr/010-retire-yulu-conversation.md), and
+[`ADR-011`](yulu/spec/adr/011-explicit-live-caption-translation.md).
 
 ### Constraints
 
@@ -84,8 +89,8 @@ Yulu's separate xAI audio OAuth grant is stored in macOS Keychain.
 - Runtime sockets: `~/Library/Caches/Yulu/`; logs: `~/Library/Logs/Yulu/`.
 - `~/.config/yulu/` is a legacy read-only migration source.
 
-Relevant config sections are `audio`, `transcription` (engine, language, and
-dictation context and text provider), `intelligence` (summary), `agent_pipeline`,
+Relevant config sections are `audio`, `transcription` (engine, language,
+dictation context and text provider, and caption translation), `intelligence` (summary), `agent_pipeline`,
 `llm`, `status_agent`, `calendars`, `meeting_detection`, and `ui`.
 
 ### Build and verification
@@ -284,6 +289,8 @@ sending -> delivery_reported -> completed
 - ADR-010 retires Yulu-owned conversation, the Agent Console, voice chat, and the
   Agent Calendar Connector, superseding the conversation parts of ADR-005 and
   ADR-009.
+- ADR-011 gives live-caption translation its own explicit xAI selection and
+  disclosure and removes the Hermes caption translator.
 - ADR-002 remains relevant for glossary data; the selected audio engine consumes that context.
 - Historical ADR bodies remain history and must not be treated as active
   implementation instructions.
@@ -299,6 +306,8 @@ sending -> delivery_reported -> completed
   Agent Console outside ADR-010.
 - Sending dictated text to xAI without the explicit dictation text switch and
   its accepted disclosure.
+- Sending caption text to xAI without the explicit caption translation switch
+  and its accepted disclosure, or running an Agent runtime to translate captions.
 - Writing final transcript/summary files outside the Host commit contract.
 - Calling Notion without task opt-in, Host begin authorization, and Host result
   commit.

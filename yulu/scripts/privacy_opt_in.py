@@ -30,6 +30,10 @@ def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
     # ADR-010: Yulu owns no conversation. Dictated text reaches xAI only through
     # this explicit switch, the xAI audio engine, and an accepted disclosure.
     dictation_text_provider = "xai" if dictation.get("text_provider") == "xai" else "none"
+    # ADR-011: live-caption text has its own switch and disclosure, also only
+    # with the xAI audio engine. The dictation switch never enables it.
+    captions = _dict(transcription.get("captions"))
+    caption_translation_provider = "xai" if captions.get("translation_provider") == "xai" else "none"
     pipeline_enabled = agent_pipeline.get("enabled") is not False
 
     return {
@@ -48,6 +52,14 @@ def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
             "provider": dictation_text_provider,
             "yulu_executor": True,
             "cloud_text_opt_in": dictation_text_provider == "xai",
+            "requires_xai_audio_engine": True,
+            "ok": True,
+        },
+        "caption_translation": {
+            "owner": "yulu",
+            "provider": caption_translation_provider,
+            "yulu_executor": True,
+            "cloud_text_opt_in": caption_translation_provider == "xai",
             "requires_xai_audio_engine": True,
             "ok": True,
         },

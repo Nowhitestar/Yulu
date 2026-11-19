@@ -554,6 +554,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var sourceText = ""
     var translationText = ""
     var translationFailed = false
+    /// Set by the Host when the chosen translated mode cannot run (ADR-011).
+    var translationUnavailableReason = ""
     var warningText = ""
     var sourceLanguage = "zh"
     var lastSequence = -1
@@ -741,8 +743,14 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         OutlinedCaptionLabel(frame: .zero)
     }
 
+    /// Translation-only with translation unavailable shows the source captions
+    /// with the notice below them, so captions never disappear.
+    var effectiveDisplayMode: CaptionDisplayMode {
+        displayMode == .translation && !translationUnavailableReason.isEmpty ? .bilingual : displayMode
+    }
+
     func sourceCaptionFrame(in bounds: NSRect) -> NSRect {
-        let bilingual = displayMode == .bilingual
+        let bilingual = effectiveDisplayMode == .bilingual
         return NSRect(
             x: 12,
             y: bilingual ? 60 : 16,
@@ -1041,16 +1049,20 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func renderCaptions(animated: Bool, warning: Bool = false) {
         guard expanded else { return }
-        let sourceHidden = displayMode == .translation
-        let translationHidden = displayMode == .source
+        let mode = effectiveDisplayMode
+        let sourceHidden = mode == .translation
+        let translationHidden = mode == .source
         sourceLabel.isHidden = sourceHidden
         translationLabel.isHidden = translationHidden
-        let displayedTranslation = translationFailed ? L("翻译暂不可用", "Translation unavailable") : translationText
+        let notice = translationUnavailableNotice(translationUnavailableReason)
+        let displayedTranslation = !notice.isEmpty
+            ? notice
+            : (translationFailed ? L("翻译暂不可用", "Translation unavailable") : translationText)
         let mainText = warningText.isEmpty
-            ? (displayMode == .translation ? displayedTranslation : sourceText)
+            ? (mode == .translation ? displayedTranslation : sourceText)
             : warningText
-        let secondaryText = warningText.isEmpty && displayMode == .bilingual ? displayedTranslation : ""
-        if displayMode == .translation {
+        let secondaryText = warningText.isEmpty && mode == .bilingual ? displayedTranslation : ""
+        if mode == .translation {
             translationLabel.frame = sourceLabel.frame
             setCaption(mainText, size: 30, color: .white, weight: .bold, label: translationLabel)
         } else {
@@ -1066,7 +1078,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
             setCaption(secondaryText, size: 18, color: NSColor(hex: "#F4E0AC"), weight: .semibold, label: translationLabel)
         }
         let sourceAlpha: CGFloat = mainText.isEmpty ? 0 : 1
-        let translationAlpha: CGFloat = (displayMode == .translation ? mainText : secondaryText).isEmpty ? 0 : 1
+        let translationAlpha: CGFloat = (mode == .translation ? mainText : secondaryText).isEmpty ? 0 : 1
         sourceLabel.alphaValue = sourceAlpha
         translationLabel.alphaValue = translationAlpha
         guard animated else { return }
@@ -1074,7 +1086,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
             sourceLabel.alphaValue = 0
             sourceLabel.animator().alphaValue = 1
         }
-        if !translationLabel.isHidden && !(displayMode == .translation ? mainText : secondaryText).isEmpty {
+        if !translationLabel.isHidden && !(mode == .translation ? mainText : secondaryText).isEmpty {
             translationLabel.alphaValue = 0
             translationLabel.animator().alphaValue = 1
         }
@@ -1291,12 +1303,20 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
             status: translationStatus,
             current: translationText
         )
+        let nextUnavailableReason = liveCaptionUnavailableReason(
+            status: translationStatus,
+            reason: payload["translationUnavailableReason"] as? String
+        )
         let sourceChanged = !source.isEmpty && source != sourceText
         let nextTranslationFailed = translationStatus == "failed"
-        let translationChanged = translation != translationText || nextTranslationFailed != translationFailed
+        let translationChanged = translation != translationText || nextTranslationFailed != translationFailed ||
+            nextUnavailableReason != translationUnavailableReason
+        let layoutChanged = nextUnavailableReason.isEmpty != translationUnavailableReason.isEmpty
         let warningCleared = unhealthy || !warningText.isEmpty
         translationText = translation
         translationFailed = nextTranslationFailed
+        translationUnavailableReason = nextUnavailableReason
+        if layoutChanged { layoutCaptionLabels() }
         unhealthy = false
         warningText = ""
         if sourceChanged {
@@ -1325,9 +1345,35 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func liveCaptionTranslationText(incoming: String, status: String, current: String) -> String {
-        if status == "disabled" { return "" }
+        if status == "disabled" || status == "unavailable" { return "" }
         let incomingText = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
         return incomingText.isEmpty ? current : incomingText
+    }
+
+    /// The Host sends a reason only with the "unavailable" status. A missing
+    /// reason still means nothing is being translated.
+    func liveCaptionUnavailableReason(status: String, reason: String?) -> String {
+        guard status == "unavailable" else { return "" }
+        let value = reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? "provider_off" : value
+    }
+
+    /// Caption translation sends nothing until it is explicitly turned on and
+    /// disclosed in Settings (ADR-011); say which step is missing.
+    func translationUnavailableNotice(_ reason: String) -> String {
+        switch reason {
+        case "":
+            return ""
+        case "needs_xai_audio":
+            return L("字幕翻译需要 xAI 转写引擎；本地转写的字幕留在本机", "Caption translation needs the xAI audio engine; local captions stay on this Mac")
+        case "needs_disclosure":
+            return L("字幕翻译待确认数据说明 · 设置 › 录音与摘要", "Review caption translation · Settings › Recording & summaries")
+        case "needs_connection":
+            return L("字幕翻译需要 xAI 连接 · 设置 › 连接", "Caption translation needs xAI · Settings › Connections")
+        default:
+            // "provider_off", or a reason this build does not know yet.
+            return L("字幕翻译未开启 · 设置 › 录音与摘要", "Caption translation is off · Settings › Recording & summaries")
+        }
     }
 
     func isCaptionHesitation(_ text: String) -> Bool {
@@ -1488,6 +1534,20 @@ if arguments.contains("--self-test") {
     assert(app.liveCaptionTranslationText(incoming: "", status: "pending", current: "Previous") == "Previous")
     assert(app.liveCaptionTranslationText(incoming: " Next ", status: "ready", current: "Previous") == "Next")
     assert(app.liveCaptionTranslationText(incoming: "Next", status: "disabled", current: "Previous") == "")
+    assert(app.liveCaptionTranslationText(incoming: "Next", status: "unavailable", current: "Previous") == "")
+    assert(app.liveCaptionUnavailableReason(status: "unavailable", reason: "needs_disclosure") == "needs_disclosure")
+    assert(app.liveCaptionUnavailableReason(status: "unavailable", reason: nil) == "provider_off")
+    assert(app.liveCaptionUnavailableReason(status: "ready", reason: "needs_disclosure") == "")
+    assert(app.translationUnavailableNotice("").isEmpty)
+    let unavailableNotices = ["provider_off", "needs_xai_audio", "needs_disclosure", "needs_connection"]
+        .map { app.translationUnavailableNotice($0) }
+    assert(unavailableNotices.allSatisfy { !$0.isEmpty } && Set(unavailableNotices).count == 4)
+    app.displayMode = .translation
+    app.translationUnavailableReason = "needs_disclosure"
+    assert(app.effectiveDisplayMode == .bilingual)
+    app.translationUnavailableReason = ""
+    assert(app.effectiveDisplayMode == .translation)
+    app.displayMode = .source
     assert(app.isCaptionHesitation("嗯，呃……"))
     for answer in ["对", "不", "不要", "好", "OK", "2", "嗯，好"] {
         assert(app.liveCaptionSourceText(stable: "上一句", partial: answer) == answer)

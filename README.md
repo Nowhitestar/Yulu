@@ -45,8 +45,9 @@ everything else. Questions about meetings now go to your own Agent over MCP.
   your calendar, such as Zoom, and ask whether to record. Nothing records until
   you choose.
 - **Live captions.** A caption bar appears at the bottom of the screen while you
-  record. Drag it anywhere, show a translation beside the original or instead of
-  it, or collapse it to the Yulu logo.
+  record. Drag it anywhere or collapse it to the Yulu logo. With the xAI audio
+  engine, it can also show a translation beside the original or instead of it,
+  once you turn on caption translation in **Settings → Recording & summaries**.
 
 ### Transcripts and summaries
 
@@ -239,8 +240,9 @@ at the bottom of that page.
 - Recordings, transcripts, summaries, and history are stored locally. Recordings
   default to `~/Movies/Yulu`; local speech recognition stays on-device.
 - Cloud features are opt-in: xAI transcription sends audio to xAI; AI summaries
-  send transcripts, and dictation cleanup and translation send dictated text, to
-  the selected provider.
+  send transcripts, dictation cleanup and translation send dictated text, and
+  caption translation sends caption text, to the selected provider. Dictation
+  and caption translation each have their own switch and disclosure.
   Providers are selected explicitly, with no silent fallback.
 - Sharing a summary requires a separate manual confirmation. Yulu stores its xAI
   credentials in macOS Keychain; Agent connector credentials stay with the Agent.

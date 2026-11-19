@@ -258,7 +258,8 @@ provenance.
 
 Starting a recording opens a movable subtitle overlay near the bottom center of
 the active display. It shows source text by default. Hover over the capsule to
-choose a target language or switch to `双语` or `仅翻译`.
+choose a target language or switch to `双语` (bilingual) or `仅翻译` (translation
+only).
 
 The default audio engine is the local sherpa-onnx Paraformer INT8 model, which
 handles both mutable realtime captions and the durable final transcript. Open
@@ -308,6 +309,51 @@ Drag the six-dot handle to reposition the overlay. Use the down arrow to collaps
 it to the breathing Yulu logo, then click the logo to restore captions. Click the
 `录制中` control to stop; the overlay disappears after capture stops.
 The model cannot be removed while a recording is active.
+
+### Caption translation
+
+Caption translation is off by default and sends nothing until you turn it on
+(ADR-011). It needs all of the following:
+
+1. The `xai` audio engine. With the `local` engine, captions stay on the Mac.
+2. A connected xAI account in Settings → Connections.
+3. In Settings → Recording & summaries → Transcription, **Translate captions
+   with xAI** turned on, which first shows the `xai-caption-text-v1` disclosure.
+
+Choosing `双语` or `仅翻译` in the overlay requests translation for that
+recording only. It does not grant consent.
+
+While a translated mode is shown, the Host sends each new caption to xAI as a
+separate request. A request contains the caption, up to two earlier captions as
+read-only context, the target language, and glossary entries that match the
+caption. It uses the exact `transcription.captions.translation_model` with
+response storage turned off, and Yulu does not save the translation. Captions include what other
+people in the meeting say. Only one request runs at a time, and a newer caption
+replaces one that is still waiting. Turning on caption translation does not turn
+on dictation cleanup, and the dictation switch does not turn on caption
+translation.
+
+If a translated mode is chosen but translation cannot run, the Host sends
+nothing. The overlay keeps the source captions and shows the reason in place of
+the translation. `仅翻译` falls back to source text with the notice below it.
+
+| Overlay notice | Cause | Fix |
+|---|---|---|
+| `字幕翻译未开启` / "Caption translation is off" | `translation_provider` is `none` | Turn on **Translate captions with xAI** |
+| `字幕翻译需要 xAI 转写引擎` / "needs the xAI audio engine" | The audio engine is `local` | Select the `xai` audio engine |
+| `字幕翻译待确认数据说明` / "Review caption translation" | The caption disclosure is not accepted, for example after the xAI connection was removed | Review and accept it in Transcription settings |
+| `字幕翻译需要 xAI 连接` / "needs xAI" | No xAI credential is connected | Connect xAI in Settings → Connections |
+
+The Host checks these conditions again for every new caption. A change in
+Settings during a recording takes effect at the next caption, and switching the
+overlay mode rechecks immediately. A failed or timed-out request
+shows `翻译暂不可用` for that caption only. It is never retried with another
+model or provider.
+
+Earlier versions translated captions through a local Hermes install. Yulu no
+longer reads Hermes configuration or runs Hermes for captions, and an upgrade
+does not turn on xAI caption translation for anyone. `yulu doctor --json`
+reports the selection under `privacy_opt_in.caption_translation`.
 
 ## Dictation and voice input
 

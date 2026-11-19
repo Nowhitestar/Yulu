@@ -7,6 +7,11 @@ import {
   DictationTextModelSchema,
   DictationTextProviderSchema,
 } from "./dictationPreferences.js";
+import {
+  CAPTION_TRANSLATION_MODEL_DEFAULT,
+  CaptionTranslationModelSchema,
+  CaptionTranslationProviderSchema,
+} from "./captionPreferences.js";
 import { DEFAULT_HOTKEYS, HotkeySchema as StatusAgentHotkeySchema, validateHotkeyConflicts } from "./hotkeys.js";
 import {
   TextProviderSelectionSchema,
@@ -88,6 +93,13 @@ const DictationSchema = z.object({
   context_limit: z.number().default(240),
 }).passthrough().default({});
 
+// Live-caption translation has its own explicit selection and disclosure
+// (ADR-011). "none" keeps caption text on this Mac; there is no fallback.
+const CaptionsSchema = z.object({
+  translation_provider: CaptionTranslationProviderSchema.default("none"),
+  translation_model: CaptionTranslationModelSchema.default(CAPTION_TRANSLATION_MODEL_DEFAULT),
+}).passthrough().default({});
+
 const StatusAgentSchema = z.object({
   enabled: z.boolean().default(true),
   feedback_sounds: z.boolean().default(true),
@@ -117,6 +129,7 @@ export const ConfigSchema = z.object({
     language: z.enum(["zh", "en", "ja", "auto"]).default("zh"),
     glossary: z.array(z.string()).optional(),
     dictation: DictationSchema,
+    captions: CaptionsSchema,
   }).passthrough().default({}),
   llm: z.object({
     enabled: z.boolean().optional(),
