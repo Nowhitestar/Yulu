@@ -438,7 +438,7 @@ describe("RecordingReader", () => {
 
     expect(screen.getByText(/xAI · grok-4\.6-pinned/i)).toBeInTheDocument();
     const retry = screen.getByRole("button", { name: /重试同一服务/i });
-    const settings = screen.getByRole("link", { name: /打开智能服务设置/i });
+    const settings = screen.getByRole("link", { name: /打开 AI 服务设置/i });
     const keepPaused = screen.getByRole("button", { name: /保持暂停/i });
     expect(retry.parentElement).toHaveClass("reader-reconciliation-actions");
     expect(settings).toHaveAttribute("href", "/settings/llm?connection=direct-xai&capability=summary");
@@ -476,7 +476,7 @@ describe("RecordingReader", () => {
     expect(screen.getByText("Provider paused")).toBeInTheDocument();
     expect(screen.getByText("xAI · grok-4.6-pinned failed. Yulu did not switch providers.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry same provider" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Open AI services" })).toHaveAttribute(
       "href",
       "/settings/llm?connection=direct-xai&capability=summary",
     );
@@ -507,7 +507,7 @@ describe("RecordingReader", () => {
     expect(alert).toHaveTextContent("claude-code · claude-sonnet-5");
     expect(alert).toHaveTextContent("Claude Code Summary outcome is unknown");
     expect(screen.queryByRole("button", { name: "Retry same provider" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Open AI services" })).toHaveAttribute(
       "href",
       "/settings/llm?connection=claude-code&capability=summary",
     );
