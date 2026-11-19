@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.28.0](https://github.com/Nowhitestar/Yulu/compare/v0.27.5...v0.28.0) (2026-11-19)
+
+
+### Features
+
+* **ui:** simplify the app to a recordings list and a reading sheet ([#256](https://github.com/Nowhitestar/Yulu/issues/256)) ([1637879](https://github.com/Nowhitestar/Yulu/commit/16378799f1df223335eb621d31bd96a8a4d24d62))
+
 ## [0.27.5](https://github.com/Nowhitestar/Yulu/compare/v0.27.4...v0.27.5) (2026-10-20)
 
 
