@@ -73,7 +73,7 @@ def test_status_agent_hotkeys_shape(tmp_path, monkeypatch):
 
 def test_status_agent_hold_mode_applies_to_all_voice_shortcuts(tmp_path, monkeypatch):
     _stub_config(tmp_path, monkeypatch, {"status_agent": {"voice_input_mode": "hold"}})
-    assert [item["inputMode"] for item in sac.status_agent_hotkeys()] == ["hold"] * 3
+    assert [item["inputMode"] for item in sac.status_agent_hotkeys()] == ["hold"] * 2
 
 
 def test_status_agent_unknown_input_mode_keeps_toggle_default(tmp_path, monkeypatch):
@@ -382,7 +382,7 @@ def test_native_ui_uses_config_backed_language_and_current_logo():
 def test_status_agent_has_no_voice_chat_shortcut_or_menu_entry():
     src = _swift_source()
     assert '"Ask Agent by Voice"' not in src
-    specs = src[src.index("func defaultHotkeySpecs()") : src.index("func loadHotkeySpecs()")]
+    specs = src[src.index("func defaultHotkeySpecs()") : src.index("func readHotkeysFromConfig()")]
     assert '"voice_chat"' not in specs
     assert '"dictate"' in specs
     assert '"translate"' in specs
