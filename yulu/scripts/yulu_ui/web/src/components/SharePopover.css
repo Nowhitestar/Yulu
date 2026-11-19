@@ -1,7 +1,7 @@
 /* The share confirmation: what will be sent, where, and one deliberate button. */
 .share-popover-root { position: relative; display: inline-flex; }
 .share-popover { position: fixed; z-index: 90; width: min(420px, calc(100vw - 28px)); max-height: calc(100vh - 28px); overflow-y: auto; border-radius: var(--r-lg); box-shadow: var(--shadow-pop); }
-.share-panel { padding: 16px; border-radius: var(--r-lg); background: var(--raised); }
+.share-panel { padding: 16px; border-radius: var(--r-lg); background: var(--raised); -webkit-backdrop-filter: var(--blur-pop); backdrop-filter: var(--blur-pop); }
 .share-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 12px; color: var(--fg-3); }
 .share-panel-title { display: inline-flex; align-items: center; gap: 8px; color: var(--fg); font-size: 14px; font-weight: 600; }
 .share-format { padding: 1px 7px; border-radius: var(--r-pill); background: var(--fill); color: var(--fg-2); font-size: 11px; font-weight: 500; }

@@ -184,6 +184,8 @@ textarea.field { padding: 8px 10px; line-height: 1.5; resize: vertical; }
   border-radius: 11px;
   background: var(--raised);
   box-shadow: var(--shadow-pop);
+  -webkit-backdrop-filter: var(--blur-pop);
+  backdrop-filter: var(--blur-pop);
 }
 .menu-item {
   display: flex;
