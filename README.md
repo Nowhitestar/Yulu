@@ -27,12 +27,86 @@ you are using. No Yulu account or virtual audio device required.
   with a global shortcut. Optional xAI cleanup has three editing levels and
   separate punctuation styles; the original text stays available.
 
-The meeting library adds playback, search, tags, speaker corrections, templates,
-and a glossary.
-
 [What's new in v0.28.0](docs/release-notes/v0.28.0.md):
 a simpler window with one recordings list, one reading sheet, and ⌘K for
 everything else. Questions about meetings now go to your own Agent over MCP.
+
+## Features
+
+### Recording meetings
+
+- **System audio and your microphone** in one native recording, with no meeting
+  bot or virtual audio device. A recording stops by itself after five minutes
+  of silence; the limit is adjustable.
+- **Meeting reminders.** Connect macOS Calendar, or Google Calendar through
+  `gog`, and Yulu offers to record when a meeting starts. For a meeting with a
+  video link, **Record and join** opens the call and starts recording together.
+- **Meeting detection.** Yulu can also notice a meeting window that is not on
+  your calendar, such as Zoom, and ask whether to record. Nothing records until
+  you choose.
+- **Live captions.** A caption bar appears at the bottom of the screen while you
+  record. Drag it anywhere, show a translation beside the original or instead of
+  it, or collapse it to the Yulu logo.
+
+### Transcripts and summaries
+
+- **Two audio engines, chosen explicitly.** The default local engine runs on
+  your Mac with no usage fee (a one-time download of about 1 GB, about 320 MB
+  kept). xAI cloud transcription is an opt-in with its own consent. Chinese,
+  English, and automatic detection are supported; Japanese needs xAI.
+- **Glossary.** Add names and jargon once. Transcription prefers them when it
+  hears something close, and dictation cleanup uses the entries it matches.
+- **Summaries with templates.** xAI, Codex, or Claude Code writes the summary
+  from a template. Edit the built-in ones or add your own, mark one to run on
+  every new recording, and re-generate any summary with another template.
+- **No silent switching.** Each recording keeps the provider and model it was
+  created with. If that provider is unavailable, Yulu waits for you instead of
+  using another one.
+- **A library you can work with.** Waveform playback, tags, full-text search
+  across summaries and transcripts, and **Copy Markdown**.
+- **Sharing and Agents.** Share a summary to Notion or Zulip through your
+  Agent's connector, confirming each share. Claude Code, Codex, and other MCP
+  clients can start recordings, search meetings, and read summaries.
+
+### Dictation and translation
+
+Voice input works in any app, not just Yulu.
+
+- **Dictate with Fn.** Press **Fn**, speak, and press it again. Yulu types the
+  text at your cursor and checks that it arrived; if it cannot confirm, the
+  text stays on the clipboard. Every result is kept in the Voice Input history.
+- **Translate as you speak with Fn+Shift.** Speak in one language and Yulu
+  inserts the translation in another: English by default, or any language you
+  set. If translation fails, the recognized text is kept and nothing
+  untranslated is pasted.
+- **Cleanup that keeps your meaning.** Three levels turn speech into writing
+  and three styles (formal, casual, very casual) set the punctuation. Names,
+  numbers, negations, and uncertainty are kept, and the original text is always
+  available to copy.
+
+  | You said | *"Um, tomorrow at three. No, four. Let's meet. Don't send the draft yet."* |
+  |---|---|
+  | Light | Tomorrow at four, let's meet. Don't send the draft yet |
+  | Medium | Let's meet tomorrow at four. Don't send the draft yet |
+  | Heavy | Same as medium for a short note; longer dictation is split into paragraphs, and separate questions become a numbered list |
+
+- **Your kind of shortcut.** Press once to start and again to finish, or hold
+  to talk and release to finish. Any key works, including Fn alone or a
+  specific left or right modifier. Short sounds mark start, success, and
+  failure, and a small panel shows your voice level with finish and cancel.
+- **You decide where text goes.** With the local engine, dictation stays on
+  your Mac and is inserted as recognized. Cleanup and translation run on xAI:
+  they need xAI as the audio engine and **Clean up with xAI** turned on, and
+  they send only the dictated text and the glossary entries it matches.
+
+![Settings → Voice Input with shortcuts and dictation cleanup levels](assets/demos/readme-voice-en.png)
+
+### Around the app
+
+Yulu lives in the menu bar as well as its window; hide the Dock or menu bar
+icon and recording, reminders, and shortcuts keep working. The interface is in
+Chinese and English, with light, dark, and custom themes, and updates install
+from inside the App.
 
 ## The window
 
@@ -124,9 +198,8 @@ meter, and a stop control. When you stop, the selected audio engine writes the
 transcript, then the selected summary provider writes the summary; the list
 shows a spinner until both are saved.
 
-**Read.** Select a recording. It opens on the summary; the **Transcript** tab
-has the full text and speaker names you can correct. Play the audio from the
-waveform, add tags under the title, and use **Copy Markdown** to take the
+**Read.** Select a recording. It opens on the summary, and the **Transcript**
+tab has the full text. Play the audio from the waveform, add tags under the title, and use **Copy Markdown** to take the
 summary elsewhere. **⋯** holds the summary template, re-generate, re-transcribe,
 rename, and delete; right-click a row in the list to rename or delete it.
 
@@ -142,12 +215,10 @@ Claude Code, Codex, or another detected Agent with one click, then **Test** it.
 Ask that Agent about your meetings; it reaches Yulu through MCP and keeps its
 own history.
 
-**Voice input.** In any app, press **Fn** to dictate and **Fn+Shift** to
-translate. Shortcuts, the translation language, and optional xAI cleanup are in
-**Settings → Voice Input**, and recent dictation (with the original text) is
-listed at the bottom of that page.
-
-![Settings → Voice Input with shortcuts and dictation cleanup levels](assets/demos/readme-voice-en.png)
+**Dictate.** In any app, press **Fn** to dictate and **Fn+Shift** to
+translate. Shortcuts, the translation language, and xAI cleanup are in
+**Settings → Voice Input**; recent dictation, with its original text, is listed
+at the bottom of that page.
 
 | Shortcut | Action |
 |---|---|
