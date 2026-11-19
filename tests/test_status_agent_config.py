@@ -196,72 +196,31 @@ def test_recorder_status_delegates_stop_without_a_host_python():
     assert "process.run()" not in src
 
 
-def test_recorder_status_renders_streaming_partials_without_restarting_fade():
+def test_recorder_status_hosts_live_notes_in_a_keyable_non_activating_panel():
     src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
-    handler_start = src.index("func handleWebSocketFrame")
-    handler_end = src.index("func sourceLanguageTitle", handler_start)
-    handler = src[handler_start:handler_end]
-    assert 'payload["partialText"]' in handler
-    assert "liveCaptionSourceText" in handler
-    assert "liveCaptionTranslationText" in handler
-    assert "renderCaptions(animated: false)" in handler
+    assert "import WebKit" in src
+    assert "final class NotesPanel: NSPanel" in src
+    assert "override var canBecomeKey: Bool { true }" in src
+    assert "styleMask: [.borderless, .nonactivatingPanel]" in src
+    assert "win.becomesKeyOnlyIfNeeded = false" in src
+    # Collapsing drops keyboard focus from the hidden notes.
+    assert "win.makeFirstResponder(nil)" in src
+    # The caption strip and its translated modes are gone (ADR-012).
+    for retired in ("OutlinedCaptionLabel", "CaptionDisplayMode", "renderCaptions", "realtime-transcript"):
+        assert retired not in src
 
 
-def test_recorder_status_preserves_each_display_mode_during_streaming_updates():
+def test_recorder_status_reports_stop_and_capture_problems_to_the_page():
     src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
-    live_start = src.index("func liveCaptionSourceText")
-    live_end = src.index("func isCaptionHesitation", live_start)
-    live = src[live_start:live_end]
-    render_start = src.index("func renderCaptions")
-    render_end = src.index("func setCaption", render_start)
-    render = src[render_start:render_end]
-
-    assert 'return stableText + "\\n" + partialText' not in live
-    assert 'status == "disabled"' in live
-    assert 'incomingText.isEmpty ? current : incomingText' in live
-    assert '"翻译暂不可用 · \\(sourceText)"' not in render
-
-
-def test_recorder_status_updates_streaming_captions_without_typewriter_delay():
-    src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
-    handler_start = src.index("func handleWebSocketFrame")
-    handler_end = src.index("func sourceLanguageTitle", handler_start)
-    handler = src[handler_start:handler_end]
-
-    assert "setSourceCaption(source)" in handler
-    assert "func nextCaptionRevealText" not in src
-    assert "captionRevealTarget" not in src
-    assert "captionRevealTimer" not in src
-
-
-def test_recorder_status_wraps_long_captions_and_keeps_the_latest_tail():
-    src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
-    label_start = src.index("final class OutlinedCaptionLabel")
-    label_end = src.index("final class AppDel", label_start)
-    caption_start = src.index("func captionString")
-    caption_end = src.index("@objc func targetLanguageChanged", caption_start)
-
-    assert ".byWordWrapping" in src[label_start:label_end]
-    assert ".byTruncatingTail" not in src[label_start:label_end]
-    assert "func visibleCaptionText" in src
-    assert "semanticBreaks" in src
-    assert "characters.suffix" in src
-    assert ".byWordWrapping" in src[caption_start:caption_end]
-
-
-def test_recorder_status_bounds_live_caption_before_appkit_layout():
-    src = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
-    visible_start = src.index("func visibleCaptionText")
-    visible_end = src.index("func captionString", visible_start)
-    visible = src[visible_start:visible_end]
-    live_start = src.index("func liveCaptionSourceText")
-    live_end = src.index("func isCaptionHesitation", live_start)
-    live = src[live_start:live_end]
-
-    assert "let trimmed = boundedCaptionText(text, maxCharacters: captionLayoutCharacterLimit)" in visible
-    assert visible.index("boundedCaptionText") < visible.index("boundingRect")
-    assert "boundedCaptionText(stable, maxCharacters: stableCaptionCharacterLimit)" in live
-    assert "boundedCaptionText(partial, maxCharacters: partialCaptionCharacterLimit)" in live
+    stop_start = src.index("@objc func doStop()")
+    stop_end = src.index("func applyStopCompletion", stop_start)
+    assert "requestRecordingStop()" in src[stop_start:stop_end]
+    assert "pushPanelState()" in src[stop_start:stop_end]
+    apply = src[src.index("func applyStopCompletion"):src.index("private func observeStopCompletion")]
+    assert "stopping = false" in apply and "pushPanelState()" in apply
+    check = src[src.index("@objc func checkState()"):src.index("func parseState")]
+    assert "finishAndExit()" in check
+    assert "pushPanelState()" in check
 
 
 def test_status_agent_has_dictation_menu_entry():

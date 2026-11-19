@@ -11,7 +11,6 @@ import { appRouter } from "./routers/_app.js";
 import { ConfigManager } from "./config.js";
 import { DictationCleanupSchema, DictationTranslationSchema, DictationTextService } from "./dictationText.js";
 import { DictationPreview } from "./dictationPreview.js";
-import { CaptionTranslationService, hasXaiCaptionTextDisclosure } from "./captionTranslation.js";
 import { LiveNotesService, hasXaiLiveNotesDisclosure } from "./liveNotes.js";
 import { transcriptionFailureReason } from "./transcriptionErrors.js";
 import { carryOverRetiredConversationDisclosure, hasXaiDictationTextDisclosure } from "./dictationTextDisclosure.js";
@@ -375,13 +374,6 @@ async function startLockedServer(
     glossary: (text) => loadGlossaryContract(dbProxy.vocab, text),
   });
   const dictationPreview = new DictationPreview(dictationText);
-  const captionTranslation = new CaptionTranslationService({
-    config: configManager,
-    text: xaiText,
-    credentialSource: () => agentConnections.selectedXaiCredentialSource(),
-    hasDisclosure: () => hasXaiCaptionTextDisclosure(hostStore),
-    glossary: (text) => loadGlossaryContract(dbProxy.vocab, text),
-  });
   const liveNotes = new LiveNotesService({
     config: configManager,
     text: xaiText,
@@ -398,12 +390,6 @@ async function startLockedServer(
     stabilize: (text) => applyGlossaryContract(text, loadGlossaryContract(dbProxy.vocab)),
     transcribe: (audioPath, language) => recordingPipeline.transcribeOnDemand({ audioPath, language }),
     warm: async () => { await recordingPipeline.warmTranscription(); },
-    // ADR-011: captions are translated only through the explicit caption
-    // selection and disclosure; Hermes is an MCP client, not a translator.
-    translate: (sourceText, targetLanguage, context) => captionTranslation.translate(sourceText, targetLanguage, context),
-    translationAvailability: () => captionTranslation.availability(),
-    defaultTargetLanguage: () => configManager.read().transcription.dictation.target_language || "English",
-    defaultTranslationEnabled: false,
     allowedRoots: [runtimePaths.moviesDir],
   });
   const ctx: AppContext = {
@@ -544,11 +530,6 @@ async function startLockedServer(
     timeoutMs: z.number().int().min(100).max(35_000).optional(),
     dictationSessionId: z.string().min(1).max(64).optional(),
   });
-  const RealtimeOptionsSchema = z.object({
-    audioPath: z.string().min(1),
-    targetLanguage: z.enum(["English", "日本語", "한국어", "Français", "Español", "Deutsch", "繁體中文"]),
-    translationEnabled: z.boolean(),
-  });
   app.post("/api/recordings/realtime/start", async (c) => {
     if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
       return c.json({ ok: false, error: "unauthorized" }, 401);
@@ -588,18 +569,6 @@ async function startLockedServer(
       return c.json({ ok: false, error: "realtime_cancel_failed", detail: (error as Error).message }, 400);
     }
   });
-  app.post("/api/recordings/realtime/options", async (c) => {
-    if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {
-      return c.json({ ok: false, error: "unauthorized" }, 401);
-    }
-    try {
-      const parsed = RealtimeOptionsSchema.parse(await c.req.json());
-      return c.json({ ok: true, result: await realtimeTranscription.updateOptions(parsed) });
-    } catch (error) {
-      return c.json({ ok: false, error: "realtime_options_failed", detail: (error as Error).message }, 400);
-    }
-  });
-
   const AudioTranscriptionSchema = z.object({
     audioPath: z.string().min(1),
     language: z.enum(["zh", "en", "ja", "auto"]).optional(),

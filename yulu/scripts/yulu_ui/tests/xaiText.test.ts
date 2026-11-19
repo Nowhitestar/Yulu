@@ -49,7 +49,7 @@ describe("XaiTextClient.request", () => {
   it.each([
     ["dictation", "grok-4.6", true], ["dictation", "grok-4.5", true],
     ["dictation", "other-model", false], ["summary", "grok-4.6", false],
-    ["captions", "grok-4.6", true], ["captions", "grok-4.20-0309-non-reasoning", false],
+    ["live_notes", "grok-4.6", true], ["live_notes", "grok-4.20-0309-non-reasoning", false],
   ] as const)("uses low reasoning only for supported interactive models: %s %s", async (capability, model, low) => {
     const fetchFn = vi.fn<typeof fetch>(async () => response(completed("明天见", model)));
     const client = new XaiTextClient({ resolve: async () => ({ accessToken: "test", source: "oauth" }) } as never, fetchFn);
@@ -93,13 +93,13 @@ describe("XaiTextClient.request", () => {
     expect(fetchFn).toHaveBeenCalledOnce();
   });
 
-  it("accepts only completed caption translations and never retries an incomplete one", async () => {
+  it("accepts only completed live notes and never retries an incomplete one", async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => response({ status: "incomplete", model: "selected-model",
       output: [{ type: "message", content: [{ type: "output_text", text: "Partial" }] }],
     }));
     const client = new XaiTextClient({ resolve: async () => ({ accessToken: "test", source: "oauth" }) } as never, fetchFn);
-    await expect(client.request({ capability: "captions", model: "selected-model", timeoutMs: 8_000,
-      input: [{ role: "user", content: "Caption" }] })).rejects.toThrow("caption translation was incomplete");
+    await expect(client.request({ capability: "live_notes", model: "selected-model", timeoutMs: 8_000,
+      input: [{ role: "user", content: "Notes" }] })).rejects.toThrow("live notes were incomplete");
     expect(fetchFn).toHaveBeenCalledOnce();
   });
 

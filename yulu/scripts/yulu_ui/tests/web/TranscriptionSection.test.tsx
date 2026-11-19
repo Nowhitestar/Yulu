@@ -9,13 +9,6 @@ let recordingState = "idle";
 let localInstalled = false;
 let engine = "local";
 let sessionActive = false;
-let captionStatus: {
-  provider: "none" | "xai"; model: string; audioEngine: "local" | "xai";
-  credentialSource: "oauth" | "api-key" | null;
-  disclosure: { accepted: boolean; disclosureVersion: string }; active: boolean;
-} | undefined;
-const acceptCaptionDisclosure = vi.fn(async () => ({ accepted: true }));
-const invalidateCaptionStatus = vi.fn(async () => undefined);
 const installLocal = vi.fn();
 const uninstallLocal = vi.fn();
 const testLocal = vi.fn();
@@ -65,13 +58,8 @@ vi.mock("../../web/src/trpc.js", () => ({
         },
       }, error: null }) },
     },
-    captionTranslation: {
-      status: { useQuery: () => ({ data: captionStatus, isPending: false }) },
-      acceptDisclosure: { useMutation: () => ({ mutateAsync: acceptCaptionDisclosure, isPending: false }) },
-    },
     recording: { state: { useQuery: () => ({ data: { state: recordingState } }) } },
     useUtils: () => ({
-      captionTranslation: { status: { invalidate: invalidateCaptionStatus } },
       config: { get: { setData: vi.fn(), invalidate: vi.fn() } },
       localCaption: { status: { invalidate: vi.fn() } },
       providers: { status: { invalidate: vi.fn() } },
@@ -105,12 +93,6 @@ beforeEach(() => {
   localInstalled = false;
   engine = "local";
   sessionActive = false;
-  captionStatus = {
-    provider: "none", model: "grok-4.20-0309-non-reasoning", audioEngine: "local", credentialSource: null,
-    disclosure: { accepted: false, disclosureVersion: "xai-caption-text-v1" }, active: false,
-  };
-  acceptCaptionDisclosure.mockClear();
-  invalidateCaptionStatus.mockClear();
   installLocal.mockClear();
   uninstallLocal.mockClear();
   testLocal.mockClear();
@@ -199,49 +181,10 @@ describe("TranscriptionSection", () => {
     expect(screen.getByRole("link", { name: "Open AI services" })).toHaveAttribute("href", "/settings/connections?connection=direct-xai&capability=transcription#ai-connections");
     expect(screen.queryByText("需要在 Yulu 中连接 xAI")).toBeNull();
   });
-  it("keeps caption translation off and shows its own disclosure before sending caption text", async () => {
+  it("no longer offers live-caption translation (ADR-012)", () => {
     engine = "xai";
     mount("zh");
-    const user = userEvent.setup();
-    expect(screen.getByText(/字幕翻译已关闭/)).toBeInTheDocument();
-    await user.click(screen.getByRole("switch", { name: "使用 xAI 翻译字幕" }));
-    const disclosure = screen.getByRole("group", { name: /字幕文字数据路径说明 · xai-caption-text-v1/ });
-    expect(disclosure).toHaveTextContent("会议中其他人说的话");
-    expect(update).not.toHaveBeenCalled();
-    expect(acceptCaptionDisclosure).not.toHaveBeenCalled();
-
-    await user.click(within(disclosure).getByRole("button", { name: "确认并开启" }));
-    expect(acceptCaptionDisclosure).toHaveBeenCalledOnce();
-    expect(update).toHaveBeenCalledWith({ key: "transcription.captions.translation_provider", value: "xai" });
-    expect(invalidateCaptionStatus).toHaveBeenCalled();
-  });
-
-  it("says caption translation needs the xAI audio engine while local audio is selected", () => {
-    captionStatus = { ...captionStatus!, provider: "xai", audioEngine: "xai",
-      disclosure: { accepted: true, disclosureVersion: "xai-caption-text-v1" }, credentialSource: "oauth" };
-    mount("zh");
-    // The live config engine wins over a stale status answer.
-    expect(screen.getByText(/字幕翻译仅在使用 xAI 转写引擎时运行/)).toBeInTheDocument();
-  });
-
-  it.each([
-    [{ disclosure: { accepted: false, disclosureVersion: "xai-caption-text-v1" }, credentialSource: "oauth" as const }, /请先确认字幕文字如何发送给 xAI/],
-    [{ disclosure: { accepted: true, disclosureVersion: "xai-caption-text-v1" }, credentialSource: null }, /请先在「设置 › 连接」的 AI 服务中连接 xAI/],
-  ])("explains what caption translation is waiting for: %o", (change, message) => {
-    engine = "xai";
-    captionStatus = { ...captionStatus!, provider: "xai", audioEngine: "xai", ...change };
-    mount("zh");
-    expect(screen.getByText(message)).toBeInTheDocument();
-  });
-
-  it("turns caption translation off without asking again", async () => {
-    engine = "xai";
-    captionStatus = { ...captionStatus!, provider: "xai", audioEngine: "xai", credentialSource: "oauth",
-      disclosure: { accepted: true, disclosureVersion: "xai-caption-text-v1" }, active: true };
-    mount("zh");
-    expect(screen.queryByText(/字幕翻译(已关闭|仅在|尚未生效)/)).toBeNull();
-    await userEvent.setup().click(screen.getByRole("switch", { name: "使用 xAI 翻译字幕" }));
-    expect(update).toHaveBeenCalledWith({ key: "transcription.captions.translation_provider", value: "none" });
-    expect(acceptCaptionDisclosure).not.toHaveBeenCalled();
+    expect(screen.queryByText(/字幕翻译/)).toBeNull();
+    expect(screen.queryByRole("switch", { name: "使用 xAI 翻译字幕" })).toBeNull();
   });
 });

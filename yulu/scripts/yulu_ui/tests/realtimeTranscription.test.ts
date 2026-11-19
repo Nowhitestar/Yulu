@@ -8,8 +8,6 @@ import { DictationPreview } from "../src/dictationPreview.js";
 import { DictationTextService } from "../src/dictationText.js";
 import { defaultYuluConfig } from "../src/config.js";
 import { buildGlossaryContract } from "../src/glossaryContract.js";
-import { CaptionTranslationUnavailableError } from "../src/captionTranslation.js";
-import type { CaptionTranslationUnavailableReason } from "../src/captionPreferences.js";
 import {
   RealtimeTranscriptionCoordinator,
   assessRealtimeTranscript,
@@ -773,342 +771,31 @@ describe("RealtimeTranscriptionCoordinator", () => {
     await coordinator.stop(audioPath);
   });
 
-  it("publishes source and bounded translation fields and updates the target language", async () => {
-    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-translation-"));
+  it("publishes the source caption and nothing translated", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-source-"));
     roots.push(root);
-    const audioPath = join(root, "双语会议_20260714_180000.wav");
+    const audioPath = join(root, "会议_20260714_180000.wav");
     writeStereoWav(audioPath, 0.05);
     const pubsub = new PubSub<AppChannels>();
     const events: AppChannels["realtime-transcript"][] = [];
     pubsub.subscribe("realtime-transcript", (event) => events.push(event));
-    const translate = vi.fn(async (text: string, target: string) => `${target}:${text}`);
     const coordinator = new RealtimeTranscriptionCoordinator({
       pubsub,
       transcribe: vi.fn(async (_path: string, language: "zh" | "en" | "ja" | "auto") => ({
         transcript: "我们确认下一步", provider: "test", chunks: 1, language,
       })),
-      translate,
-      defaultTargetLanguage: () => "English",
-      defaultTranslationEnabled: true,
       minSegmentMs: 1,
       chunkSec: 0.01,
       pollMs: 60_000,
     });
 
-    await coordinator.start({ audioPath, title: "双语会议", language: "zh" });
-    await vi.waitFor(() => expect(events.some((event) => event.translationStatus === "ready")).toBe(true));
-    expect(events.at(-1)).toMatchObject({
-      sourceText: "我们确认下一步",
-      sourceLanguage: "zh",
-      targetLanguage: "English",
-      translationText: "English:我们确认下一步",
-      translationStatus: "ready",
-    });
-    expect(events.at(-1)?.sequence).toBeGreaterThan(0);
-
-    const translationCalls = translate.mock.calls.length;
-    const unchanged = await coordinator.updateOptions({
-      audioPath,
-      targetLanguage: "English",
-      translationEnabled: true,
-    });
-    expect(unchanged).toMatchObject({
-      translationText: "English:我们确认下一步",
-      translationStatus: "ready",
-    });
-    expect(translate).toHaveBeenCalledTimes(translationCalls);
-
-    await coordinator.updateOptions({ audioPath, targetLanguage: "日本語", translationEnabled: true });
-    await vi.waitFor(() => expect(events.at(-1)?.translationText).toBe("日本語:我们确认下一步"));
-    expect(translate).toHaveBeenLastCalledWith("我们确认下一步", "日本語", []);
-    await coordinator.updateOptions({ audioPath, targetLanguage: "日本語", translationEnabled: false });
-    expect(events.at(-1)).toMatchObject({ translationText: "", translationStatus: "disabled" });
-    await coordinator.stop(audioPath);
-  });
-
-  it("keeps the previous translation visible while the next caption is translating", async () => {
-    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-translation-pending-"));
-    roots.push(root);
-    const audioPath = join(root, "连续翻译_20260722_120000.wav");
-    writeStereoWav(audioPath, 0.05);
-    const pubsub = new PubSub<AppChannels>();
-    const events: AppChannels["realtime-transcript"][] = [];
-    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
-    let resolveNext: ((value: string) => void) | undefined;
-    const nextTranslation = new Promise<string>((resolve) => { resolveNext = resolve; });
-    const translate = vi.fn()
-      .mockResolvedValueOnce("First translation")
-      .mockReturnValueOnce(nextTranslation);
-    const engine: StreamingCaptionEngine = {
-      provider: "test-streaming",
-      warm: vi.fn(async () => {}),
-      start: vi.fn(async () => {}),
-      feed: vi.fn(async () => ({
-        updates: {
-          mic: { partial: "", stable: [{ text: "第一句", endMs: 50 }], audioMs: 50 },
-        },
-      })),
-      finish: vi.fn(async () => ({ updates: {} })),
-      abort: vi.fn(async () => {}),
-      close: vi.fn(async () => {}),
-    };
-    const coordinator = new RealtimeTranscriptionCoordinator({
-      pubsub,
-      streaming: engine,
-      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
-      translate,
-      defaultTranslationEnabled: true,
-      pollMs: 60_000,
-    });
-
-    await coordinator.start({ audioPath, title: "连续翻译", language: "zh" });
-    await vi.waitFor(() => expect(events.at(-1)?.translationText).toBe("First translation"));
-    const internal = coordinator as unknown as {
-      active: object;
-      applyStreamingUpdate(session: object, response: StreamingCaptionUpdate): void;
-    };
-    internal.applyStreamingUpdate(internal.active, {
-      updates: {
-        mic: { partial: "", stable: [{ text: "第二句", endMs: 100 }], audioMs: 100 },
-      },
-    });
-
-    expect(events.at(-1)).toMatchObject({
-      sourceText: "第二句",
-      translationText: "First translation",
-      translationStatus: "pending",
-    });
-    resolveNext?.("Second translation");
-    await vi.waitFor(() => expect(events.at(-1)?.translationText).toBe("Second translation"));
-    await coordinator.stop(audioPath);
-  });
-
-  it("keeps translation off until the user explicitly enables it", async () => {
-    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-source-only-"));
-    roots.push(root);
-    const audioPath = join(root, "仅原文_20260715_180000.wav");
-    writeStereoWav(audioPath, 0.05);
-    const pubsub = new PubSub<AppChannels>();
-    const events: AppChannels["realtime-transcript"][] = [];
-    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
-    const translate = vi.fn(async () => "must not run");
-    const coordinator = new RealtimeTranscriptionCoordinator({
-      pubsub,
-      transcribe: vi.fn(async () => ({ transcript: "默认仅显示原文", provider: "test", chunks: 1, language: "zh" as const })),
-      translate,
-      minSegmentMs: 1,
-      chunkSec: 0.01,
-      pollMs: 60_000,
-    });
-
-    await coordinator.start({ audioPath, title: "仅原文", language: "zh" });
-    await coordinator.stop(audioPath);
-
-    expect(translate).not.toHaveBeenCalled();
-    expect(events.at(-1)).toMatchObject({
-      sourceText: "默认仅显示原文",
-      translationText: "",
-      translationStatus: "disabled",
-    });
-  });
-
-  it("publishes translation failure without losing the source caption", async () => {
-    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-translation-failure-"));
-    roots.push(root);
-    const audioPath = join(root, "翻译失败_20260715_181000.wav");
-    writeStereoWav(audioPath, 0.05);
-    const pubsub = new PubSub<AppChannels>();
-    const events: AppChannels["realtime-transcript"][] = [];
-    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
-    const coordinator = new RealtimeTranscriptionCoordinator({
-      pubsub,
-      transcribe: vi.fn(async () => ({ transcript: "原文仍然可用", provider: "test", chunks: 1, language: "zh" as const })),
-      translate: vi.fn(async () => { throw new Error("Hermes unavailable"); }),
-      defaultTranslationEnabled: true,
-      minSegmentMs: 1,
-      chunkSec: 0.01,
-      pollMs: 60_000,
-    });
-
-    await coordinator.start({ audioPath, title: "翻译失败", language: "zh" });
-    await vi.waitFor(() => expect(events.at(-1)?.translationStatus).toBe("failed"));
-
-    expect(events.at(-1)).toMatchObject({ sourceText: "原文仍然可用", translationText: "" });
-    await coordinator.stop(audioPath);
-  });
-
-  function streamingCaptionFixture(name: string) {
-    const root = mkdtempSync(join(tmpdir(), `yulu-realtime-${name}-`));
-    roots.push(root);
-    const audioPath = join(root, `${name}_20261119_120000.wav`);
-    writeStereoWav(audioPath, 0.05);
-    const pubsub = new PubSub<AppChannels>();
-    const events: AppChannels["realtime-transcript"][] = [];
-    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
-    const engine: StreamingCaptionEngine = {
-      provider: "test-streaming",
-      warm: vi.fn(async () => {}),
-      start: vi.fn(async () => {}),
-      feed: vi.fn(async () => ({
-        updates: { mic: { partial: "", stable: [{ text: "第一句", endMs: 50 }], audioMs: 50 } },
-      })),
-      finish: vi.fn(async () => ({ updates: {} })),
-      abort: vi.fn(async () => {}),
-      close: vi.fn(async () => {}),
-    };
-    return { audioPath, pubsub, events, engine };
-  }
-  function pushCaption(coordinator: RealtimeTranscriptionCoordinator, text: string, endMs: number, partial = "") {
-    const internal = coordinator as unknown as {
-      active: object;
-      applyStreamingUpdate(session: object, response: StreamingCaptionUpdate): void;
-    };
-    internal.applyStreamingUpdate(internal.active, {
-      updates: { mic: { partial, stable: text ? [{ text, endMs }] : [], audioMs: endMs } },
-    });
-  }
-
-  it("says why a requested translation is unavailable, sends nothing, and keeps source captions", async () => {
-    const { audioPath, pubsub, events, engine } = streamingCaptionFixture("translation-unavailable");
-    let readiness: { available: true } | { available: false; reason: CaptionTranslationUnavailableReason } =
-      { available: false, reason: "needs_disclosure" };
-    const translationAvailability = vi.fn(() => readiness);
-    const translate = vi.fn(async (text: string, target: string) => `${target}:${text}`);
-    const coordinator = new RealtimeTranscriptionCoordinator({
-      pubsub, streaming: engine, translate, translationAvailability, pollMs: 60_000,
-      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
-    });
-
-    await coordinator.start({ audioPath, title: "translation-unavailable", language: "zh" });
-    // Source-only captions never consult availability.
-    expect(translationAvailability).not.toHaveBeenCalled();
-    expect(events.at(-1)).toMatchObject({ translationStatus: "disabled", translationUnavailableReason: null });
-
-    const requested = await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: true });
-    expect(requested).toMatchObject({
-      sourceText: "第一句", translationText: "", translationStatus: "unavailable", translationUnavailableReason: "needs_disclosure",
-    });
-    expect(events.at(-1)).toMatchObject({ translationStatus: "unavailable", translationUnavailableReason: "needs_disclosure" });
-
-    // Partial and stable source captions keep flowing while translation is unavailable.
-    pushCaption(coordinator, "", 80, "正在说");
-    expect(events.at(-1)).toMatchObject({ text: "正在说", translationStatus: "unavailable" });
-    pushCaption(coordinator, "第二句", 100);
-    expect(events.at(-1)).toMatchObject({
-      sourceText: "第二句", translationStatus: "unavailable", translationUnavailableReason: "needs_disclosure",
-    });
-    expect(translate).not.toHaveBeenCalled();
-
-    // Accepting in Settings mid-recording takes effect at the next caption.
-    readiness = { available: true };
-    pushCaption(coordinator, "第三句", 150);
-    await vi.waitFor(() => expect(events.at(-1)).toMatchObject({
-      translationText: "English:第三句", translationStatus: "ready", translationUnavailableReason: null,
-    }));
-    expect(translate).toHaveBeenCalledOnce();
-
-    // Turning the selection off stops sending at the next caption, with its own reason.
-    readiness = { available: false, reason: "provider_off" };
-    pushCaption(coordinator, "第四句", 200);
-    expect(events.at(-1)).toMatchObject({
-      sourceText: "第四句", translationText: "", translationStatus: "unavailable", translationUnavailableReason: "provider_off",
-    });
-    expect(translate).toHaveBeenCalledOnce();
-
-    await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: false });
-    expect(events.at(-1)).toMatchObject({ translationStatus: "disabled", translationUnavailableReason: null });
-    await coordinator.stop(audioPath);
-    expect(translate).toHaveBeenCalledOnce();
-  });
-
-  it("re-reads availability when the overlay mode is chosen again", async () => {
-    const { audioPath, pubsub, events, engine } = streamingCaptionFixture("translation-reselect");
-    let readiness: { available: true } | { available: false; reason: CaptionTranslationUnavailableReason } =
-      { available: false, reason: "needs_xai_audio" };
-    const translate = vi.fn(async (text: string) => `EN:${text}`);
-    const coordinator = new RealtimeTranscriptionCoordinator({
-      pubsub, streaming: engine, translate, translationAvailability: () => readiness, pollMs: 60_000,
-      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
-    });
-    await coordinator.start({ audioPath, title: "translation-reselect", language: "zh" });
-    await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: true });
-    expect(events.at(-1)).toMatchObject({ translationStatus: "unavailable", translationUnavailableReason: "needs_xai_audio" });
-
-    readiness = { available: true };
-    await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: true });
-    await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ translationText: "EN:第一句", translationStatus: "ready" }));
-    expect(translate).toHaveBeenCalledExactlyOnceWith("第一句", "English", []);
-    await coordinator.stop(audioPath);
-  });
-
-  it("reports unavailable, not failed, when the selection changes after a caption was queued", async () => {
-    const { audioPath, pubsub, events, engine } = streamingCaptionFixture("translation-revoked");
-    const translate = vi.fn(async () => { throw new CaptionTranslationUnavailableError("needs_connection"); });
-    const coordinator = new RealtimeTranscriptionCoordinator({
-      pubsub, streaming: engine, translate, translationAvailability: () => ({ available: true }), pollMs: 60_000,
-      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
-    });
-    await coordinator.start({ audioPath, title: "translation-revoked", language: "zh" });
-    await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: true });
-    await vi.waitFor(() => expect(events.at(-1)).toMatchObject({
-      sourceText: "第一句", translationStatus: "unavailable", translationUnavailableReason: "needs_connection",
-    }));
-    expect(events.some((event) => event.translationStatus === "failed")).toBe(false);
-    await coordinator.stop(audioPath);
-  });
-
-  it("treats an availability check that throws as off and keeps captions running", async () => {
-    const { audioPath, pubsub, events, engine } = streamingCaptionFixture("translation-check-throws");
-    const translate = vi.fn(async () => "must not run");
-    const coordinator = new RealtimeTranscriptionCoordinator({
-      pubsub, streaming: engine, translate, pollMs: 60_000,
-      translationAvailability: () => { throw new Error("config unreadable"); },
-      transcribe: vi.fn(async () => ({ transcript: "unused", provider: "test", chunks: 1, language: "zh" as const })),
-    });
-    await coordinator.start({ audioPath, title: "translation-check-throws", language: "zh" });
-    await coordinator.updateOptions({ audioPath, targetLanguage: "English", translationEnabled: true });
-    pushCaption(coordinator, "第二句", 100);
-    expect(events.at(-1)).toMatchObject({
-      status: "transcribing", sourceText: "第二句", translationStatus: "unavailable", translationUnavailableReason: "provider_off",
-    });
-    expect(translate).not.toHaveBeenCalled();
-    await coordinator.stop(audioPath);
-  });
-
-  it("discards stale translations and coalesces rapid target changes", async () => {
-    const root = mkdtempSync(join(tmpdir(), "yulu-realtime-translation-stale-"));
-    roots.push(root);
-    const audioPath = join(root, "快速切换_20260715_182000.wav");
-    writeStereoWav(audioPath, 0.05);
-    const pubsub = new PubSub<AppChannels>();
-    const events: AppChannels["realtime-transcript"][] = [];
-    pubsub.subscribe("realtime-transcript", (event) => events.push(event));
-    let resolveFirst: ((value: string) => void) | undefined;
-    const first = new Promise<string>((resolve) => { resolveFirst = resolve; });
-    const translate = vi.fn(async (_text: string, target: string) => {
-      if (translate.mock.calls.length === 1) return first;
-      return `${target}:最新翻译`;
-    });
-    const coordinator = new RealtimeTranscriptionCoordinator({
-      pubsub,
-      transcribe: vi.fn(async () => ({ transcript: "快速切换目标语言", provider: "test", chunks: 1, language: "zh" as const })),
-      translate,
-      defaultTranslationEnabled: true,
-      minSegmentMs: 1,
-      chunkSec: 0.01,
-      pollMs: 60_000,
-    });
-
-    await coordinator.start({ audioPath, title: "快速切换", language: "zh" });
-    await vi.waitFor(() => expect(translate).toHaveBeenCalledTimes(1));
-    await coordinator.updateOptions({ audioPath, targetLanguage: "日本語", translationEnabled: true });
-    await coordinator.updateOptions({ audioPath, targetLanguage: "한국어", translationEnabled: true });
-    resolveFirst?.("English:过期翻译");
-    await vi.waitFor(() => expect(events.at(-1)?.translationText).toBe("한국어:最新翻译"));
-
-    expect(translate).toHaveBeenCalledTimes(2);
-    expect(translate).toHaveBeenLastCalledWith("快速切换目标语言", "한국어", []);
-    expect(events.some((event) => event.translationText === "English:过期翻译")).toBe(false);
+    await coordinator.start({ audioPath, title: "会议", language: "zh" });
+    await vi.waitFor(() => expect(events.some((event) => event.sourceText === "我们确认下一步")).toBe(true));
+    const event = events.find((item) => item.sourceText === "我们确认下一步")!;
+    expect(event).toMatchObject({ sourceLanguage: "zh", stableText: "我们确认下一步" });
+    expect(event.sequence).toBeGreaterThan(0);
+    // Live-caption translation was retired for live notes (ADR-012).
+    expect(Object.keys(event).filter((key) => /translat|targetLanguage/i.test(key))).toEqual([]);
     await coordinator.stop(audioPath);
   });
 });

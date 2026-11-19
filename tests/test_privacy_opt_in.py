@@ -25,8 +25,9 @@ def test_empty_config_reports_local_yulu_audio_defaults():
     assert "conversation" not in report
     assert report["dictation_text"]["provider"] == "none"
     assert report["dictation_text"]["cloud_text_opt_in"] is False
-    assert report["caption_translation"]["provider"] == "none"
-    assert report["caption_translation"]["cloud_text_opt_in"] is False
+    assert report["live_notes"]["provider"] == "none"
+    assert report["live_notes"]["cloud_text_opt_in"] is False
+    assert "caption_translation" not in report
     assert report["summary_delivery"]["auto_channel"] == "file"
     assert report["summary_delivery"]["external_opt_in_channels"] == []
 
@@ -90,23 +91,28 @@ def test_dictation_text_reports_only_the_explicit_xai_switch():
     assert retired["dictation_text"]["cloud_text_opt_in"] is False
 
 
-def test_caption_translation_reports_only_its_own_explicit_switch():
+def test_live_notes_report_only_their_own_explicit_switch():
     mod = load_privacy()
 
     selected = mod.privacy_opt_in_report({
-        "transcription": {"engine": "xai", "captions": {"translation_provider": "xai"}},
+        "transcription": {"engine": "local", "live_notes": {"provider": "xai"}},
     })
     dictation_only = mod.privacy_opt_in_report({
         "transcription": {"engine": "xai", "dictation": {"text_provider": "xai"}},
     })
+    retired_captions = mod.privacy_opt_in_report({
+        "transcription": {"engine": "xai", "captions": {"translation_provider": "xai"}},
+    })
     unknown = mod.privacy_opt_in_report({
-        "transcription": {"engine": "xai", "captions": {"translation_provider": "hermes"}},
+        "transcription": {"engine": "xai", "live_notes": {"provider": "hermes"}},
     })
 
-    assert selected["caption_translation"]["provider"] == "xai"
-    assert selected["caption_translation"]["cloud_text_opt_in"] is True
-    assert selected["caption_translation"]["requires_xai_audio_engine"] is True
+    assert selected["live_notes"]["provider"] == "xai"
+    assert selected["live_notes"]["cloud_text_opt_in"] is True
+    assert selected["live_notes"]["requires_xai_audio_engine"] is False
+    assert selected["transcription"]["cloud_audio_opt_in"] is False
     assert selected["dictation_text"]["cloud_text_opt_in"] is False
-    assert dictation_only["caption_translation"]["provider"] == "none"
-    assert dictation_only["caption_translation"]["cloud_text_opt_in"] is False
-    assert unknown["caption_translation"]["provider"] == "none"
+    assert dictation_only["live_notes"]["cloud_text_opt_in"] is False
+    assert retired_captions["live_notes"]["cloud_text_opt_in"] is False
+    assert "caption_translation" not in retired_captions
+    assert unknown["live_notes"]["provider"] == "none"

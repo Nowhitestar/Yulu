@@ -1,4 +1,3 @@
-import type { CaptionTranslationUnavailableReason } from "./captionPreferences.js";
 import type { LiveNotesSnapshot } from "./liveNotes.js";
 
 export type Listener<T> = (msg: T) => void;
@@ -60,11 +59,6 @@ export type AppChannels = {
     sequence?: number;
     sourceText?: string;
     sourceLanguage?: "zh" | "en" | "ja" | "auto";
-    translationText?: string;
-    targetLanguage?: string;
-    translationStatus?: "disabled" | "pending" | "ready" | "failed" | "unavailable";
-    /** Why a requested caption translation sent nothing (ADR-011). */
-    translationUnavailableReason?: CaptionTranslationUnavailableReason | null;
     startedAt?: string;
     emittedAt?: string;
     reason?: string | null;

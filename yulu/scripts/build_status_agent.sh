@@ -22,7 +22,7 @@ cd "$SCRIPT_DIR"
 swiftc "${SWIFT_TARGET[@]}" -o "$BIN" -parse-as-library status_agent.swift \
   native_notifications.swift -framework Cocoa -framework Carbon -framework UserNotifications
 swiftc "${SWIFT_TARGET[@]}" -o "$RECORDER_BIN" recorder_status.swift \
-  -framework Cocoa
+  -framework Cocoa -framework WebKit
 swiftc "${SWIFT_TARGET[@]}" -o "$MEETING_PROMPT_BIN" meeting_prompt.swift \
   -framework Cocoa
 

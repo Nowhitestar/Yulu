@@ -247,6 +247,29 @@ describe("ConfigManager", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it("archives the retired caption translation selection and keeps live notes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_caption_translation_migration_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({
+      transcription: {
+        engine: "xai",
+        captions: { translation_provider: "xai", translation_model: "grok-4.20-0309-non-reasoning" },
+        live_notes: { provider: "xai" },
+      },
+    }));
+    try {
+      const migration = migrateLegacyTranscriptionConfig(path);
+      expect(migration.changed).toBe(true);
+      expect(statSync(migration.archivePath!).mode & 0o777).toBe(0o600);
+      const archive = JSON.parse(readFileSync(migration.archivePath!, "utf8"));
+      expect(archive.transcription.captions).toEqual({
+        translation_provider: "xai", translation_model: "grok-4.20-0309-non-reasoning",
+      });
+      const active = JSON.parse(readFileSync(path, "utf8"));
+      expect(active.transcription).toEqual({ engine: "xai", live_notes: { provider: "xai" } });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("audio capture parameters apply to the next recording without restarting the daemon", () => {
     const { mgr, cleanup } = makeCfg();
     try {
@@ -381,6 +404,8 @@ describe("registry-driven classify + per-field validation", () => {
       expect(() => mgr.update("transcription.dictation.engine", "whisper")).toThrow(/explicit audio engine/);
       expect(() => mgr.update("realtime_captions.strategy", "agent-only")).toThrow(/explicit audio engine/);
       expect(() => mgr.update("agent_pipeline.hermes_serve_port", 8000)).toThrow(/explicit audio engine/);
+      expect(() => mgr.update("transcription.captions.translation_provider", "xai")).toThrow(/live notes replaced caption translation/);
+      expect(() => mgr.update("transcription.captions", { translation_provider: "xai" })).toThrow(/live notes replaced caption translation/);
     } finally { cleanup(); }
   });
   it("meeting_detection.enabled 改完 restart detector;interval_sec<1 被拒(P2-3)", () => {

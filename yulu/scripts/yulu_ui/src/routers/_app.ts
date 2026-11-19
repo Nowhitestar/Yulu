@@ -21,7 +21,6 @@ import { agentConnectionsRouter } from "./agentConnections.js";
 import { sharingRouter } from "./sharing.js";
 import { onboardingRouter } from "./onboarding.js";
 import { dictationTextRouter } from "./dictationText.js";
-import { captionTranslationRouter } from "./captionTranslation.js";
 import { liveNotesRouter } from "./liveNotes.js";
 import { permissionsRouter } from "./permissions.js";
 import { mcpAgentsRouter } from "./mcpAgents.js";
@@ -49,7 +48,6 @@ export const appRouter = router({
   sharing: sharingRouter,
   onboarding: onboardingRouter,
   dictationText: dictationTextRouter,
-  captionTranslation: captionTranslationRouter,
   liveNotes: liveNotesRouter,
   permissions: permissionsRouter,
   mcpAgents: mcpAgentsRouter,
