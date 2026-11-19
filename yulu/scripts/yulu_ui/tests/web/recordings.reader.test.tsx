@@ -132,6 +132,43 @@ describe("RecordingReader", () => {
     expect(acknowledgeGuidedCompletionMutate).toHaveBeenCalledWith({ taskId: "guided-task-131" });
   });
 
+  it("puts live notes between the summary and the transcript, and copies them with the attendee's notes", async () => {
+    getMock.mockReturnValue({ data: {
+      ...baseData,
+      transcriptSource: "realtime",
+      liveNotes: {
+        markdown: "## Decisions\n\n- Ship incremental sync",
+        myNotes: [{ at: new Date(2026, 0, 2, 9, 41).toISOString(), text: "Budget is 200k" }],
+        language: "en",
+      },
+    }, isPending: false });
+    renderAt(baseData.stem, "en");
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Summary", "Notes", "Transcript"]);
+    fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
+    expect(screen.getByTestId("markdown")).toHaveTextContent("Ship incremental sync");
+    expect(screen.getByRole("heading", { name: "My notes" })).toBeInTheDocument();
+    expect(screen.getByText("Budget is 200k")).toBeInTheDocument();
+    expect(screen.getByText("Written live during the meeting")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy notes Markdown" }));
+    await waitFor(() => expect(clipboardWriteText).toHaveBeenCalledWith(
+      "## Decisions\n\n- Ship incremental sync\n\n## My notes\n\n- 09:41 Budget is 200k",
+    ));
+
+    fireEvent.click(screen.getByRole("tab", { name: "Transcript" }));
+    expect(screen.getByText(/From the live transcription during the meeting/)).toBeInTheDocument();
+  });
+
+  it("shows no notes tab when a recording has no live notes", () => {
+    getMock.mockReturnValue({ data: { ...baseData, liveNotes: null, transcriptSource: "full" }, isPending: false });
+    renderAt(baseData.stem, "en", "?tab=notes");
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Summary", "Transcript"]);
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "Transcript" }));
+    expect(screen.queryByText(/From the live transcription/)).toBeNull();
+  });
+
   it("shows the realtime transcript while the final transcript is not ready", () => {
     getMock.mockReturnValue({ data: { ...baseData, transcript: null, summary: null, realtime: "实时中文内容", hasRealtime: true }, isPending: false });
     renderAt("TeamSync_20260102_090000");

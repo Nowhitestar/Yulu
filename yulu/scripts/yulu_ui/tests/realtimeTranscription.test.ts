@@ -75,6 +75,34 @@ describe("RealtimeTranscriptionCoordinator", () => {
     expect(vi.mocked(engine.feed).mock.calls[0]![0].system).toBeUndefined();
     expect(await coordinator.stop(audioPath)).toMatchObject({ stableText: "麦克风原话", trusted: true });
   });
+  it("gives a meeting's live transcript to live notes, and never dictation's", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-live-notes-hook-")); roots.push(root);
+    const engine = (): StreamingCaptionEngine => ({
+      provider: "test", warm: vi.fn(async () => {}), start: vi.fn(async () => {}),
+      feed: vi.fn(async () => ({ updates: { system: { partial: "", stable: [{ text: "我们决定改成增量推送。", endMs: 100 }], audioMs: 100 } } })),
+      finish: vi.fn(async () => ({ updates: {} })), abort: vi.fn(async () => {}), close: vi.fn(async () => {}),
+    });
+    const liveNotes = { started: vi.fn(), transcript: vi.fn(), finished: vi.fn(async () => {}) };
+
+    const dictationPath = join(root, "voice.wav"); writeStereoWav(dictationPath, 0.1);
+    const dictation = new RealtimeTranscriptionCoordinator({ pubsub: new PubSub<AppChannels>(), streaming: engine(),
+      transcribe: vi.fn(), pollMs: 60_000, liveNotes });
+    await dictation.start({ audioPath: dictationPath, title: "Dictation", language: "zh", dictation: true });
+    await dictation.stop(dictationPath);
+    expect(liveNotes.started).not.toHaveBeenCalled();
+    expect(liveNotes.transcript).not.toHaveBeenCalled();
+    expect(liveNotes.finished).not.toHaveBeenCalled();
+
+    const meetingPath = join(root, "Review_20261119_093000.wav"); writeStereoWav(meetingPath, 0.1);
+    const meeting = new RealtimeTranscriptionCoordinator({ pubsub: new PubSub<AppChannels>(), streaming: engine(),
+      transcribe: vi.fn(), pollMs: 60_000, liveNotes });
+    await meeting.start({ audioPath: meetingPath, title: "Review", language: "zh" });
+    expect(liveNotes.started).toHaveBeenCalledWith(expect.objectContaining({ stem: "Review_20261119_093000", title: "Review" }));
+    expect(liveNotes.transcript).toHaveBeenCalledWith(expect.objectContaining({ stableText: "我们决定改成增量推送。" }));
+    await meeting.stop(meetingPath);
+    expect(liveNotes.finished).toHaveBeenCalledWith(expect.objectContaining({ stableText: "我们决定改成增量推送。" }));
+  });
+
   it.each(["嗯，呃……", "呢", "uh, um", "嗯"])("recognizes isolated hesitation: %s", (text) => {
     expect(isCaptionHesitation(text)).toBe(true);
   });

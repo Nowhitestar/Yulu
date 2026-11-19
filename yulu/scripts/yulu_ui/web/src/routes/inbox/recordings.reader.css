@@ -80,3 +80,6 @@
   .speaker-row { grid-template-columns: 8px minmax(0, 1fr) auto; }
   .speaker-row-merge { grid-column: 2 / -1; }
 }
+
+/* Where the transcript came from, said once and quietly. */
+.reader-provenance { margin: 18px 0 0; color: var(--fg-3); font-size: 12.5px; }

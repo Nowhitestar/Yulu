@@ -1,3 +1,4 @@
+import { readSavedLiveNotes } from "../liveNotes.js";
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { z } from "zod";
@@ -639,14 +640,24 @@ export const recordingsRouter = router({
       // a distinct view when it actually differs — otherwise it's a confusing
       // duplicate.
       const rawDiffers = raw !== null && transcript !== null && raw.trim() !== transcript.trim();
+      // Which pass wrote the committed transcript: the live one or a full one.
+      const transcriptRecord = agentTask
+        ? ctx.host?.listArtifacts(agentTask.id).find((artifact) => artifact.kind === "transcript")
+        : undefined;
+      const transcriptSource = transcriptRecord?.provenance.transcriptSource === "realtime"
+        ? "realtime" as const
+        : transcriptRecord?.provenance.transcriptSource === "full" ? "full" as const : null;
+      const liveNotes = readSavedLiveNotes(wav);
       return {
         stem: input.stem, title, tags, recordedAt,
         wavPath: wav, audioFile, audioMtimeMs: audioStat.mtimeMs, sizeBytes: stat.size, mtimeMs: stat.mtimeMs,
         transcript,
+        transcriptSource,
         raw,
         rawDiffers,
         summary,
         summaryStale,
+        liveNotes: liveNotes.markdown || liveNotes.myNotes.length ? liveNotes : null,
         recordingShare: ctx.sharing && summary && !summaryStale
           ? ctx.sharing.recordingShareView({ recordingStem: input.stem, summary })
           : null,

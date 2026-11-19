@@ -1,0 +1,5 @@
+/* A diagram sits in the reading column like a figure: no frame of its own. */
+.mermaid-diagram { margin: 14px 0; overflow-x: auto; }
+.mermaid-diagram svg { display: block; max-width: 100%; height: auto; }
+.mermaid-diagram--loading { min-height: 120px; border-radius: var(--r-md); background: var(--fill); }
+.mermaid-source { margin: 14px 0; padding: 12px 14px; border-radius: var(--r-md); background: var(--fill); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -1,6 +1,23 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { MermaidDiagram } from "./MermaidDiagram.js";
 import "./MarkdownView.css";
+
+interface HastNode {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: { className?: unknown };
+  children?: HastNode[];
+}
+
+/** The source of a ```mermaid block, or null for any other <pre>. */
+function mermaidSource(pre: HastNode | undefined): string | null {
+  const code = pre?.children?.find((child) => child.type === "element" && child.tagName === "code");
+  const classes = code?.properties?.className;
+  if (!Array.isArray(classes) || !classes.includes("language-mermaid")) return null;
+  return (code?.children ?? []).map((child) => (child.type === "text" ? child.value ?? "" : "")).join("");
+}
 
 export interface MarkdownViewProps {
   text: string;
@@ -17,6 +34,9 @@ export interface MarkdownViewProps {
  *
  * Links are forced to open in a new tab with `rel="noopener noreferrer"` so a
  * malicious summary can't reach back into the opener.
+ *
+ * A ```mermaid block becomes a diagram drawn locally in strict mode; anything
+ * else stays a code block.
  */
 export function MarkdownView({ text }: MarkdownViewProps) {
   return (
@@ -29,6 +49,10 @@ export function MarkdownView({ text }: MarkdownViewProps) {
               {children}
             </a>
           ),
+          pre: ({ children, node }) => {
+            const source = mermaidSource(node as HastNode | undefined);
+            return source !== null ? <MermaidDiagram source={source} /> : <pre>{children}</pre>;
+          },
         }}
       >
         {text}

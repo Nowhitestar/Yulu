@@ -1,3 +1,4 @@
+import { withAttendeeNotes } from "./liveNotes.js";
 import { basename } from "node:path";
 import type { ConfigManager } from "./config.js";
 import type { HostStore } from "./hostStore.js";
@@ -1401,6 +1402,7 @@ export class AgentConnectionCenter {
     this.host.clearSummaryDataPathDisclosure("xai");
     this.host.clearDictationTextDisclosure("xai");
     this.host.clearCaptionTranslationDisclosure("xai");
+    this.host.clearLiveNotesDisclosure("xai");
     this.host.clearAgentConnectionDisclosures(DIRECT_XAI_ID);
     this.host.deleteAgentConnectionRecord(DIRECT_XAI_ID);
     return await this.view();
@@ -1523,12 +1525,12 @@ export class AgentConnectionCenter {
               result = codexRecord
                 ? await this.requireCodexAdapter(String(codexRecord.settings.executablePath ?? "")).summarize({
                     model: task.summaryModel,
-                    instructions: task.instructions,
+                    instructions: withAttendeeNotes(task.instructions, input.attendeeNotes ?? []),
                     transcript: input.committedTranscript,
                   })
                 : await this.requireClaudeAdapter(String(claudeRecord!.settings.executablePath ?? "")).summarize({
                     model: task.summaryModel,
-                    instructions: task.instructions,
+                    instructions: withAttendeeNotes(task.instructions, input.attendeeNotes ?? []),
                     transcript: input.committedTranscript,
                   });
             } catch (error) {

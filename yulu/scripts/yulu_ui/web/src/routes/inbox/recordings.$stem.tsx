@@ -8,6 +8,7 @@ import { trpc } from "../../trpc.js";
 import { AudioPlayer } from "../../components/AudioPlayer.js";
 import { SPEAKER_COLORS, TranscriptView, type SpeakerData } from "../../components/TranscriptView.js";
 import { MarkdownView } from "../../components/MarkdownView.js";
+import { LiveNotesView, liveNotesMarkdown } from "../../components/LiveNotesView.js";
 import { TagEditor } from "../../components/TagEditor.js";
 import { EmptyState } from "../../components/EmptyState.js";
 import { ReprocessButton, type ReprocessButtonState } from "../../components/ReprocessButton.js";
@@ -24,7 +25,7 @@ const LIST_KEY = [["recordings", "list"]] as const;
 const AUDIO_MOUNT_DELAY_MS = 250;
 
 
-type Tab = "transcript" | "summary" | "raw";
+type Tab = "transcript" | "summary" | "notes" | "raw";
 type ManualAction = "transcribe" | "summarize" | "share";
 type AgentTaskState =
   | "queued"
@@ -184,7 +185,7 @@ function defaultSummaryTemplateIdFor(
 }
 
 function isTab(v: string | null): v is Tab {
-  return v === "transcript" || v === "summary" || v === "raw";
+  return v === "transcript" || v === "summary" || v === "notes" || v === "raw";
 }
 
 function audioSrcFor(data: { stem: string; audioFile?: string | null; audioMtimeMs?: number | null }): string {
@@ -640,7 +641,9 @@ export function RecordingReader() {
   };
 
   const handleCopySummary = async () => {
-    const summary = data?.summary ?? "";
+    const summary = (tab === "notes" && data?.liveNotes
+      ? liveNotesMarkdown(data.liveNotes, t("liveNotes.mine"), locale)
+      : data?.summary) ?? "";
     if (!summary) return;
     try {
       if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
@@ -671,9 +674,11 @@ export function RecordingReader() {
   // differs from the (possibly cleaned) transcript. When identical we drop the
   // duplicate tab — and coerce a stale ?tab=raw deep link back to transcript.
   const showRaw = data?.rawDiffers === true;
-  const defaultTab: Tab = data?.summary ? "summary" : "transcript";
+  const hasNotes = Boolean(data?.liveNotes);
+  const defaultTab: Tab = data?.summary ? "summary" : hasNotes ? "notes" : "transcript";
   let tab: Tab = override ?? (isTab(tabParam) ? tabParam : defaultTab);
   if (tab === "raw" && !showRaw) tab = "transcript";
+  if (tab === "notes" && !hasNotes) tab = defaultTab;
 
   const snippet = (params.get("snippet") ?? "").replace(/\[\/?hit\]/g, "").trim();
 
@@ -942,7 +947,12 @@ export function RecordingReader() {
 
         <div className="reader-tabbar">
           <div className="reader-tabs seg" role="tablist">
-            {(showRaw ? ["summary", "transcript", "raw"] as const : ["summary", "transcript"] as const).map((item) => (
+            {([
+              "summary",
+              ...(hasNotes ? ["notes"] as const : []),
+              "transcript",
+              ...(showRaw ? ["raw"] as const : []),
+            ] as const).map((item) => (
               <button
                 key={item}
                 type="button"
@@ -956,13 +966,13 @@ export function RecordingReader() {
               </button>
             ))}
           </div>
-          {tab === "summary" && data.summary && (
+          {((tab === "summary" && data.summary) || (tab === "notes" && data.liveNotes)) && (
             <button
               type="button"
               className="reader-copy-summary btn btn-quiet"
               onClick={handleCopySummary}
-              aria-label={t("reader.copySummary.aria")}
-              title={t("reader.copySummary.title")}
+              aria-label={t(tab === "notes" ? "reader.copyNotes.aria" : "reader.copySummary.aria")}
+              title={t(tab === "notes" ? "reader.copyNotes.title" : "reader.copySummary.title")}
             >
               {copiedSummary ? <Check size={14} strokeWidth={2} /> : <Copy size={14} strokeWidth={1.75} />}
               <span>{copiedSummary ? t("reader.copySummary.done") : t("reader.copySummary")}</span>
@@ -977,6 +987,15 @@ export function RecordingReader() {
             ? <div className="reader-summary"><MarkdownView text={data.summary} /></div>
             : <EmptyState label={t("reader.empty.summary")} />
         )}
+        {tab === "notes" && data.liveNotes && (
+          <div className="reader-summary">
+            <LiveNotesView
+              markdown={data.liveNotes.markdown}
+              myNotes={data.liveNotes.myNotes}
+              footer={data.liveNotes.markdown ? t("liveNotes.madeLive") : undefined}
+            />
+          </div>
+        )}
         {tab === "transcript" && (
           (data.transcript || data.realtime)
             ? (
@@ -988,6 +1007,9 @@ export function RecordingReader() {
               />
             )
             : <EmptyState label={t("reader.empty.transcript")} />
+        )}
+        {tab === "transcript" && data.transcript && data.transcriptSource === "realtime" && (
+          <p className="reader-provenance">{t("reader.transcript.fromLive")}</p>
         )}
         {tab === "raw" && showRaw && (
           <pre className="reader-raw">{data.raw ?? data.transcript ?? ""}</pre>

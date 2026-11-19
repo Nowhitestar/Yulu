@@ -89,7 +89,7 @@ export function yuluMcpServer(ctx: AppContext): McpServer {
     inputSchema: { limit: z.number().int().positive().max(500).optional(), since: z.number().int().nonnegative().optional() },
   }, async (input) => json(await caller.recordings.list(input)));
   server.registerTool("recording_get", {
-    description: "Read recording metadata, transcript, summary, tags, speakers, durable Agent task, and delivery state. Audio bytes are not returned.",
+    description: "Read recording metadata, transcript, summary, live notes and the attendee's own notes, tags, speakers, durable Agent task, and delivery state. Audio bytes are not returned.",
     inputSchema: { stem: z.string().min(1) },
   }, async ({ stem }) => json(safeRecording(await caller.recordings.get({ stem }))));
   registerRecordingTaskGet(server, ctx, json);
