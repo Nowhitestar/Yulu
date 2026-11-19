@@ -1,22 +1,20 @@
 import Cocoa
 import Darwin
 import Foundation
+import WebKit
 
-// Yulu's system-wide live-caption overlay.
-// Build: swiftc -o recorder_status recorder_status.swift
+// Yulu's live notes panel during a meeting recording: a tall glass card on the
+// right edge of the screen that shows the Host's /live page, and tucks away to
+// Yulu's breathing icon.
+// Build: swiftc -o recorder_status recorder_status.swift -framework Cocoa -framework WebKit
 // Usage: ./recorder_status <title> [state_file]
 
-let expandedMaxWidth: CGFloat = 760
-let expandedHeight: CGFloat = 176
+let panelWidth: CGFloat = 380
+let panelMaxHeight: CGFloat = 760
+let panelMinHeight: CGFloat = 320
+let panelCornerRadius: CGFloat = 14
 let collapsedWindowSize: CGFloat = 92
-let toolbarWidth: CGFloat = 480
-let compactToolbarWidth: CGFloat = 128
-let toolbarHeight: CGFloat = 30
 let screenMargin: CGFloat = 16
-let transcriptTailBytes: UInt64 = 64 * 1024
-let stableCaptionCharacterLimit = 160
-let partialCaptionCharacterLimit = 120
-let captionLayoutCharacterLimit = 240
 
 let HOME_DIR = FileManager.default.homeDirectoryForCurrentUser.path
 
@@ -53,13 +51,6 @@ func configData() -> Data? {
     return nil
 }
 
-func applicationData(_ filename: String) -> Data? {
-    for root in [DURABLE_DATA_DIR, LEGACY_READ_ONLY_DATA_DIR] {
-        if let data = FileManager.default.contents(atPath: "\(root)/\(filename)") { return data }
-    }
-    return nil
-}
-
 enum AppLanguage: String {
     case zh, en
 }
@@ -79,31 +70,11 @@ func L(_ zh: String, _ en: String) -> String {
     activeAppLanguage == .zh ? zh : en
 }
 
-enum CaptionDisplayMode: Int {
-    case bilingual = 0
-    case translation = 1
-    case source = 2
-
-    var translationEnabled: Bool { self != .source }
+func hostPort() -> String {
+    let port = ProcessInfo.processInfo.environment["YULU_UI_PORT"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard let value = Int(port), (1...65535).contains(value) else { return "7777" }
+    return String(value)
 }
-
-struct TargetLanguage {
-    let zhTitle: String
-    let enTitle: String
-    let value: String
-
-    var title: String { L(zhTitle, enTitle) }
-}
-
-let targetLanguages = [
-    TargetLanguage(zhTitle: "英语", enTitle: "English", value: "English"),
-    TargetLanguage(zhTitle: "日语", enTitle: "Japanese", value: "日本語"),
-    TargetLanguage(zhTitle: "韩语", enTitle: "Korean", value: "한국어"),
-    TargetLanguage(zhTitle: "法语", enTitle: "French", value: "Français"),
-    TargetLanguage(zhTitle: "西班牙语", enTitle: "Spanish", value: "Español"),
-    TargetLanguage(zhTitle: "德语", enTitle: "German", value: "Deutsch"),
-    TargetLanguage(zhTitle: "繁体中文", enTitle: "Traditional Chinese", value: "繁體中文"),
-]
 
 extension NSColor {
     convenience init(hex: String, alpha: CGFloat = 1) {
@@ -163,212 +134,147 @@ func requestRecordingStop() -> [String: Any] {
     ) ?? ["ok": false, "error": "controls_unavailable"]
 }
 
-final class HoverRootView: NSView {
-    var onEnter: (() -> Void)?
-    var onExit: (() -> Void)?
-    private var tracking: NSTrackingArea?
+/// Only Yulu's own Settings and Inbox pages may be opened from the panel.
+func isAllowedPanelRoute(_ route: String) -> Bool {
+    route.count <= 120 &&
+        route.range(of: "^/(settings|inbox)(/[a-z0-9-]+)*(#[a-z0-9-]+)?$", options: .regularExpression) != nil
+}
 
-    override func updateTrackingAreas() {
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        tracking = area
-        super.updateTrackingAreas()
+/// Ask the menu-bar companion to show a page in Yulu's own window.
+func requestOpenRoute(_ route: String) -> Bool {
+    guard isAllowedPanelRoute(route),
+          let payload = try? JSONSerialization.data(withJSONObject: ["action": "open_route", "route": route]) else {
+        return false
     }
-
-    override func mouseEntered(with event: NSEvent) { onEnter?() }
-    override func mouseExited(with event: NSEvent) { onExit?() }
+    let response = nativeIPCRequest(
+        socketPath: "\(IPC_DIR)/status_agent.sock",
+        payload: payload + Data("\n".utf8)
+    )
+    return response?["ok"] as? Bool == true
 }
 
-final class DraggableEffectView: NSView {
-    override var mouseDownCanMoveWindow: Bool { true }
+/// What the /live page may ask of its panel. Anything else is ignored.
+enum PanelAction: Equatable {
+    case collapse
+    case drag
+    case stop
+    case open(String)
+    case appearance(dark: Bool)
+
+    static func parse(_ body: Any) -> PanelAction? {
+        guard let message = body as? [String: Any], let action = message["action"] as? String else { return nil }
+        switch action {
+        case "collapse": return .collapse
+        case "drag": return .drag
+        case "stop": return .stop
+        case "open":
+            guard let route = message["route"] as? String, isAllowedPanelRoute(route) else { return nil }
+            return .open(route)
+        case "appearance":
+            guard let dark = message["dark"] as? Bool else { return nil }
+            return .appearance(dark: dark)
+        default:
+            return nil
+        }
+    }
 }
 
-final class GripView: NSView {
-    override var mouseDownCanMoveWindow: Bool { true }
+/// The recording state the page shows: stopping, or a problem with capture.
+func panelStateScript(stopping: Bool, warning: String) -> String {
+    let state: [String: Any] = ["stopping": stopping, "warning": warning.isEmpty ? NSNull() as Any : warning as Any]
+    let data = (try? JSONSerialization.data(withJSONObject: state)) ?? Data("{}".utf8)
+    let json = String(decoding: data, as: UTF8.self)
+    return "window.__yuluPanelState = \(json); window.dispatchEvent(new CustomEvent('yulu-panel', { detail: window.__yuluPanelState }));"
+}
 
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.white.withAlphaComponent(0.24).setFill()
-        for row in 0..<3 {
-            for column in 0..<2 {
-                let rect = NSRect(x: CGFloat(column) * 4 + 1, y: CGFloat(row) * 4 + 1, width: 2, height: 2)
-                NSBezierPath(ovalIn: rect).fill()
+/// The panel's place: the right edge of the screen, from the top, as tall as
+/// the screen allows up to a comfortable reading height.
+func defaultPanelFrame(in visible: NSRect) -> NSRect {
+    let height = max(min(panelMaxHeight, visible.height - screenMargin * 2), min(panelMinHeight, visible.height))
+    let width = min(panelWidth, visible.width - screenMargin * 2)
+    return NSRect(
+        x: visible.maxX - width - screenMargin,
+        y: visible.maxY - height - screenMargin,
+        width: width,
+        height: height
+    )
+}
+
+func clampedOrigin(_ origin: NSPoint, size: NSSize, in visible: NSRect) -> NSPoint {
+    let area = visible.insetBy(dx: screenMargin, dy: screenMargin)
+    return NSPoint(
+        x: min(max(origin.x, area.minX), max(area.minX, area.maxX - size.width)),
+        y: min(max(origin.y, area.minY), max(area.minY, area.maxY - size.height))
+    )
+}
+
+/// The icon sits where the panel's top-right corner was, and the panel opens
+/// back from the icon's top-right corner, so neither jumps across the screen.
+func collapsedOrigin(fromPanel frame: NSRect) -> NSPoint {
+    NSPoint(x: frame.maxX - collapsedWindowSize, y: frame.maxY - collapsedWindowSize)
+}
+
+func expandedOrigin(fromIcon frame: NSRect, panelSize: NSSize) -> NSPoint {
+    NSPoint(x: frame.maxX - panelSize.width, y: frame.maxY - panelSize.height)
+}
+
+/// A borderless panel that can take typing for notes without activating Yulu,
+/// so the meeting app stays in front.
+final class NotesPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+
+    /// This helper has no Edit menu, so give the note field the usual editing
+    /// shortcuts directly.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if event.type == .keyDown, modifiers == .command,
+           let key = event.charactersIgnoringModifiers?.lowercased() {
+            let action: Selector?
+            switch key {
+            case "x": action = #selector(NSText.cut(_:))
+            case "c": action = #selector(NSText.copy(_:))
+            case "v": action = #selector(NSText.paste(_:))
+            case "a": action = #selector(NSText.selectAll(_:))
+            default: action = nil
             }
+            if let action, NSApp.sendAction(action, to: nil, from: self) { return true }
         }
-    }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .openHand)
+        return super.performKeyEquivalent(with: event)
     }
 }
 
-/// A quiet dotted trace, with a low breath at rest and a smooth audio envelope.
-/// It is drawn directly over the desktop when the toolbar is tucked away.
-final class CaptionWaveView: NSView {
-    static let blue = NSColor(hex: "#60AAF3")
-    static let profile: [CGFloat] = [0.04, 0.07, 0.06, 0.12, 0.08, 0.18, 0.10, 0.15,
-        0.24, 0.36, 0.64, 0.44, 0.82, 1, 0.74, 0.50, 0.34, 0.48, 0.22,
-        0.14, 0.20, 0.09, 0.14, 0.08, 0.10, 0.06, 0.08, 0.04, 0.05]
-    var level: CGFloat = 0 { didSet { needsDisplay = true } }
-    private var envelope: CGFloat = 0
-    private var timer: Timer?
-    private var active = false
-    override var mouseDownCanMoveWindow: Bool { true }
-    deinit { timer?.invalidate() }
-
-    func setAnimating(_ enabled: Bool) {
-        active = enabled
-        timer?.invalidate()
-        timer = nil
-        needsDisplay = true
-        guard enabled, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        let next = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.envelope += (self.level - self.envelope) * (self.level > self.envelope ? 0.28 : 0.12)
-            self.needsDisplay = true
-            if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { self.setAnimating(self.active) }
-        }
-        timer = next
-        RunLoop.main.add(next, forMode: .common)
+/// A stretchable rounded mask, so the glass and the panel's shadow share the
+/// card's rounded corners.
+func roundedMask(radius: CGFloat) -> NSImage {
+    let edge = radius * 2 + 1
+    let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+        NSColor.black.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        return true
     }
-
-    static func audioLevel(_ status: [String: Any]?, expectedPath: String) -> CGFloat {
-        guard let status, status["recording"] as? Bool == true,
-              !expectedPath.isEmpty, status["file"] as? String == expectedPath else { return 0 }
-        let mic = (status["micLevel"] as? NSNumber)?.doubleValue ?? 0
-        let system = (status["systemLevel"] as? NSNumber)?.doubleValue ?? 0
-        let rms = max(mic.isFinite ? mic : 0, system.isFinite ? system : 0)
-        return CGFloat(min(1, max(0, (20 * log10(max(rms, 0.00001)) + 55) / 45)))
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let t = ProcessInfo.processInfo.systemUptime
-        let breath = reduced ? 0.06 : 0.06 + 0.025 * CGFloat(sin(t * 2.1))
-        let amplitude = max(breath, min(1, reduced ? level : envelope))
-        let step = bounds.width / CGFloat(Self.profile.count)
-        let width = min(2.4, step * 0.54)
-        for (i, shape) in Self.profile.enumerated() {
-            let drift = reduced ? 1 : 0.88 + 0.12 * CGFloat(sin(t * 3.2 - Double(i) * 0.48))
-            let height = width + min(16, bounds.height - width) * amplitude * shape * drift
-            Self.blue.withAlphaComponent(0.58 + 0.42 * shape).setFill()
-            let rect = NSRect(x: CGFloat(i) * step + (step - width) / 2,
-                y: (bounds.height - height) / 2, width: width, height: height)
-            NSBezierPath(roundedRect: rect, xRadius: width / 2, yRadius: width / 2).fill()
-        }
-    }
+    image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+    image.resizingMode = .stretch
+    return image
 }
 
-final class RecordingButton: NSButton {
-    var stoppingState = false { didSet { needsDisplay = true } }
-    private var hovered = false
-    private var tracking: NSTrackingArea?
+/// WebKit keeps its message handlers alive; this forwards to the delegate
+/// without keeping it alive in return.
+final class PanelMessages: NSObject, WKScriptMessageHandler {
+    weak var owner: AppDel?
+    let port: Int
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        title = ""
-        isBordered = false
-        setButtonType(.momentaryChange)
-        setAccessibilityLabel(L("停止录制", "Stop recording"))
+    init(owner: AppDel, port: Int) {
+        self.owner = owner
+        self.port = port
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func updateTrackingAreas() {
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
-        addTrackingArea(area)
-        tracking = area
-        super.updateTrackingAreas()
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let active = hovered || stoppingState || window?.firstResponder === self
-        CaptionWaveView.blue.withAlphaComponent(active ? 0.24 : 0.13).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
-
-        let label = stoppingState
-            ? L("停止中…", "Stopping…")
-            : L("结束", "Stop")
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
-            .foregroundColor: NSColor.white.withAlphaComponent(isEnabled ? 0.90 : 0.52),
-        ]
-        let frames = contentFrames()
-        CaptionWaveView.blue.setFill()
-        NSBezierPath(roundedRect: frames.indicator, xRadius: 1.4, yRadius: 1.4).fill()
-        label.draw(in: frames.label, withAttributes: attributes)
-    }
-
-    func contentFrames() -> (indicator: NSRect, label: NSRect) {
-        let label = stoppingState ? L("停止中…", "Stopping…") : L("结束", "Stop")
-        let labelWidth = ceil((label as NSString).size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
-        ]).width)
-        let groupWidth = 7 + 6 + labelWidth
-        let x = (bounds.width - groupWidth) / 2
-        return (
-            NSRect(x: x, y: bounds.midY - 3.5, width: 7, height: 7),
-            NSRect(x: x + 13, y: bounds.midY - 7, width: labelWidth, height: 14)
-        )
-    }
-}
-
-final class CollapseButton: NSButton {
-    private var hovered = false
-    private var tracking: NSTrackingArea?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        title = ""
-        isBordered = false
-        setButtonType(.momentaryChange)
-        setAccessibilityLabel(L("收起字幕", "Collapse captions"))
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override func updateTrackingAreas() {
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
-        addTrackingArea(area)
-        tracking = area
-        super.updateTrackingAreas()
-    }
-
-    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        if hovered {
-            NSColor.white.withAlphaComponent(0.10).setFill()
-            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
-        }
-        let path = NSBezierPath()
-        path.move(to: NSPoint(x: bounds.midX - 4, y: bounds.midY + 2))
-        path.line(to: NSPoint(x: bounds.midX, y: bounds.midY - 2))
-        path.line(to: NSPoint(x: bounds.midX + 4, y: bounds.midY + 2))
-        path.lineWidth = 1.4
-        path.lineCapStyle = .round
-        path.lineJoinStyle = .round
-        NSColor.white.withAlphaComponent(0.66).setStroke()
-        path.stroke()
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let origin = message.frameInfo.securityOrigin
+        guard message.frameInfo.isMainFrame, origin.protocol == "http",
+              origin.host == "127.0.0.1", origin.port == port,
+              let action = PanelAction.parse(message.body) else { return }
+        owner?.handle(action)
     }
 }
 
@@ -399,10 +305,10 @@ final class LogoView: NSView {
         artwork.layer?.shadowOpacity = 0.35
         artwork.layer?.shadowRadius = 12
         artwork.layer?.shadowOffset = NSSize(width: 0, height: -6)
-        toolTip = L("正在录制 · 点击展开字幕", "Recording · Click to expand captions")
+        toolTip = L("正在录制 · 点击展开实时笔记", "Recording · Click to open live notes")
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel(L("展开实时字幕", "Expand live captions"))
+        setAccessibilityLabel(L("展开实时笔记", "Open live notes"))
 
         let click = NSClickGestureRecognizer(target: self, action: #selector(clicked))
         addGestureRecognizer(click)
@@ -488,95 +394,32 @@ final class LogoView: NSView {
     }
 }
 
-final class OutlinedCaptionLabel: NSView {
-    private let outlineLabel = NSTextField(wrappingLabelWithString: "")
-    private let fillLabel = NSTextField(wrappingLabelWithString: "")
-
-    var attributedStringValue: NSAttributedString {
-        get { fillLabel.attributedStringValue }
-        set {
-            fillLabel.attributedStringValue = newValue
-            let outlined = NSMutableAttributedString(attributedString: newValue)
-            outlined.addAttributes(
-                [.strokeColor: NSColor.black, .strokeWidth: 6.0],
-                range: NSRange(location: 0, length: outlined.length)
-            )
-            outlineLabel.attributedStringValue = outlined
-        }
-    }
-
-    var outlineAttributedStringValue: NSAttributedString { outlineLabel.attributedStringValue }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        [outlineLabel, fillLabel].forEach { label in
-            label.frame = bounds
-            label.autoresizingMask = [.width, .height]
-            label.alignment = .center
-            label.maximumNumberOfLines = 2
-            label.lineBreakMode = .byWordWrapping
-            label.cell?.wraps = true
-            label.cell?.isScrollable = false
-            label.isSelectable = false
-            label.drawsBackground = false
-            addSubview(label)
-        }
-    }
-
-    required init?(coder: NSCoder) { nil }
-}
-
-final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     let meetingTitle: String
     let statePath: String
     let startTime = Date()
+    let port = Int(hostPort()) ?? 7777
 
-    var win: NSPanel!
-    var root: HoverRootView!
-    var toolbar: DraggableEffectView!
-    var grip: GripView!
-    var waveView: CaptionWaveView!
-    var recordingButton: RecordingButton!
-    var timeLabel: NSTextField!
-    var sourceLanguageLabel: NSTextField!
-    var targetPopup: NSPopUpButton!
-    var displayPopup: NSPopUpButton!
-    var collapseButton: CollapseButton!
-    var sourceLabel: OutlinedCaptionLabel!
-    var translationLabel: OutlinedCaptionLabel!
+    var win: NotesPanel!
+    var root: NSView!
+    var glass: NSVisualEffectView!
+    var webView: WKWebView?
     var logoView: LogoView!
 
     var activeScreen: NSScreen!
     var expanded = true
-    var displayMode = CaptionDisplayMode.source
-    var toolbarCompact = false
+    var panelSize = NSSize(width: panelWidth, height: panelMaxHeight)
     var currentAudioPath = ""
-    var sourceText = ""
-    var translationText = ""
-    var translationFailed = false
-    /// Set by the Host when the chosen translated mode cannot run (ADR-011).
-    var translationUnavailableReason = ""
-    var warningText = ""
-    var sourceLanguage = "zh"
-    var lastSequence = -1
-    var lastWebSocketEventAt = Date.distantPast
-    var lastCaptionAt = Date.distantPast
     var lastFileSize: UInt64 = 0
     var lastFileGrowthAt = Date()
     var unhealthy = false
     var stopping = false
     var closing = false
     var adjustingFrame = false
+    var warningText = ""
 
-    var timeTimer: Timer?
     var stateTimer: Timer?
-    var captionTimer: Timer?
-    var levelTimer: Timer?
-    var levelRequestPending = false
-    var toolbarHideWorkItem: DispatchWorkItem?
-    var reconnectWorkItem: DispatchWorkItem?
-    let webSocketSession = URLSession(configuration: .default)
-    var webSocketTask: URLSessionWebSocketTask?
+    var reloadWorkItem: DispatchWorkItem?
 
     init(title: String, path: String) {
         meetingTitle = title
@@ -589,18 +432,12 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         makeWindow()
         makeUI()
         startTimers()
-        connectWebSocket()
-        showToolbar()
-        scheduleToolbarHide()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        [timeTimer, stateTimer, captionTimer, levelTimer].forEach { $0?.invalidate() }
-        waveView?.setAnimating(false)
-        toolbarHideWorkItem?.cancel()
-        reconnectWorkItem?.cancel()
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
-        webSocketSession.invalidateAndCancel()
+        stateTimer?.invalidate()
+        reloadWorkItem?.cancel()
+        webView?.stopLoading()
     }
 
     func initialScreen() -> NSScreen {
@@ -608,24 +445,11 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main ?? NSScreen.screens[0]
     }
 
-    func defaultExpandedFrame() -> NSRect {
-        let visible = activeScreen.visibleFrame
-        let width = min(expandedMaxWidth, visible.width - 72)
-        return NSRect(
-            x: visible.midX - width / 2,
-            y: visible.minY + defaultBottomOffset(in: visible),
-            width: width,
-            height: expandedHeight
-        )
-    }
-
-    func defaultBottomOffset(in visible: NSRect) -> CGFloat {
-        min(88, max(32, visible.height * 0.08))
-    }
-
     func makeWindow() {
-        win = NSPanel(
-            contentRect: defaultExpandedFrame(),
+        let frame = defaultPanelFrame(in: activeScreen.visibleFrame)
+        panelSize = frame.size
+        win = NotesPanel(
+            contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -634,81 +458,55 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         win.isOpaque = false
         win.backgroundColor = .clear
-        win.hasShadow = false
+        win.hasShadow = true
         win.hidesOnDeactivate = false
-        win.becomesKeyOnlyIfNeeded = true
-        win.isMovableByWindowBackground = true
+        // Any click in the panel lets it take typing; it never activates Yulu.
+        win.becomesKeyOnlyIfNeeded = false
+        win.isMovableByWindowBackground = false
         win.isReleasedWhenClosed = false
+        win.title = L("实时笔记", "Live notes")
         win.delegate = self
         win.orderFrontRegardless()
     }
 
     func makeUI() {
-        root = HoverRootView(frame: win.contentView?.bounds ?? .zero)
+        root = NSView(frame: win.contentView?.bounds ?? .zero)
         root.autoresizingMask = [.width, .height]
         root.wantsLayer = true
         root.layer?.backgroundColor = NSColor.clear.cgColor
-        root.onEnter = { [weak self] in self?.showToolbar() }
-        root.onExit = { [weak self] in self?.scheduleToolbarHide() }
         win.contentView = root
 
-        toolbar = DraggableEffectView(frame: .zero)
-        toolbar.wantsLayer = true
-        toolbar.layer?.cornerRadius = toolbarHeight / 2
-        toolbar.layer?.borderWidth = 1
-        toolbar.layer?.borderColor = NSColor.white.withAlphaComponent(0.16).cgColor
-        toolbar.layer?.backgroundColor = NSColor(hex: "#17191D", alpha: 0.92).cgColor
-        root.addSubview(toolbar)
+        glass = NSVisualEffectView(frame: root.bounds)
+        glass.autoresizingMask = [.width, .height]
+        glass.material = .popover
+        glass.blendingMode = .behindWindow
+        glass.state = .active
+        glass.maskImage = roundedMask(radius: panelCornerRadius)
+        root.addSubview(glass)
 
-        grip = GripView(frame: .zero)
-        toolbar.addSubview(grip)
-
-        waveView = CaptionWaveView(frame: .zero)
-        waveView.toolTip = L("正在录制 · 拖动调整位置", "Recording · Drag to move")
-        waveView.setAccessibilityElement(true)
-        waveView.setAccessibilityRole(.image)
-        waveView.setAccessibilityLabel(L("正在录制", "Recording"))
-        toolbar.addSubview(waveView)
-
-        recordingButton = RecordingButton(frame: .zero)
-        recordingButton.target = self
-        recordingButton.action = #selector(doStop)
-        recordingButton.toolTip = L("点击停止录制", "Click to stop recording")
-        toolbar.addSubview(recordingButton)
-
-        timeLabel = makeToolbarLabel("00:00")
-        timeLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
-        toolbar.addSubview(timeLabel)
-
-        sourceLanguageLabel = makeToolbarLabel(L("中文 →", "Chinese →"))
-        toolbar.addSubview(sourceLanguageLabel)
-
-        targetPopup = makePopup(targetLanguages.map(\.title))
-        targetPopup.target = self
-        targetPopup.action = #selector(targetLanguageChanged)
-        let selectedTarget = normalizedTargetLanguage(loadTargetLanguage())
-        targetPopup.selectItem(at: targetLanguages.firstIndex(where: { $0.value == selectedTarget }) ?? 0)
-        toolbar.addSubview(targetPopup)
-
-        displayPopup = makePopup([
-            L("双语", "Bilingual"),
-            L("仅翻译", "Translation"),
-            L("仅原文", "Original"),
-        ])
-        displayPopup.target = self
-        displayPopup.action = #selector(displayModeChanged)
-        displayPopup.selectItem(at: displayMode.rawValue)
-        toolbar.addSubview(displayPopup)
-
-        collapseButton = CollapseButton(frame: .zero)
-        collapseButton.target = self
-        collapseButton.action = #selector(collapse)
-        toolbar.addSubview(collapseButton)
-
-        sourceLabel = makeCaptionLabel()
-        translationLabel = makeCaptionLabel()
-        root.addSubview(sourceLabel)
-        root.addSubview(translationLabel)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController.add(PanelMessages(owner: self, port: port), name: "yuluPanel")
+        configuration.userContentController.addUserScript(WKUserScript(source: """
+            if (location.origin === 'http://127.0.0.1:\(port)') {
+              const markPanel = () => { document.documentElement.dataset.yuluPanel = 'true'; };
+              if (document.documentElement) markPanel();
+              else document.addEventListener('DOMContentLoaded', markPanel, { once: true });
+            }
+            """, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let page = WKWebView(frame: glass.bounds, configuration: configuration)
+        page.autoresizingMask = [.width, .height]
+        // The glass shows through; the page paints only a light tint.
+        page.setValue(false, forKey: "drawsBackground")
+        page.wantsLayer = true
+        page.layer?.cornerRadius = panelCornerRadius
+        page.layer?.masksToBounds = true
+        page.navigationDelegate = self
+        page.uiDelegate = self
+        page.setAccessibilityLabel(L("实时笔记", "Live notes"))
+        glass.addSubview(page)
+        webView = page
+        loadPage()
 
         let logo = NSImage(contentsOf: logoURL())
         logoView = LogoView(frame: .zero, image: logo)
@@ -716,224 +514,121 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         logoView.onMove = { [weak self] origin in self?.moveWindow(to: origin) }
         logoView.isHidden = true
         root.addSubview(logoView)
-
-        layoutViews()
-        renderCaptions(animated: false)
     }
 
-    func makeToolbarLabel(_ value: String) -> NSTextField {
-        let label = NSTextField(labelWithString: value)
-        label.font = .systemFont(ofSize: 10, weight: .semibold)
-        label.textColor = NSColor.white.withAlphaComponent(0.76)
-        label.alignment = .center
-        return label
+    func loadPage() {
+        guard !closing, let webView, let url = URL(string: "http://127.0.0.1:\(port)/live") else { return }
+        reloadWorkItem?.cancel()
+        webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10))
     }
 
-    func makePopup(_ values: [String]) -> NSPopUpButton {
-        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
-        popup.addItems(withTitles: values)
-        popup.isBordered = false
-        popup.controlSize = .small
-        popup.font = .systemFont(ofSize: 10, weight: .semibold)
-        popup.contentTintColor = NSColor.white.withAlphaComponent(0.78)
-        return popup
+    /// The Host may be restarting; try again shortly instead of showing an error.
+    func scheduleReload() {
+        guard !closing else { return }
+        reloadWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.loadPage() }
+        reloadWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: item)
     }
 
-    func makeCaptionLabel() -> OutlinedCaptionLabel {
-        OutlinedCaptionLabel(frame: .zero)
-    }
-
-    /// Translation-only with translation unavailable shows the source captions
-    /// with the notice below them, so captions never disappear.
-    var effectiveDisplayMode: CaptionDisplayMode {
-        displayMode == .translation && !translationUnavailableReason.isEmpty ? .bilingual : displayMode
-    }
-
-    func sourceCaptionFrame(in bounds: NSRect) -> NSRect {
-        let bilingual = effectiveDisplayMode == .bilingual
-        return NSRect(
-            x: 12,
-            y: bilingual ? 60 : 16,
-            width: bounds.width - 24,
-            height: bilingual ? 78 : 122
-        )
-    }
-
-    func secondaryCaptionFrame(in bounds: NSRect) -> NSRect {
-        NSRect(x: 18, y: 8, width: bounds.width - 36, height: 48)
-    }
-
-    func layoutCaptionLabels() {
-        let sourceFrame = sourceCaptionFrame(in: root.bounds)
-        let secondaryFrame = secondaryCaptionFrame(in: root.bounds)
-        sourceLabel.frame = sourceFrame
-        translationLabel.frame = secondaryFrame
-    }
-
-    func layoutViews() {
-        root.frame = win.contentView?.bounds ?? root.frame
-        if expanded {
-            logoView.isHidden = true
-            toolbar.isHidden = false
-            toolbar.frame = toolbarFrame(compact: toolbarCompact, in: root.bounds)
-            toolbar.layer?.backgroundColor = toolbarCompact ? NSColor.clear.cgColor : NSColor(hex: "#17191D", alpha: 0.92).cgColor
-            toolbar.layer?.borderWidth = toolbarCompact ? 0 : 1
-            waveView.setAnimating(!stopping)
-            layoutCaptionLabels()
-            let fullControls = [grip, timeLabel, sourceLanguageLabel, targetPopup, displayPopup, recordingButton, collapseButton]
-            fullControls.forEach { $0?.isHidden = toolbarCompact }
-            if toolbarCompact {
-                waveView.frame = toolbar.bounds.insetBy(dx: 8, dy: 4)
-                return
-            }
-            grip.frame = NSRect(x: 12, y: 9, width: 8, height: 12)
-            waveView.frame = NSRect(x: 30, y: 4, width: 64, height: 22)
-            timeLabel.frame = NSRect(x: 106, y: 7, width: 40, height: 16)
-            sourceLanguageLabel.frame = NSRect(x: 157, y: 7, width: 50, height: 16)
-            targetPopup.frame = NSRect(x: 207, y: 3, width: 78, height: 24)
-            displayPopup.frame = NSRect(x: 293, y: 3, width: 68, height: 24)
-            recordingButton.frame = NSRect(x: 373, y: 3, width: 66, height: 24)
-            collapseButton.frame = NSRect(x: toolbar.bounds.width - 30, y: 3, width: 24, height: 24)
-        } else {
-            waveView.setAnimating(false)
-            toolbar.isHidden = true
-            sourceLabel.isHidden = true
-            translationLabel.isHidden = true
-            logoView.isHidden = false
-            logoView.frame = root.bounds
-            logoView.setBreathing(true)
+    func handle(_ action: PanelAction) {
+        guard !closing else { return }
+        switch action {
+        case .collapse:
+            setExpanded(false)
+        case .drag:
+            dragPanel()
+        case .stop:
+            doStop()
+        case .open(let route):
+            openRoute(route)
+        case .appearance(let dark):
+            let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            win.appearance = appearance
+            glass.appearance = appearance
         }
+    }
+
+    /// WebKit delivers the message after the mouse went down; drag only while
+    /// the left button is still held.
+    func dragPanel() {
+        guard expanded, NSEvent.pressedMouseButtons & 1 != 0,
+              let event = NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: win.convertPoint(fromScreen: NSEvent.mouseLocation),
+                modifierFlags: NSApp.currentEvent?.modifierFlags ?? [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: win.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 1
+              ) else { return }
+        win.performDrag(with: event)
+    }
+
+    func openRoute(_ route: String) {
+        guard isAllowedPanelRoute(route) else { return }
+        let port = self.port
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard !requestOpenRoute(route) else { return }
+            // Without the menu-bar companion, open the page in the browser.
+            DispatchQueue.main.async {
+                if let url = URL(string: "http://127.0.0.1:\(port)\(route)") { NSWorkspace.shared.open(url) }
+            }
+        }
+    }
+
+    func pushPanelState() {
+        guard let webView, !closing else { return }
+        webView.evaluateJavaScript(panelStateScript(stopping: stopping, warning: warningText), completionHandler: nil)
     }
 
     func setExpanded(_ value: Bool) {
         guard expanded != value, !closing else { return }
-        let anchorX = win.frame.midX
-        let anchorY = win.frame.minY
+        let current = win.frame
         expanded = value
-        let size: NSSize
+        let frame: NSRect
         if value {
-            size = defaultExpandedFrame().size
+            let origin = clampedOrigin(
+                expandedOrigin(fromIcon: current, panelSize: panelSize),
+                size: panelSize,
+                in: activeScreen.visibleFrame
+            )
+            frame = NSRect(origin: origin, size: panelSize)
         } else {
-            size = NSSize(width: collapsedWindowSize, height: collapsedWindowSize)
+            panelSize = current.size
+            let size = NSSize(width: collapsedWindowSize, height: collapsedWindowSize)
+            frame = NSRect(origin: clampedOrigin(collapsedOrigin(fromPanel: current), size: size, in: activeScreen.visibleFrame), size: size)
         }
-        let origin = clampedOrigin(NSPoint(x: anchorX - size.width / 2, y: anchorY), size: size)
-        win.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
-        root.frame = win.contentView?.bounds ?? root.frame
+        glass.isHidden = !value
+        logoView.isHidden = value
+        logoView.frame = root.bounds
+        win.hasShadow = value
+        win.setFrame(frame, display: true, animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        logoView.frame = root.bounds
         logoView.setBreathing(!value)
-        layoutViews()
-        if value {
-            renderCaptions(animated: false)
-            showToolbar()
-            scheduleToolbarHide()
-        }
-    }
-
-    @objc func collapse() { setExpanded(false) }
-
-    func toolbarFrame(compact: Bool, in bounds: NSRect) -> NSRect {
-        let width = compact ? compactToolbarWidth : toolbarWidth
-        return NSRect(
-            x: (bounds.width - width) / 2,
-            y: bounds.height - toolbarHeight - 3,
-            width: width,
-            height: toolbarHeight
-        )
-    }
-
-    func setToolbarCompact(_ compact: Bool) {
-        guard toolbarCompact != compact, expanded, !closing else { return }
-        toolbarCompact = compact
-        layoutViews()
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = 0.45
-            fade.toValue = 1
-            fade.duration = 0.16
-            toolbar.layer?.add(fade, forKey: "toolbar-reveal")
-        }
+        // Nothing typed reaches the hidden notes while only the icon shows.
+        if !value { win.makeFirstResponder(nil) }
+        win.invalidateShadow()
     }
 
     func moveWindow(to origin: NSPoint) {
-        win.setFrameOrigin(clampedOrigin(origin, size: win.frame.size))
-    }
-
-    func clampedOrigin(_ origin: NSPoint, size: NSSize) -> NSPoint {
-        let visible = activeScreen.visibleFrame.insetBy(dx: screenMargin, dy: screenMargin)
-        return NSPoint(
-            x: min(max(origin.x, visible.minX), visible.maxX - size.width),
-            y: min(max(origin.y, visible.minY), visible.maxY - size.height)
-        )
+        win.setFrameOrigin(clampedOrigin(origin, size: win.frame.size, in: activeScreen.visibleFrame))
     }
 
     func windowDidMove(_ notification: Notification) {
         guard !adjustingFrame, let win else { return }
-        let clamped = clampedOrigin(win.frame.origin, size: win.frame.size)
+        if let screen = win.screen { activeScreen = screen }
+        let clamped = clampedOrigin(win.frame.origin, size: win.frame.size, in: activeScreen.visibleFrame)
         guard clamped != win.frame.origin else { return }
         adjustingFrame = true
         win.setFrameOrigin(clamped)
         adjustingFrame = false
     }
 
-    func showToolbar() {
-        guard expanded, !closing else { return }
-        toolbarHideWorkItem?.cancel()
-        setToolbarCompact(false)
-    }
-
-    func scheduleToolbarHide() {
-        toolbarHideWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in
-            guard let self, self.expanded, !self.closing else { return }
-            if self.win.frame.contains(NSEvent.mouseLocation) || self.targetPopup.cell?.isHighlighted == true || self.displayPopup.cell?.isHighlighted == true {
-                return
-            }
-            self.setToolbarCompact(true)
-        }
-        toolbarHideWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: item)
-    }
-
     func startTimers() {
-        timeTimer = Timer.scheduledTimer(timeInterval: 1, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
-        stateTimer = Timer.scheduledTimer(timeInterval: 2, target: self, selector: #selector(checkState), userInfo: nil, repeats: true)
-        captionTimer = Timer.scheduledTimer(timeInterval: 1.5, target: self, selector: #selector(updateCaptionFallback), userInfo: nil, repeats: true)
-        levelTimer = Timer.scheduledTimer(timeInterval: 0.2, target: self, selector: #selector(updateAudioLevel), userInfo: nil, repeats: true)
-        [timeTimer, stateTimer, captionTimer, levelTimer].forEach { $0?.addToCommonRunLoop() }
-        tick()
+        let timer = Timer(timeInterval: 2, target: self, selector: #selector(checkState), userInfo: nil, repeats: true)
+        RunLoop.current.add(timer, forMode: .common)
+        stateTimer = timer
         checkState()
-        updateCaptionFallback()
-    }
-
-    @objc func updateAudioLevel() {
-        guard !closing, expanded, !stopping, !levelRequestPending else { return }
-        levelRequestPending = true
-        // Never put the socket round trip on AppKit's animation/interaction thread.
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let status = self?.audioDaemonStatus()
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.levelRequestPending = false
-                guard !self.closing else { return }
-                self.waveView.level = CaptionWaveView.audioLevel(status, expectedPath: self.currentAudioPath)
-            }
-        }
-    }
-
-    @objc func tick() {
-        guard !closing else { return }
-        timeLabel.stringValue = formatElapsed(Date().timeIntervalSince(startTime))
-        if Date().timeIntervalSince(lastCaptionAt) > 6, !sourceText.isEmpty, warningText.isEmpty {
-            sourceLabel.animator().alphaValue = 0
-            translationLabel.animator().alphaValue = 0
-        }
-    }
-
-    func formatElapsed(_ elapsed: TimeInterval) -> String {
-        let seconds = max(0, Int(elapsed))
-        if seconds >= 3600 {
-            return String(format: "%02d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60)
-        }
-        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
 
     @objc func checkState() {
@@ -970,14 +665,15 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         let problem = socket == nil || (socketRecording == false && info.recording == true) || (!audioPath.isEmpty && !growing && Date().timeIntervalSince(startTime) > 20)
         if problem && !stopping {
-            unhealthy = true
-            warningText = L("录音连接异常，请检查录音状态", "Recording connection issue — check recording status")
-            renderCaptions(animated: true, warning: true)
-            showToolbar()
+            if !unhealthy || warningText.isEmpty {
+                unhealthy = true
+                warningText = L("录音连接异常，请检查录音状态", "Recording connection issue — check recording status")
+                pushPanelState()
+            }
         } else if unhealthy {
             unhealthy = false
             warningText = ""
-            renderCaptions(animated: true)
+            pushPanelState()
         }
     }
 
@@ -995,418 +691,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func setCurrentAudioPath(_ path: String) {
         guard !path.isEmpty, path != currentAudioPath else { return }
         currentAudioPath = path
-        lastSequence = -1
-        lastWebSocketEventAt = .distantPast
         lastFileSize = 0
         lastFileGrowthAt = Date()
-        postTranslationOptions()
-    }
-
-    @objc func updateCaptionFallback() {
-        guard !closing, !unhealthy, Date().timeIntervalSince(lastWebSocketEventAt) > 3, !currentAudioPath.isEmpty else { return }
-        // Quiet speech is not a broken connection. Do not replace a selected
-        // live utterance with older file contents during an ordinary pause.
-        guard webSocketTask == nil || lastWebSocketEventAt == .distantPast else { return }
-        let path = realtimeTranscriptPath(audioPath: currentAudioPath)
-        guard FileManager.default.fileExists(atPath: path) else { return }
-        let lines = captionLines(readTail(path: path))
-        guard let latest = lines.last(where: { !isCaptionHesitation($0) }) else { return }
-        setSourceCaption(latest)
-    }
-
-    func realtimeTranscriptPath(audioPath: String) -> String {
-        (audioPath as NSString).deletingPathExtension + ".realtime.transcript.txt"
-    }
-
-    func readTail(path: String) -> String {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-              let size = attrs[.size] as? UInt64,
-              let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else { return "" }
-        defer { try? handle.close() }
-        let offset = size > transcriptTailBytes ? size - transcriptTailBytes : 0
-        do {
-            try handle.seek(toOffset: offset)
-            let data = try handle.readToEnd() ?? Data()
-            var text = String(data: data, encoding: .utf8) ?? ""
-            if offset > 0, let newline = text.firstIndex(of: "\n") {
-                text = String(text[text.index(after: newline)...])
-            }
-            return text
-        } catch {
-            return ""
-        }
-    }
-
-    func captionLines(_ raw: String) -> [String] {
-        raw.split(separator: "\n").compactMap { value in
-            let line = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.isEmpty { return nil }
-            if line.hasPrefix("[Me]") { return L("你  ", "You  ") + line.dropFirst(4).trimmingCharacters(in: .whitespacesAndNewlines) }
-            if line.hasPrefix("[Them]") { return L("对方  ", "Them  ") + line.dropFirst(6).trimmingCharacters(in: .whitespacesAndNewlines) }
-            return line
-        }
-    }
-
-    func renderCaptions(animated: Bool, warning: Bool = false) {
-        guard expanded else { return }
-        let mode = effectiveDisplayMode
-        let sourceHidden = mode == .translation
-        let translationHidden = mode == .source
-        sourceLabel.isHidden = sourceHidden
-        translationLabel.isHidden = translationHidden
-        let notice = translationUnavailableNotice(translationUnavailableReason)
-        let displayedTranslation = !notice.isEmpty
-            ? notice
-            : (translationFailed ? L("翻译暂不可用", "Translation unavailable") : translationText)
-        let mainText = warningText.isEmpty
-            ? (mode == .translation ? displayedTranslation : sourceText)
-            : warningText
-        let secondaryText = warningText.isEmpty && mode == .bilingual ? displayedTranslation : ""
-        if mode == .translation {
-            translationLabel.frame = sourceLabel.frame
-            setCaption(mainText, size: 30, color: .white, weight: .bold, label: translationLabel)
-        } else {
-            let secondaryFrame = secondaryCaptionFrame(in: root.bounds)
-            translationLabel.frame = secondaryFrame
-            setCaption(
-                mainText,
-                size: 30,
-                color: warning ? NSColor(hex: "#FFD1CC") : .white,
-                weight: .bold,
-                label: sourceLabel
-            )
-            setCaption(secondaryText, size: 18, color: NSColor(hex: "#F4E0AC"), weight: .semibold, label: translationLabel)
-        }
-        let sourceAlpha: CGFloat = mainText.isEmpty ? 0 : 1
-        let translationAlpha: CGFloat = (mode == .translation ? mainText : secondaryText).isEmpty ? 0 : 1
-        sourceLabel.alphaValue = sourceAlpha
-        translationLabel.alphaValue = translationAlpha
-        guard animated else { return }
-        if !sourceLabel.isHidden && !mainText.isEmpty {
-            sourceLabel.alphaValue = 0
-            sourceLabel.animator().alphaValue = 1
-        }
-        if !translationLabel.isHidden && !(mode == .translation ? mainText : secondaryText).isEmpty {
-            translationLabel.alphaValue = 0
-            translationLabel.animator().alphaValue = 1
-        }
-    }
-
-    func setCaption(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight, label: OutlinedCaptionLabel) {
-        let visibleText = visibleCaptionText(text, size: size, weight: weight, width: max(1, label.bounds.width - 12))
-        label.attributedStringValue = captionString(visibleText, size: size, color: color, weight: weight)
-    }
-
-    func visibleCaptionText(_ text: String, size: CGFloat, weight: NSFont.Weight, width: CGFloat, maxLines: Int = 2) -> String {
-        let trimmed = boundedCaptionText(text, maxCharacters: captionLayoutCharacterLimit)
-        guard !trimmed.isEmpty, maxLines > 0, width > 0 else { return trimmed }
-        let font = NSFont.systemFont(ofSize: size, weight: weight)
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineBreakMode = .byWordWrapping
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .paragraphStyle: paragraph,
-        ]
-        let maximumHeight = ceil(NSLayoutManager().defaultLineHeight(for: font) * CGFloat(maxLines))
-        func fits(_ value: String) -> Bool {
-            let bounds = (value as NSString).boundingRect(
-                with: NSSize(width: width, height: 10_000),
-                options: [.usesLineFragmentOrigin, .usesFontLeading],
-                attributes: attributes
-            )
-            return ceil(bounds.height) <= maximumHeight
-        }
-        guard !fits(trimmed) else { return trimmed }
-
-        let characters = Array(trimmed)
-        let semanticBreaks = CharacterSet.whitespacesAndNewlines.union(
-            CharacterSet(charactersIn: "，。！？；：,.!?;:")
-        )
-        for index in characters.indices.dropLast() {
-            let isBreak = characters[index].unicodeScalars.allSatisfy { semanticBreaks.contains($0) }
-            guard isBreak else { continue }
-            let suffix = String(characters[characters.index(after: index)...])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let candidate = "…" + suffix
-            if !suffix.isEmpty, fits(candidate) { return candidate }
-        }
-
-        var low = 1
-        var high = characters.count
-        var best = String(characters.suffix(1))
-        while low <= high {
-            let count = (low + high) / 2
-            let suffix = String(characters.suffix(count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            let candidate = "…" + suffix
-            if fits(candidate) {
-                best = candidate
-                low = count + 1
-            } else {
-                high = count - 1
-            }
-        }
-        return best
-    }
-
-    func captionString(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight) -> NSAttributedString {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineBreakMode = .byWordWrapping
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: size, weight: weight),
-            .foregroundColor: color,
-            .paragraphStyle: paragraph,
-        ]
-        return NSAttributedString(string: text, attributes: attributes)
-    }
-
-    @objc func targetLanguageChanged() {
-        translationFailed = false
-        translationText = ""
-        renderCaptions(animated: false)
-        showToolbar()
-        postTranslationOptions()
-    }
-
-    @objc func displayModeChanged() {
-        displayMode = CaptionDisplayMode(rawValue: displayPopup.indexOfSelectedItem) ?? .source
-        layoutCaptionLabels()
-        if !sourceText.isEmpty || !translationText.isEmpty { lastCaptionAt = Date() }
-        renderCaptions(animated: false)
-        showToolbar()
-        postTranslationOptions()
-    }
-
-    func loadTargetLanguage() -> String {
-        guard let data = configData(),
-              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let transcription = raw["transcription"] as? [String: Any],
-              let dictation = transcription["dictation"] as? [String: Any],
-              let target = dictation["target_language"] as? String else { return "English" }
-        return target
-    }
-
-    func normalizedTargetLanguage(_ value: String) -> String {
-        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "japanese", "ja", "日本語": return "日本語"
-        case "korean", "ko", "한국어": return "한국어"
-        case "french", "fr", "français": return "Français"
-        case "spanish", "es", "español": return "Español"
-        case "german", "de", "deutsch": return "Deutsch"
-        case "traditional chinese", "zh-hant", "繁體中文": return "繁體中文"
-        default: return "English"
-        }
-    }
-
-    func postTranslationOptions() {
-        guard !currentAudioPath.isEmpty,
-              let token = readMcpToken(),
-              let url = URL(string: "http://127.0.0.1:\(hostPort())/api/recordings/realtime/options") else { return }
-        let index = max(0, targetPopup.indexOfSelectedItem)
-        let target = targetLanguages[min(index, targetLanguages.count - 1)].value
-        let body: [String: Any] = [
-            "audioPath": currentAudioPath,
-            "targetLanguage": target,
-            "translationEnabled": displayMode.translationEnabled,
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
-        var request = URLRequest(url: url, timeoutInterval: 5)
-        request.httpMethod = "POST"
-        request.httpBody = data
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        URLSession.shared.dataTask(with: request).resume()
-    }
-
-    func readMcpToken() -> String? {
-        guard let data = applicationData("mcp-token.json"),
-              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let token = raw["token"] as? String,
-              !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return token.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    func hostPort() -> String {
-        let port = ProcessInfo.processInfo.environment["YULU_UI_PORT"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return port.isEmpty ? "7777" : port
-    }
-
-    func connectWebSocket() {
-        guard !closing, webSocketTask == nil,
-              let url = URL(string: "ws://127.0.0.1:\(hostPort())/ws") else { return }
-        let task = webSocketSession.webSocketTask(with: url)
-        webSocketTask = task
-        task.resume()
-        let frame = "{\"type\":\"subscribe\",\"channel\":\"realtime-transcript\"}"
-        task.send(.string(frame)) { [weak self] error in
-            if error != nil { self?.webSocketFailed(task) }
-        }
-        receiveWebSocket(task)
-    }
-
-    func receiveWebSocket(_ task: URLSessionWebSocketTask) {
-        task.receive { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let message):
-                let data: Data?
-                switch message {
-                case .string(let text): data = text.data(using: .utf8)
-                case .data(let value): data = value
-                @unknown default: data = nil
-                }
-                if let data,
-                   let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    DispatchQueue.main.async { self.handleWebSocketFrame(frame) }
-                }
-                self.receiveWebSocket(task)
-            case .failure:
-                self.webSocketFailed(task)
-            }
-        }
-    }
-
-    func webSocketFailed(_ task: URLSessionWebSocketTask) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.webSocketTask === task, !self.closing else { return }
-            self.webSocketTask = nil
-            self.reconnectWorkItem?.cancel()
-            let item = DispatchWorkItem { [weak self] in self?.connectWebSocket() }
-            self.reconnectWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: item)
-        }
-    }
-
-    func handleWebSocketFrame(_ frame: [String: Any]) {
-        guard let channel = frame["channel"] as? String,
-              let payload = frame["payload"] as? [String: Any] else { return }
-        guard channel == "realtime-transcript", !currentAudioPath.isEmpty else { return }
-        if let stem = payload["stem"] as? String,
-           stem != ((currentAudioPath as NSString).deletingPathExtension as NSString).lastPathComponent { return }
-        let sequence = (payload["sequence"] as? NSNumber)?.intValue ?? lastSequence + 1
-        guard sequence > lastSequence else { return }
-        lastSequence = sequence
-        lastWebSocketEventAt = Date()
-        sourceLanguage = payload["sourceLanguage"] as? String ?? payload["language"] as? String ?? sourceLanguage
-        sourceLanguageLabel.stringValue = sourceLanguageTitle(sourceLanguage) + " →"
-        let stableSource = payload["sourceText"] as? String ?? ""
-        let partialSource = (payload["partialText"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let source = liveCaptionSourceText(
-            text: payload["text"] as? String,
-            stable: stableSource, partial: partialSource, current: sourceText
-        )
-        let incomingTranslation = (payload["translationText"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let translationStatus = payload["translationStatus"] as? String ?? "disabled"
-        let translation = liveCaptionTranslationText(
-            incoming: incomingTranslation,
-            status: translationStatus,
-            current: translationText
-        )
-        let nextUnavailableReason = liveCaptionUnavailableReason(
-            status: translationStatus,
-            reason: payload["translationUnavailableReason"] as? String
-        )
-        let sourceChanged = !source.isEmpty && source != sourceText
-        let nextTranslationFailed = translationStatus == "failed"
-        let translationChanged = translation != translationText || nextTranslationFailed != translationFailed ||
-            nextUnavailableReason != translationUnavailableReason
-        let layoutChanged = nextUnavailableReason.isEmpty != translationUnavailableReason.isEmpty
-        let warningCleared = unhealthy || !warningText.isEmpty
-        translationText = translation
-        translationFailed = nextTranslationFailed
-        translationUnavailableReason = nextUnavailableReason
-        if layoutChanged { layoutCaptionLabels() }
-        unhealthy = false
-        warningText = ""
-        if sourceChanged {
-            setSourceCaption(source)
-        } else if translationChanged || warningCleared {
-            if translationChanged { lastCaptionAt = Date() }
-            renderCaptions(animated: false)
-        }
-    }
-
-    func liveCaptionSourceText(text: String? = nil, stable: String, partial: String, current: String = "") -> String {
-        // The Host selects the current utterance; sourceText can contain a full
-        // transcript correction and must not be reconstructed as live subtitles.
-        if let text = text {
-            return boundedCaptionText(text, maxCharacters: captionLayoutCharacterLimit)
-        }
-        let stableText = boundedCaptionText(stable, maxCharacters: stableCaptionCharacterLimit)
-        let partialText = boundedCaptionText(partial, maxCharacters: partialCaptionCharacterLimit)
-        guard !partialText.isEmpty else { return stableText }
-        if isCaptionHesitation(partialText) {
-            return stableText.isEmpty
-                ? boundedCaptionText(current, maxCharacters: captionLayoutCharacterLimit)
-                : stableText
-        }
-        return partialText
-    }
-
-    func liveCaptionTranslationText(incoming: String, status: String, current: String) -> String {
-        if status == "disabled" || status == "unavailable" { return "" }
-        let incomingText = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
-        return incomingText.isEmpty ? current : incomingText
-    }
-
-    /// The Host sends a reason only with the "unavailable" status. A missing
-    /// reason still means nothing is being translated.
-    func liveCaptionUnavailableReason(status: String, reason: String?) -> String {
-        guard status == "unavailable" else { return "" }
-        let value = reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? "provider_off" : value
-    }
-
-    /// Caption translation sends nothing until it is explicitly turned on and
-    /// disclosed in Settings (ADR-011); say which step is missing.
-    func translationUnavailableNotice(_ reason: String) -> String {
-        switch reason {
-        case "":
-            return ""
-        case "needs_xai_audio":
-            return L("字幕翻译需要 xAI 转写引擎；本地转写的字幕留在本机", "Caption translation needs the xAI audio engine; local captions stay on this Mac")
-        case "needs_disclosure":
-            return L("字幕翻译待确认数据说明 · 设置 › 录音与摘要", "Review caption translation · Settings › Recording & summaries")
-        case "needs_connection":
-            return L("字幕翻译需要 xAI 连接 · 设置 › 连接", "Caption translation needs xAI · Settings › Connections")
-        default:
-            // "provider_off", or a reason this build does not know yet.
-            return L("字幕翻译未开启 · 设置 › 录音与摘要", "Caption translation is off · Settings › Recording & summaries")
-        }
-    }
-
-    func isCaptionHesitation(_ text: String) -> Bool {
-        let words = text.lowercased().components(separatedBy: CharacterSet.punctuationCharacters.union(.whitespacesAndNewlines))
-            .filter { !$0.isEmpty }
-        return !words.isEmpty && words.allSatisfy {
-            $0.range(of: "^(?:[嗯呃额唔呢]+|um+|uh+|erm+)$", options: .regularExpression) != nil
-        }
-    }
-
-    func boundedCaptionText(_ text: String, maxCharacters: Int) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard maxCharacters > 0 else { return "" }
-        let characters = Array(trimmed)
-        guard characters.count > maxCharacters else { return trimmed }
-        return "…" + String(characters.suffix(maxCharacters))
-    }
-
-    func setSourceCaption(_ value: String) {
-        let normalized = boundedCaptionText(value, maxCharacters: captionLayoutCharacterLimit)
-        guard !normalized.isEmpty, normalized != sourceText else { return }
-        sourceText = normalized
-        lastCaptionAt = Date()
-        renderCaptions(animated: false)
-    }
-
-    func sourceLanguageTitle(_ value: String) -> String {
-        switch value {
-        case "en": return L("英语", "English")
-        case "ja": return L("日语", "Japanese")
-        case "auto": return L("自动", "Auto")
-        default: return L("中文", "Chinese")
-        }
     }
 
     func audioDaemonStatus() -> [String: Any]? {
@@ -1417,10 +703,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func doStop() {
         guard !stopping, !closing else { return }
         stopping = true
-        recordingButton.stoppingState = true
-        recordingButton.isEnabled = false
-        waveView?.setAnimating(false)
-        showToolbar()
+        warningText = ""
+        pushPanelState()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let response = requestRecordingStop()
             DispatchQueue.main.async {
@@ -1430,8 +714,6 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.observeStopCompletion(pid: pid)
                 } else {
                     self.applyStopCompletion(response)
-                    self.renderCaptions(animated: true, warning: true)
-                    self.showToolbar()
                 }
             }
         }
@@ -1439,9 +721,6 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applyStopCompletion(_ response: [String: Any]) {
         stopping = false
-        recordingButton.stoppingState = false
-        recordingButton.isEnabled = true
-        waveView?.setAnimating(expanded && !closing)
         if response["ok"] as? Bool == true, response["state"] as? String == "completed" {
             warningText = ""
         } else if response["state"] as? String == "failed" {
@@ -1449,7 +728,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             warningText = L("无法确认停止状态，请检查录音后重试", "Stop could not be confirmed — check recording and retry")
         }
-        lastCaptionAt = Date()
+        pushPanelState()
     }
 
     private func observeStopCompletion(pid: Int) {
@@ -1468,10 +747,6 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
                 self.applyStopCompletion(response)
                 self.checkState()
-                if !self.warningText.isEmpty {
-                    self.renderCaptions(animated: true, warning: true)
-                    self.showToolbar()
-                }
             }
         }
     }
@@ -1479,9 +754,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func finishAndExit() {
         guard !closing else { return }
         closing = true
-        [timeTimer, stateTimer, captionTimer, levelTimer].forEach { $0?.invalidate() }
-        waveView?.setAnimating(false)
-        webSocketTask?.cancel(with: .normalClosure, reason: nil)
+        stateTimer?.invalidate()
+        reloadWorkItem?.cancel()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.12
             win.animator().alphaValue = 0
@@ -1494,10 +768,55 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let directory = URL(fileURLWithPath: (CommandLine.arguments[0] as NSString).deletingLastPathComponent)
         return directory.appendingPathComponent("yulu_ui/web/public/favicon.svg")
     }
-}
 
-extension Timer {
-    func addToCommonRunLoop() { RunLoop.current.add(self, forMode: .common) }
+    // MARK: - The page
+
+    func isPanelPage(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return url.scheme == "http" && url.host == "127.0.0.1" && url.port == port && url.path == "/live"
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        let url = navigationAction.request.url
+        if navigationAction.targetFrame?.isMainFrame != false, isPanelPage(url) {
+            decisionHandler(.allow)
+            return
+        }
+        // The panel only ever shows /live. A link in the notes opens in the
+        // browser, and only when the person clicked it.
+        if navigationAction.navigationType == .linkActivated, let url, url.scheme?.lowercased() == "https" {
+            NSWorkspace.shared.open(url)
+        }
+        decisionHandler(.cancel)
+    }
+
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let url = navigationAction.request.url, url.scheme?.lowercased() == "https",
+           url.user == nil, url.password == nil {
+            NSWorkspace.shared.open(url)
+        }
+        return nil
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        pushPanelState()
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard (error as NSError).code != NSURLErrorCancelled else { return }
+        scheduleReload()
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard (error as NSError).code != NSURLErrorCancelled else { return }
+        scheduleReload()
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        scheduleReload()
+    }
 }
 
 let arguments = CommandLine.arguments
@@ -1508,110 +827,54 @@ if arguments.contains("--stop") {
     exit(response["ok"] as? Bool == true ? 0 : 1)
 }
 if arguments.contains("--self-test") {
+    // Logic only: no window, WebView, Host or capture is touched.
     let app = AppDel(title: "test", path: "")
-    app.recordingButton = RecordingButton(frame: .zero)
     app.stopping = true
-    app.recordingButton.stoppingState = true
-    app.recordingButton.isEnabled = false
     app.applyStopCompletion(["ok": true, "state": "failed", "exit_status": 1])
-    assert(!app.stopping && !app.recordingButton.stoppingState && app.recordingButton.isEnabled)
-    assert(!app.warningText.isEmpty)
+    assert(!app.stopping && !app.warningText.isEmpty)
+    app.stopping = true
     app.applyStopCompletion(["ok": false, "error": "controls_unavailable"])
-    assert(!app.stopping && app.recordingButton.isEnabled && !app.warningText.isEmpty)
+    assert(!app.stopping && !app.warningText.isEmpty)
     app.applyStopCompletion(["ok": true, "state": "completed", "exit_status": 0])
     assert(app.warningText.isEmpty)
-    assert(app.realtimeTranscriptPath(audioPath: "/tmp/Memo_20260630_120000.wav") == "/tmp/Memo_20260630_120000.realtime.transcript.txt")
-    assert(app.captionLines("[Me] hello\n\n[Them] world\nplain\n") == [L("你  hello", "You  hello"), L("对方  world", "Them  world"), "plain"])
-    assert(app.formatElapsed(12 * 60 + 48) == "12:48")
-    assert(app.normalizedTargetLanguage("Japanese") == "日本語")
     assert(app.parseState(["recording": ["audio_path": "/tmp/a.wav"]]).recording == true)
-    assert(app.displayMode == .source && !app.displayMode.translationEnabled)
-    assert(app.liveCaptionSourceText(stable: "stable", partial: " partial ") == "partial")
-    assert(app.liveCaptionSourceText(stable: " stable ", partial: "  ") == "stable")
-    assert(app.liveCaptionSourceText(stable: "上一句", partial: "呢", current: "旧内容") == "上一句")
-    assert(app.liveCaptionSourceText(stable: "", partial: "呢", current: "上一句") == "上一句")
-    assert(app.liveCaptionSourceText(stable: "", partial: "新的内容", current: "上一句") == "新的内容")
-    assert(app.liveCaptionTranslationText(incoming: "", status: "pending", current: "Previous") == "Previous")
-    assert(app.liveCaptionTranslationText(incoming: " Next ", status: "ready", current: "Previous") == "Next")
-    assert(app.liveCaptionTranslationText(incoming: "Next", status: "disabled", current: "Previous") == "")
-    assert(app.liveCaptionTranslationText(incoming: "Next", status: "unavailable", current: "Previous") == "")
-    assert(app.liveCaptionUnavailableReason(status: "unavailable", reason: "needs_disclosure") == "needs_disclosure")
-    assert(app.liveCaptionUnavailableReason(status: "unavailable", reason: nil) == "provider_off")
-    assert(app.liveCaptionUnavailableReason(status: "ready", reason: "needs_disclosure") == "")
-    assert(app.translationUnavailableNotice("").isEmpty)
-    let unavailableNotices = ["provider_off", "needs_xai_audio", "needs_disclosure", "needs_connection"]
-        .map { app.translationUnavailableNotice($0) }
-    assert(unavailableNotices.allSatisfy { !$0.isEmpty } && Set(unavailableNotices).count == 4)
-    app.displayMode = .translation
-    app.translationUnavailableReason = "needs_disclosure"
-    assert(app.effectiveDisplayMode == .bilingual)
-    app.translationUnavailableReason = ""
-    assert(app.effectiveDisplayMode == .translation)
-    app.displayMode = .source
-    assert(app.isCaptionHesitation("嗯，呃……"))
-    for answer in ["对", "不", "不要", "好", "OK", "2", "嗯，好"] {
-        assert(app.liveCaptionSourceText(stable: "上一句", partial: answer) == answer)
-    }
-    assert(app.liveCaptionSourceText(text: "当前句子", stable: "历史一\n历史二", partial: "另一份草稿") == "当前句子")
-    assert(app.liveCaptionSourceText(text: "", stable: "历史字幕", partial: "嗯") == "")
-    let hugeCaption = String(repeating: "历史字幕", count: 5_000) + "最新一句"
-    let boundedCaption = app.boundedCaptionText(hugeCaption, maxCharacters: 240)
-    assert(Array(boundedCaption).count == 241 && boundedCaption.hasPrefix("…") && boundedCaption.hasSuffix("最新一句"))
-    let liveHugeCaption = app.liveCaptionSourceText(stable: hugeCaption, partial: "正在继续说话")
-    assert(Array(liveHugeCaption).count <= 362 && liveHugeCaption.hasSuffix("正在继续说话"))
-    let captionAttributes = app.captionString("caption", size: 30, color: .white, weight: .bold).attributes(at: 0, effectiveRange: nil)
-    assert((captionAttributes[.foregroundColor] as? NSColor)?.isEqual(NSColor.white) == true)
-    assert(captionAttributes[.shadow] == nil)
-    assert(captionAttributes[.backgroundColor] == nil)
-    assert(captionAttributes[.strokeColor] == nil && captionAttributes[.strokeWidth] == nil)
-    assert((captionAttributes[.paragraphStyle] as? NSParagraphStyle)?.lineBreakMode == .byWordWrapping)
-    let outlinedLabel = OutlinedCaptionLabel(frame: NSRect(x: 0, y: 0, width: 400, height: 66))
-    outlinedLabel.attributedStringValue = app.captionString("caption", size: 30, color: .white, weight: .bold)
-    let outlineAttributes = outlinedLabel.outlineAttributedStringValue.attributes(at: 0, effectiveRange: nil)
-    assert((outlineAttributes[.strokeWidth] as? NSNumber)?.doubleValue == 6.0)
-    assert((outlineAttributes[.strokeColor] as? NSColor) == NSColor.black)
-    let longCaption = "这是一段特意写得非常长的实时字幕，用来验证画面不会在第一行末尾截断，而且最新说出的文字依然完整保留"
-    let visibleLongCaption = app.visibleCaptionText(longCaption, size: 30, weight: .bold, width: 360)
-    assert(visibleLongCaption.hasPrefix("…"))
-    assert(visibleLongCaption.hasSuffix("最新说出的文字依然完整保留"))
-    let sourceCaptionFrame = app.sourceCaptionFrame(in: NSRect(x: 0, y: 0, width: 900, height: 176))
-    assert(sourceCaptionFrame.height >= NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 30, weight: .bold)) * 2 + 8)
-    assert(sourceCaptionFrame.minY == 16)
-    let shortScreenOffset = app.defaultBottomOffset(in: NSRect(x: 0, y: 0, width: 900, height: 431))
-    assert(shortScreenOffset > 34 && shortScreenOffset < 35)
-    let compactToolbar = app.toolbarFrame(compact: true, in: NSRect(x: 0, y: 0, width: 900, height: 176))
-    assert(compactToolbar.width == compactToolbarWidth)
-    let status: [String: Any] = ["recording": true, "file": "/tmp/meeting.wav", "micLevel": 0, "systemLevel": 0.1]
-    assert(CaptionWaveView.audioLevel(status, expectedPath: "/tmp/meeting.wav") > 0.5)
-    assert(CaptionWaveView.audioLevel(status, expectedPath: "/tmp/other.wav") == 0)
-    assert(CaptionWaveView.audioLevel(nil, expectedPath: "/tmp/meeting.wav") == 0)
-    // Exercise the real WebSocket -> label path in original-only mode, without
-    // opening windows or connecting to the user's capture/Host.
-    let replay = AppDel(title: "caption replay", path: "")
-    replay.root = HoverRootView(frame: NSRect(x: 0, y: 0, width: 900, height: 176))
-    replay.sourceLanguageLabel = NSTextField(labelWithString: "")
-    replay.sourceLabel = OutlinedCaptionLabel(frame: sourceCaptionFrame)
-    replay.translationLabel = OutlinedCaptionLabel(frame: .zero)
-    let replayDir = FileManager.default.temporaryDirectory.appendingPathComponent("yulu-caption-replay-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: replayDir, withIntermediateDirectories: true)
-    replay.currentAudioPath = replayDir.appendingPathComponent("caption.wav").path
-    let payload: [String: Any] = [
-        "stem": "caption", "sequence": 1, "text": "当前句子", "sourceText": "旧句子\n旧句子",
-        "partialText": "嗯", "translationText": "Current sentence", "translationStatus": "disabled"
-    ]
-    replay.handleWebSocketFrame(["channel": "realtime-transcript", "payload": payload])
-    assert(replay.sourceText == "当前句子" && replay.translationLabel.isHidden)
-    let fallbackPath = replay.realtimeTranscriptPath(audioPath: replay.currentAudioPath)
-    try "旧句子\n旧句子\n".write(toFile: fallbackPath, atomically: true, encoding: .utf8)
-    replay.lastWebSocketEventAt = Date(timeIntervalSinceNow: -10)
-    replay.webSocketTask = replay.webSocketSession.webSocketTask(with: URL(string: "ws://127.0.0.1:1/ws")!)
-    replay.updateCaptionFallback()
-    assert(replay.sourceText == "当前句子") // no replay on an ordinary pause
-    replay.webSocketTask = nil
-    replay.updateCaptionFallback()
-    assert(replay.sourceText == "旧句子") // one paragraph if the connection really failed
-    replay.webSocketSession.invalidateAndCancel()
-    try FileManager.default.removeItem(at: replayDir)
+    assert(app.parseState(["recording": [String: Any]()]).recording == false)
+    assert(app.parseState(["recording": false]).recording == false)
+
+    assert(PanelAction.parse(["action": "collapse"]) == .collapse)
+    assert(PanelAction.parse(["action": "drag"]) == .drag)
+    assert(PanelAction.parse(["action": "stop"]) == .stop)
+    assert(PanelAction.parse(["action": "appearance", "dark": true] as [String: Any]) == .appearance(dark: true))
+    assert(PanelAction.parse(["action": "appearance"]) == nil)
+    assert(PanelAction.parse(["action": "open", "route": "/settings/recording#live-notes"]) == .open("/settings/recording#live-notes"))
+    assert(PanelAction.parse(["action": "open", "route": "https://example.com"]) == nil)
+    assert(PanelAction.parse(["action": "open", "route": "/settings/../../etc"]) == nil)
+    assert(PanelAction.parse(["action": "open", "route": "//example.com/settings"]) == nil)
+    assert(PanelAction.parse(["action": "resize"]) == nil)
+    assert(PanelAction.parse("collapse") == nil)
+    assert(isAllowedPanelRoute("/inbox"))
+    assert(isAllowedPanelRoute("/settings/connections#ai-connections"))
+    assert(!isAllowedPanelRoute("/live"))
+    assert(!isAllowedPanelRoute("/settings?x=1"))
+
+    let script = panelStateScript(stopping: true, warning: "录音连接异常</script>'")
+    assert(script.hasPrefix("window.__yuluPanelState = {"))
+    assert(script.contains("\"stopping\":true"))
+    assert(script.contains("CustomEvent('yulu-panel'"))
+    assert(panelStateScript(stopping: false, warning: "").contains("\"warning\":null"))
+
+    let screen = NSRect(x: 0, y: 0, width: 1440, height: 875)
+    let frame = defaultPanelFrame(in: screen)
+    assert(frame.width == panelWidth && frame.height == panelMaxHeight)
+    assert(frame.maxX == screen.maxX - screenMargin && frame.maxY == screen.maxY - screenMargin)
+    let short = defaultPanelFrame(in: NSRect(x: 0, y: 0, width: 1280, height: 500))
+    assert(short.height == 500 - screenMargin * 2 && short.minY == screenMargin)
+    let icon = collapsedOrigin(fromPanel: frame)
+    assert(icon.x == frame.maxX - collapsedWindowSize && icon.y == frame.maxY - collapsedWindowSize)
+    let iconFrame = NSRect(origin: icon, size: NSSize(width: collapsedWindowSize, height: collapsedWindowSize))
+    assert(expandedOrigin(fromIcon: iconFrame, panelSize: frame.size) == frame.origin)
+    let clamped = clampedOrigin(NSPoint(x: 5_000, y: -50), size: frame.size, in: screen)
+    assert(clamped.x == screen.maxX - screenMargin - frame.width && clamped.y == screenMargin)
     print("recorder_status self-test ok")
     exit(0)
 }

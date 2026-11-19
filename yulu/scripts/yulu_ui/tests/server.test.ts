@@ -487,14 +487,6 @@ describe("server", () => {
     const stopSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "stop").mockResolvedValueOnce(null);
     const cancelSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "cancel").mockResolvedValueOnce();
     const cancelPreview = vi.spyOn(DictationPreview.prototype, "cancel").mockImplementation(() => {});
-    const optionsSpy = vi.spyOn(RealtimeTranscriptionCoordinator.prototype, "updateOptions").mockResolvedValueOnce({
-      status: "transcribing",
-      stem: "Realtime_20260714_160000",
-      language: "zh",
-      text: "",
-      coveredMs: 0,
-      trusted: false,
-    });
     const headers = { "Content-Type": "application/json", "Authorization": "Bearer test-token" };
     try {
       for (const action of ["start", "stop", "cancel"]) {
@@ -529,19 +521,18 @@ describe("server", () => {
       expect(cancelSpy).toHaveBeenCalledExactlyOnceWith(audioPath);
       expect(cancelPreview).toHaveBeenCalledExactlyOnceWith("capture");
 
+      // Live-caption translation was retired (ADR-012); its options endpoint is gone.
       const options = await fetch(`${env.baseUrl}/api/recordings/realtime/options`, {
         method: "POST",
         headers,
         body: JSON.stringify({ audioPath, targetLanguage: "日本語", translationEnabled: true }),
       });
-      expect(options.status).toBe(200);
-      expect(optionsSpy).toHaveBeenCalledWith({ audioPath, targetLanguage: "日本語", translationEnabled: true });
+      expect(options.status).toBe(404);
     } finally {
       startSpy.mockRestore();
       stopSpy.mockRestore();
       cancelSpy.mockRestore();
       cancelPreview.mockRestore();
-      optionsSpy.mockRestore();
     }
   });
 

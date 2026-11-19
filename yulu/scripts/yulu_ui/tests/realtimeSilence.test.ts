@@ -51,9 +51,8 @@ describe("realtime silence filtering through the Host", () => {
     const pubsub = new PubSub<AppChannels>();
     const events: AppChannels["realtime-transcript"][] = [];
     pubsub.subscribe("realtime-transcript", (event) => events.push(event));
-    const translate = vi.fn(async (text: string) => `Translated: ${text}`);
     const coordinator = new RealtimeTranscriptionCoordinator({ pubsub, streaming: client,
-      transcribe: vi.fn(), translate, defaultTranslationEnabled: true, pollMs: 60_000 });
+      transcribe: vi.fn(), pollMs: 60_000 });
     try {
       await coordinator.start({ audioPath, title: "Fixture", language: "en" });
       const result = await coordinator.stop(audioPath);
@@ -61,8 +60,6 @@ describe("realtime silence filtering through the Host", () => {
       expect(JSON.stringify(events)).not.toContain("invented");
       const sidecar = audioPath.replace(/\.wav$/, ".realtime.transcript.txt");
       expect(existsSync(sidecar) ? readFileSync(sidecar, "utf8").trim() : "").toBe(accepted);
-      if (accepted) expect(translate).toHaveBeenCalledWith(accepted, "English", []);
-      else expect(translate).not.toHaveBeenCalled();
     } finally {
       await coordinator.close(); connect.mockRestore(); rmSync(root, { recursive: true, force: true });
     }

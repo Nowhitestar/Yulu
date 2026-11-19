@@ -500,25 +500,29 @@ describe("HostStore", () => {
     expect(store!.getDictationTextDisclosure("xai")).toBeNull();
   });
 
-  it("keeps the caption translation disclosure separate from the dictation receipt", () => {
-    createStore();
-    store!.recordDictationTextDisclosure("xai", "xai-dictation-text-v1");
-    expect(store!.getCaptionTranslationDisclosure("xai")).toBeNull();
-    const receipt = store!.recordCaptionTranslationDisclosure(" XAI ", "xai-caption-text-v1");
-    expect(receipt).toEqual({
-      provider: "xai",
-      disclosureVersion: "xai-caption-text-v1",
-      decision: "accepted",
-      decidedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
-    });
-    expect(store!.getCaptionTranslationDisclosure("xai")).toEqual(receipt);
-    expect(() => store!.recordCaptionTranslationDisclosure("not a provider", "v1")).toThrow(/identity is invalid/);
-    store!.clearDictationTextDisclosure("xai");
-    expect(store!.getCaptionTranslationDisclosure("xai")).toEqual(receipt);
-    store!.clearCaptionTranslationDisclosure("xai");
-    expect(store!.getCaptionTranslationDisclosure("xai")).toBeNull();
+  it("drops the retired caption translation disclosure so it can never authorize anything", () => {
+    root = mkdtempSync(join(tmpdir(), "yulu-host-store-"));
+    const dbPath = join(root, "host.sqlite");
+    const previous = new Database(dbPath);
+    previous.exec(`
+      CREATE TABLE caption_translation_disclosures (
+        provider TEXT PRIMARY KEY, disclosure_version TEXT NOT NULL,
+        decision TEXT NOT NULL, decided_at TEXT NOT NULL
+      );
+      INSERT INTO caption_translation_disclosures VALUES ('xai', 'xai-caption-text-v1', 'accepted', '2026-07-01T00:00:00.000Z');
+    `);
+    previous.close();
+    store = new HostStore(dbPath);
+    store.close();
+    store = undefined;
+    const reopened = new Database(dbPath, { readonly: true });
+    try {
+      expect(reopened.prepare("SELECT name FROM sqlite_master WHERE name = 'caption_translation_disclosures'").get())
+        .toBeUndefined();
+    } finally {
+      reopened.close();
+    }
   });
-
   it("migrates the legacy readiness-reason constraint without projecting malformed history", () => {
     root = mkdtempSync(join(tmpdir(), "yulu-host-store-"));
     const databasePath = join(root, "host.sqlite");

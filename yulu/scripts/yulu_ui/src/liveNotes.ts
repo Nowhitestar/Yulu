@@ -41,6 +41,8 @@ export interface LiveNotesSnapshot {
   language: LiveNotesLanguage;
   markdown: string;
   myNotes: MyNote[];
+  /** When live transcription of this recording started. */
+  startedAt: string;
   updatedAt: string | null;
 }
 
@@ -154,6 +156,7 @@ interface Session {
   audioPath: string;
   stem: string;
   title: string;
+  startedAt: string;
   language: LiveNotesLanguage;
   languageDirty: boolean;
   transcript: string;
@@ -233,7 +236,7 @@ export class LiveNotesService {
   }
 
   /** A meeting recording started live transcription. */
-  started(input: { audioPath: string; stem: string; title: string }): void {
+  started(input: { audioPath: string; stem: string; title: string; startedAt?: string }): void {
     this.close();
     let language: LiveNotesLanguage = "zh";
     try {
@@ -245,6 +248,7 @@ export class LiveNotesService {
       audioPath: input.audioPath,
       stem: input.stem,
       title: input.title,
+      startedAt: input.startedAt ?? new Date(this.now()).toISOString(),
       language: saved.language ?? language,
       languageDirty: false,
       transcript: "",
@@ -463,6 +467,7 @@ export class LiveNotesService {
       language: session.language,
       markdown: session.markdown,
       myNotes: session.myNotes,
+      startedAt: session.startedAt,
       updatedAt: session.updatedAt,
     };
   }

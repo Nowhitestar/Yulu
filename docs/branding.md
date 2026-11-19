@@ -6,8 +6,8 @@ This file is the contract for anything that puts the Yulu name on it: README hea
 
 - **English wordmark**: `Yulu` (capital Y, lowercase rest). Never `YULU`, `yulu`, `Yu Lu`, or `yu-lu`.
 - **Chinese wordmark**: `语录`. Always traditional or simplified depending on the surrounding text — do not mix.
-- **Current README descriptor (English)**: *Native meeting capture. Live captions. Agent-ready memory.*
-- **Current README descriptor (中文)**: 「原生录制，实时字幕，让每场会议成为 Agent 可用的记忆。」
+- **Current README descriptor (English)**: *Native meeting capture. Live notes. Agent-ready memory.*
+- **Current README descriptor (中文)**: 「原生录制，实时笔记，让每场会议成为 Agent 可用的记忆。」
 - **Pronunciation**: *yǔ lù* (Mandarin) — closest English approximation: "yoo-loo".
 - **Etymology in copy** (use once per surface, not on every page):
   > Yulu (语录, *yǔ lù*) is the Chinese word for "recorded sayings" — the genre that produced *The Analects of Confucius*.

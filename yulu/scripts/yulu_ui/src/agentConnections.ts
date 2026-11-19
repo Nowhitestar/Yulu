@@ -1401,7 +1401,6 @@ export class AgentConnectionCenter {
     this.host.clearCloudTranscriptionConsent();
     this.host.clearSummaryDataPathDisclosure("xai");
     this.host.clearDictationTextDisclosure("xai");
-    this.host.clearCaptionTranslationDisclosure("xai");
     this.host.clearLiveNotesDisclosure("xai");
     this.host.clearAgentConnectionDisclosures(DIRECT_XAI_ID);
     this.host.deleteAgentConnectionRecord(DIRECT_XAI_ID);

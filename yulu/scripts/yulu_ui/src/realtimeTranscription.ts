@@ -21,8 +21,6 @@ import type {
 } from "./localCaptionEngine.js";
 import type { AppChannels, PubSub } from "./pubsub.js";
 import { speculativeDictationText, type DictationPreview } from "./dictationPreview.js";
-import type { CaptionTranslationUnavailableReason } from "./captionPreferences.js";
-import { CaptionTranslationUnavailableError } from "./captionTranslation.js";
 
 export type TranscriptionLanguage = "zh" | "en" | "ja" | "auto";
 
@@ -65,38 +63,13 @@ interface Session {
   pendingPcm: Buffer;
   overlapPcm: Buffer;
   sourceText: string;
-  sourceSegments: string[];
   sequence: number;
   startedAt: string;
-  /** The overlay asked for bilingual or translation-only captions. */
-  translationRequested: boolean;
-  /** Set while a requested translation cannot run; nothing is sent then. */
-  translationUnavailableReason: CaptionTranslationUnavailableReason | null;
-  /** Translation runs: requested and currently available. */
-  translationEnabled: boolean;
-  targetLanguage: string;
-  translationText: string;
-  translationStatus: TranslationStatus;
-  translationGeneration: number;
-  translationRunning: boolean;
-  queuedTranslation: TranslationRequest | null;
   timer: ReturnType<typeof setInterval> | null;
   pump: Promise<void> | null;
   error: string | null;
 }
 
-type TranslationStatus = "disabled" | "pending" | "ready" | "failed" | "unavailable";
-
-export type CaptionTranslationReadiness =
-  | { available: true }
-  | { available: false; reason: CaptionTranslationUnavailableReason };
-
-interface TranslationRequest {
-  generation: number;
-  sourceText: string;
-  context: string[];
-  targetLanguage: string;
-}
 
 const PCM_BYTES_PER_MS = 32; // 16 kHz, mono, signed 16-bit PCM
 const DEFAULT_MIN_SEGMENT_MS = 1_200;
@@ -500,15 +473,9 @@ export class RealtimeTranscriptionCoordinator {
     dictationPreview?: DictationPreview;
     stabilize?: (text: string) => string;
     warm?: () => Promise<void>;
-    translate?: (sourceText: string, targetLanguage: string, context: string[]) => Promise<string>;
-    /** Whether a requested translation may run now. Must be cheap; it is read
-     * when the overlay mode changes and again for every new caption. */
-    translationAvailability?: () => CaptionTranslationReadiness;
-    defaultTargetLanguage?: () => string;
-    defaultTranslationEnabled?: boolean;
     /** Live notes follow meeting sessions only, never dictation. */
     liveNotes?: {
-      started(input: { audioPath: string; stem: string; title: string }): void;
+      started(input: { audioPath: string; stem: string; title: string; startedAt: string }): void;
       transcript(input: { audioPath: string; stableText: string }): void;
       finished(input: { audioPath: string; stableText: string; cancelled?: boolean }): Promise<void>;
     };
@@ -601,31 +568,21 @@ export class RealtimeTranscriptionCoordinator {
       pendingPcm: Buffer.alloc(0),
       overlapPcm: Buffer.alloc(0),
       sourceText: "",
-      sourceSegments: [],
       sequence: 0,
       startedAt: new Date().toISOString(),
-      translationRequested: Boolean(this.options.translate && this.options.defaultTranslationEnabled),
-      translationUnavailableReason: null,
-      translationEnabled: false,
-      targetLanguage: this.options.defaultTargetLanguage?.().trim() || "English",
-      translationText: "",
-      translationStatus: "disabled",
-      translationGeneration: 0,
-      translationRunning: false,
-      queuedTranslation: null,
       timer: null,
       pump: null,
       error: null,
     };
-    this.refreshTranslation(session);
-    session.translationStatus = this.translationStatusFor(session);
     rmSync(sidecarPath(audioPath), { force: true });
     rmSync(coveragePath(audioPath), { force: true });
     this.active = session;
     if (session.dictationSessionId) this.options.dictationPreview?.start(session.dictationSessionId);
     if (!session.dictation) {
       try {
-        this.options.liveNotes?.started({ audioPath: session.audioPath, stem: session.stem, title: session.title });
+        this.options.liveNotes?.started({
+          audioPath: session.audioPath, stem: session.stem, title: session.title, startedAt: session.startedAt,
+        });
       } catch { /* live notes never block transcription */ }
     }
     void this.options.warm?.().catch(() => {});
@@ -641,36 +598,6 @@ export class RealtimeTranscriptionCoordinator {
       session.timer = setInterval(() => { void this.queuePump(false); }, this.pollMs);
       session.timer.unref();
     }
-  }
-
-  async updateOptions(input: {
-    audioPath: string;
-    targetLanguage: string;
-    translationEnabled: boolean;
-  }): Promise<AppChannels["realtime-transcript"]> {
-    const session = this.active;
-    if (!session || realpathSync(input.audioPath) !== session.audioPath) {
-      throw new Error("realtime transcription session is not active");
-    }
-    const requested = Boolean(this.options.translate && input.translationEnabled);
-    const targetLanguage = input.targetLanguage.trim() || session.targetLanguage;
-    const changed = requested !== session.translationRequested || targetLanguage !== session.targetLanguage;
-    session.translationRequested = requested;
-    session.targetLanguage = targetLanguage;
-    // Re-selecting a mode also re-reads availability, so a user who enabled
-    // translation in Settings during the recording sees it take effect.
-    if (!this.refreshTranslation(session) && !changed) {
-      return this.message(session, "transcribing", false);
-    }
-    session.translationText = "";
-    session.translationStatus = this.translationStatusFor(session);
-    session.translationGeneration += 1;
-    session.queuedTranslation = null;
-    if (session.translationEnabled && session.sourceText) {
-      this.queueTranslation(session);
-      return this.message(session, "transcribing", false);
-    }
-    return this.publish(session, "transcribing", false);
   }
 
   async stop(audioPath?: string, timeoutMs = 35_000): Promise<AppChannels["realtime-transcript"] | null> {
@@ -720,8 +647,6 @@ export class RealtimeTranscriptionCoordinator {
       void this.options.liveNotes?.finished({ audioPath: session.audioPath, stableText: session.text })
         .catch(() => {});
     }
-    session.translationGeneration += 1;
-    session.queuedTranslation = null;
     session.sequence += 1;
     const result = this.message(session, session.error ? "failed" : "finished", trusted, reason);
     this.options.pubsub.publish("realtime-transcript", result);
@@ -746,8 +671,6 @@ export class RealtimeTranscriptionCoordinator {
       session.error = "realtime transcription cancelled";
       if (session.timer) clearInterval(session.timer);
       session.timer = null;
-      session.translationGeneration += 1;
-      session.queuedTranslation = null;
       this.writeCoverage(session, this.durationMs(session), false, session.error, true);
       if (!session.dictation) {
         void this.options.liveNotes?.finished({ audioPath: session.audioPath, stableText: session.text, cancelled: true })
@@ -893,7 +816,7 @@ export class RealtimeTranscriptionCoordinator {
         }
         session.stableSegments.push(candidate);
         session.chunks += 1;
-        // Full-history corrections are for persistence, not caption translation.
+        // Full-history corrections are for persistence, not the live caption.
         const caption = update.stableCaption === undefined ? text : update.stableCaption?.text;
         if (caption && !isCaptionHesitation(caption)) {
           const display = cleanTranscriptText(this.options.stabilize?.(caption) ?? caption);
@@ -914,20 +837,9 @@ export class RealtimeTranscriptionCoordinator {
       atomicWrite(sidecarPath(session.audioPath), session.text ? `${session.text}\n` : "");
       this.notifyLiveNotes(session);
     }
-    let availabilityChanged = false;
-    if (accepted.length > 0) {
-      session.sourceText = accepted.join("\n");
-      session.sourceSegments.push(session.sourceText);
-      session.sourceSegments = session.sourceSegments.slice(-3);
-      availabilityChanged = this.refreshTranslation(session);
-      session.translationStatus = this.translationStatusFor(session);
-      session.translationGeneration += 1;
-      if (session.translationEnabled) this.queueTranslation(session);
-    }
+    if (accepted.length > 0) session.sourceText = accepted.join("\n");
     this.writeCoverage(session, this.durationMs(session), false, null, false);
-    if (!session.translationEnabled && (availabilityChanged || this.displayText(session) !== previousDisplay)) {
-      this.publish(session, "transcribing", false);
-    }
+    if (this.displayText(session) !== previousDisplay) this.publish(session, "transcribing", false);
   }
 
   private displayText(session: Session): string {
@@ -980,16 +892,10 @@ export class RealtimeTranscriptionCoordinator {
         );
         if (sourceText) {
           session.sourceText = sourceText;
-          session.sourceSegments.push(sourceText);
-          session.sourceSegments = session.sourceSegments.slice(-3);
           session.text = cleanTranscriptText([session.text, sourceText].filter(Boolean).join("\n"));
           atomicWrite(sidecarPath(session.audioPath), session.text + "\n");
           this.notifyLiveNotes(session);
-          this.refreshTranslation(session);
-          session.translationStatus = this.translationStatusFor(session);
-          session.translationGeneration += 1;
-          if (session.translationEnabled) this.queueTranslation(session);
-          else this.publish(session, "transcribing", false);
+          this.publish(session, "transcribing", false);
         }
         session.chunks += 1;
       } catch (error) {
@@ -1005,102 +911,6 @@ export class RealtimeTranscriptionCoordinator {
       session.overlapPcm = segment.subarray(Math.max(0, speechEnd - overlapBytes), speechEnd);
       this.writeCoverage(session, this.durationMs(session), false, null, false);
       if (!force && session.pendingPcm.length === 0) return;
-    }
-  }
-
-  /** Re-read whether a requested translation may run. Returns true when the
-   * effective state or reason changed; a change discards queued work. */
-  private refreshTranslation(session: Session): boolean {
-    let reason: CaptionTranslationUnavailableReason | null = null;
-    if (session.translationRequested) {
-      try {
-        const readiness = this.options.translationAvailability?.() ?? { available: true as const };
-        reason = readiness.available ? null : readiness.reason;
-      } catch {
-        // A selection that cannot be read is not an explicit opt-in.
-        reason = "provider_off";
-      }
-    }
-    const enabled = session.translationRequested && reason === null;
-    const changed = enabled !== session.translationEnabled || reason !== session.translationUnavailableReason;
-    session.translationUnavailableReason = reason;
-    if (enabled !== session.translationEnabled) {
-      session.translationEnabled = enabled;
-      session.translationText = "";
-      session.translationGeneration += 1;
-      session.queuedTranslation = null;
-    }
-    if (!enabled) session.translationStatus = this.translationStatusFor(session);
-    return changed;
-  }
-
-  /** Status before a translation result: queued when it runs, otherwise why not. */
-  private translationStatusFor(session: Session): TranslationStatus {
-    if (session.translationEnabled) return "pending";
-    return session.translationRequested ? "unavailable" : "disabled";
-  }
-
-  private queueTranslation(session: Session): void {
-    if (!this.options.translate || !session.translationEnabled || !session.sourceText) return;
-    session.queuedTranslation = {
-      generation: session.translationGeneration,
-      sourceText: session.sourceText,
-      context: session.sourceSegments.slice(-3, -1),
-      targetLanguage: session.targetLanguage,
-    };
-    session.translationStatus = "pending";
-    this.publish(session, "transcribing", false);
-    if (!session.translationRunning) void this.drainTranslations(session);
-  }
-
-  private async drainTranslations(session: Session): Promise<void> {
-    const translate = this.options.translate;
-    if (!translate || session.translationRunning) return;
-    session.translationRunning = true;
-    try {
-      while (this.active === session && session.queuedTranslation) {
-        const request = session.queuedTranslation;
-        session.queuedTranslation = null;
-        try {
-          const translated = cleanTranscriptText(await translate(
-            request.sourceText,
-            request.targetLanguage,
-            request.context,
-          ));
-          if (
-            this.active === session &&
-            session.translationEnabled &&
-            request.generation === session.translationGeneration
-          ) {
-            session.translationText = translated;
-            session.translationStatus = translated ? "ready" : "failed";
-            this.publish(session, "transcribing", false);
-          }
-        } catch (error) {
-          if (
-            this.active === session &&
-            session.translationEnabled &&
-            request.generation === session.translationGeneration
-          ) {
-            session.translationText = "";
-            if (error instanceof CaptionTranslationUnavailableError) {
-              // Availability changed after the caption was queued. Nothing was
-              // sent; the next caption checks again.
-              session.translationEnabled = false;
-              session.translationUnavailableReason = error.reason;
-              session.translationStatus = "unavailable";
-              session.translationGeneration += 1;
-              session.queuedTranslation = null;
-            } else {
-              session.translationStatus = "failed";
-            }
-            this.publish(session, "transcribing", false);
-          }
-        }
-      }
-    } finally {
-      session.translationRunning = false;
-      if (this.active === session && session.queuedTranslation) void this.drainTranslations(session);
     }
   }
 
@@ -1149,10 +959,6 @@ export class RealtimeTranscriptionCoordinator {
       sequence: session.sequence,
       sourceText: session.sourceText,
       sourceLanguage: session.language,
-      translationText: session.translationText,
-      targetLanguage: session.targetLanguage,
-      translationStatus: session.translationStatus,
-      translationUnavailableReason: session.translationEnabled ? null : session.translationUnavailableReason,
       startedAt: session.startedAt,
       emittedAt: new Date().toISOString(),
       reason,

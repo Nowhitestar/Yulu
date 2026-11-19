@@ -264,15 +264,16 @@ Successful xAI artifacts record the exact provider/model and storage-disabled
 contract without persisting instructions, transcript content, or credentials in
 provenance.
 
-## Realtime captions
+## Live notes panel
 
-Starting a recording opens a movable subtitle overlay near the bottom center of
-the active display. It shows source text by default. Hover over the capsule to
-choose a target language or switch to `双语` (bilingual) or `仅翻译` (translation
-only).
+Starting a meeting recording opens the live notes panel: a tall glass card on the
+right edge of the active display (ADR-012). It shows the notes Yulu writes during
+the meeting, your own notes, and one line to add another. Live notes are off
+until you turn them on (see [Live notes](#live-notes)); the panel still takes
+your own notes either way.
 
 The default audio engine is the local sherpa-onnx Paraformer INT8 model, which
-handles both mutable realtime captions and the durable final transcript. Open
+handles both the live transcript and the durable final transcript. Open
 Settings → Transcription to install, test, or remove it. The first install
 downloads about 1 GB and keeps about 320 MB; it has no usage fee and does not
 upload audio. Users may instead explicitly select xAI cloud speech-to-text, which
@@ -315,55 +316,78 @@ attempt. The snapshot contains no OAuth token or API key. An unbound attempt
 created before this snapshot existed must be recorded again; Yulu never fills
 missing authority from the current Settings.
 
-Drag the six-dot handle to reposition the overlay. Use the down arrow to collapse
-it to the breathing Yulu logo, then click the logo to restore captions. Click the
-`录制中` control to stop; the overlay disappears after capture stops.
+Drag the empty part of the panel's header to move it. The down arrow collapses it
+to the breathing Yulu logo in the same corner; click the logo to open it again,
+or drag the logo to move it. The red square stops the recording; the panel
+closes after capture stops, and a failed or unconfirmed stop shows a notice in
+the panel. Typing a note does not bring Yulu to the front, so the meeting app
+keeps its place. The panel opens only Yulu's own Settings and Inbox pages, and a
+link inside the notes opens in the browser only when you click it.
 The model cannot be removed while a recording is active.
 
-### Caption translation
+### Live notes
 
-Caption translation is off by default and sends nothing until you turn it on
-(ADR-011). It needs all of the following:
+Live notes are off by default and send nothing until you turn them on. They
+need:
 
-1. The `xai` audio engine. With the `local` engine, captions stay on the Mac.
+1. In Settings → Recording & summaries, **Live notes** turned on, which first
+   shows the `xai-live-notes-v1` disclosure.
 2. A connected xAI account in Settings → Connections.
-3. In Settings → Recording & summaries → Transcription, **Translate captions
-   with xAI** turned on, which first shows the `xai-caption-text-v1` disclosure.
 
-Choosing `双语` or `仅翻译` in the overlay requests translation for that
-recording only. It does not grant consent.
+They work with either audio engine. While a meeting is recorded, the Host sends
+xAI the transcript text added since the last update (at most 12,000
+characters), a short recent window for context, the notes so far, your own
+notes, the chosen language and the glossary entries that match. Audio is never
+sent for live notes, and response storage is turned off. The text includes
+what other people in the meeting say. The request uses the exact
+`transcription.live_notes.model` (default `grok-4.20-0309-non-reasoning`). It
+has no tools or history.
 
-While a translated mode is shown, the Host sends each new caption to xAI as a
-separate request. A request contains the caption, up to two earlier captions as
-read-only context, the target language, and glossary entries that match the
-caption. It uses the exact `transcription.captions.translation_model` with
-response storage turned off, and Yulu does not save the translation. Captions include what other
-people in the meeting say. Only one request runs at a time, and a newer caption
-replaces one that is still waiting. Turning on caption translation does not turn
-on dictation cleanup, and the dictation switch does not turn on caption
-translation.
+An update runs when at least 160 new characters arrived and 45 seconds have
+passed since the last one, or after 90 seconds with any new text. A note you add
+starts one as soon as 20 seconds have passed since the last update, and a final
+update runs when the recording stops.
+A changed section is briefly highlighted. A failed update keeps the earlier
+notes and shows a quiet line; the next update is a new request, never another
+model or provider. Notes can include lists, tables and Mermaid diagrams, which
+are drawn on the Mac.
 
-If a translated mode is chosen but translation cannot run, the Host sends
-nothing. The overlay keeps the source captions and shows the reason in place of
-the translation. `仅翻译` falls back to source text with the notice below it.
+Choose `中` or `EN` in the panel's header to write the notes in Chinese or
+English; switching rewrites them in the other language. The default comes from
+`transcription.live_notes.language`, or the interface language.
 
-| Overlay notice | Cause | Fix |
+Your own notes are plain text, up to 500 characters each and 200 per
+recording. They are saved on the Mac with their time whether or not live notes
+are on. When live notes are on they inform each update, and every Summary
+Provider receives them with the transcript as data, never as instructions.
+
+When live notes cannot run, the Host sends nothing and the panel says which
+step is missing:
+
+| Panel notice | Cause | Fix |
 |---|---|---|
-| `字幕翻译未开启` / "Caption translation is off" | `translation_provider` is `none` | Turn on **Translate captions with xAI** |
-| `字幕翻译需要 xAI 转写引擎` / "needs the xAI audio engine" | The audio engine is `local` | Select the `xai` audio engine |
-| `字幕翻译待确认数据说明` / "Review caption translation" | The caption disclosure is not accepted, for example after the xAI connection was removed | Review and accept it in Transcription settings |
-| `字幕翻译需要 xAI 连接` / "needs xAI" | No xAI credential is connected | Connect xAI in Settings → Connections |
+| `实时笔记未开启` / "Live notes are off" | `live_notes.provider` is `none` | Turn on **Live notes** in Settings → Recording & summaries |
+| "…确认数据说明" / "Review how meeting text is sent to xAI" | The disclosure is not accepted, for example after the xAI connection was removed | Review and accept it in Settings → Recording & summaries |
+| "…连接 xAI" / "Connect xAI" | No xAI credential is connected | Connect xAI in Settings → Connections |
 
-The Host checks these conditions again for every new caption. A change in
-Settings during a recording takes effect at the next caption, and switching the
-overlay mode rechecks immediately. A failed or timed-out request
-shows `翻译暂不可用` for that caption only. It is never retried with another
-model or provider.
+Each recording keeps its live notes next to the audio:
 
-Earlier versions translated captions through a local Hermes install. Yulu no
-longer reads Hermes configuration or runs Hermes for captions, and an upgrade
-does not turn on xAI caption translation for anyone. `yulu doctor --json`
-reports the selection under `privacy_opt_in.caption_translation`.
+| File | Contents |
+|---|---|
+| `<stem>.notes.md` | The latest live notes, written atomically with mode `0600` |
+| `<stem>.mynotes.json` | Your own notes with their times, mode `0600` |
+
+The reading page shows them under **笔记**, next to **摘要** and **转写**, and MCP
+`recording_get` returns them. Deleting the recording deletes them. They are not
+task artifacts, so a recording completes without them.
+
+Live-caption translation (ADR-011) is retired. An upgrade archives
+`transcription.captions` with mode `0600` to
+`config.legacy-transcription.<stamp>.json`, removes it from the active config and
+rejects it on write, and drops the old caption-text consent. Nobody starts
+sending meeting text after an upgrade: `transcription.live_notes.provider`
+defaults to `none`. `yulu doctor --json` reports the selection under
+`privacy_opt_in.live_notes`.
 
 ## Dictation and voice input
 

@@ -7,7 +7,6 @@ import {
   DictationTextModelSchema,
   DictationTextProviderSchema,
 } from "./dictationPreferences.js";
-import { CaptionTranslationModelSchema, CaptionTranslationProviderSchema } from "./captionPreferences.js";
 import { LiveNotesLanguageSchema, LiveNotesModelSchema, LiveNotesProviderSchema } from "./liveNotesPreferences.js";
 
 export type Daemon =
@@ -60,11 +59,6 @@ const DictationSchema = z.object({
   target_language: z.string().optional(),
 }).passthrough();
 
-const CaptionsSchema = z.object({
-  translation_provider: CaptionTranslationProviderSchema.optional(),
-  translation_model: CaptionTranslationModelSchema.optional(),
-}).passthrough();
-
 const LiveNotesSchema = z.object({
   provider: LiveNotesProviderSchema.optional(),
   model: LiveNotesModelSchema.optional(),
@@ -108,7 +102,6 @@ export const SETTINGS: SettingDef[] = [
   { path: "audio.backend",               category: "audio", label: "音频后端",     type: "select",  validate: z.enum(["daemon"]),          reload: R.restart("audiodaemon"), danger: true }, // 切换采集后端:可能中断录音
   { path: "transcription.language",      category: "transcription", label: "语言",   type: "select", validate: z.enum(["zh", "en", "ja", "auto"]), reload: R.none },
   { path: "transcription.engine",        category: "transcription", label: "音频转写引擎", type: "select", validate: z.enum(["local", "xai"]), reload: R.none },
-  { path: "transcription.captions",      category: "transcription", label: "实时字幕翻译", type: "text", validate: CaptionsSchema, reload: R.none },
   { path: "transcription.live_notes",    category: "transcription", label: "实时笔记", type: "text", validate: LiveNotesSchema, reload: R.none },
   { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none, hidden: true },
   { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none, hidden: true },

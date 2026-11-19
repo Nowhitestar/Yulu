@@ -13,11 +13,6 @@ import {
   LiveNotesModelSchema,
   LiveNotesProviderSchema,
 } from "./liveNotesPreferences.js";
-import {
-  CAPTION_TRANSLATION_MODEL_DEFAULT,
-  CaptionTranslationModelSchema,
-  CaptionTranslationProviderSchema,
-} from "./captionPreferences.js";
 import { DEFAULT_HOTKEYS, HotkeySchema as StatusAgentHotkeySchema, validateHotkeyConflicts } from "./hotkeys.js";
 import {
   TextProviderSelectionSchema,
@@ -99,13 +94,6 @@ const DictationSchema = z.object({
   context_limit: z.number().default(240),
 }).passthrough().default({});
 
-// Live-caption translation has its own explicit selection and disclosure
-// (ADR-011). "none" keeps caption text on this Mac; there is no fallback.
-const CaptionsSchema = z.object({
-  translation_provider: CaptionTranslationProviderSchema.default("none"),
-  translation_model: CaptionTranslationModelSchema.default(CAPTION_TRANSLATION_MODEL_DEFAULT),
-}).passthrough().default({});
-
 // Live notes have their own explicit selection and disclosure. "none" keeps
 // meeting text on this Mac; there is no fallback to another provider.
 const LiveNotesSchema = z.object({
@@ -143,7 +131,6 @@ export const ConfigSchema = z.object({
     language: z.enum(["zh", "en", "ja", "auto"]).default("zh"),
     glossary: z.array(z.string()).optional(),
     dictation: DictationSchema,
-    captions: CaptionsSchema,
     live_notes: LiveNotesSchema,
   }).passthrough().default({}),
   llm: z.object({
@@ -253,6 +240,8 @@ const RETIRED_TRANSCRIPTION_KEYS = [
   "diarization",
   "command",
   "realtime_enabled",
+  // Live-caption translation (ADR-011), replaced by live notes.
+  "captions",
 ] as const;
 
 const RETIRED_AGENT_AUDIO_KEYS = ["hermes_serve_port", "transcription_chunk_sec"] as const;
@@ -623,6 +612,9 @@ export class ConfigManager {
     for (const { key } of changes) {
       if (key === "agent_pipeline.auto_send_notion" || key.startsWith("agent_pipeline.auto_send_notion.")) {
         throw new Error(`setting is retired because recording sharing is manual-only: ${key}`);
+      }
+      if (key === "transcription.captions" || key.startsWith("transcription.captions.")) {
+        throw new Error(`setting is retired because live notes replaced caption translation: ${key}`);
       }
       if (isRetiredTranscriptionSetting(key)) {
         throw new Error(`setting is retired because Yulu now uses one explicit audio engine: ${key}`);

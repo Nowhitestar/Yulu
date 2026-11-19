@@ -32,20 +32,7 @@ interface ConfigUpdateResult {
 
 // Shared spy so tests can assert config.update was called on a field edit.
 // vi.hoisted keeps it available inside the hoisted vi.mock factory below.
-const { configUpdateSpy, promptsListSpy, previewSoundSpy, restartSpy, recording, statusAgent, mcp, dictationText, captionTranslation } = vi.hoisted(() => ({
-  // What the Host reports for the explicit caption translation selection (ADR-011).
-  captionTranslation: {
-    status: {
-      provider: "none" as "none" | "xai",
-      model: "grok-4.20-0309-non-reasoning",
-      audioEngine: "local" as "local" | "xai",
-      credentialSource: null as "oauth" | "api-key" | null,
-      disclosure: { accepted: false, disclosureVersion: "xai-caption-text-v1" },
-      active: false,
-    },
-    acceptDisclosure: vi.fn(async () => ({ accepted: true, disclosureVersion: "xai-caption-text-v1" })),
-    invalidate: vi.fn(async () => undefined),
-  },
+const { configUpdateSpy, promptsListSpy, previewSoundSpy, restartSpy, recording, statusAgent, mcp, dictationText } = vi.hoisted(() => ({
   // What the Host reports for the explicit dictation text selection (ADR-010).
   dictationText: {
     status: {
@@ -127,7 +114,6 @@ vi.mock("../../../web/src/trpc.js", () => {
     agentConnections: { view: { invalidate: () => Promise.resolve() } },
     integrations: { calendarSources: { invalidate: () => Promise.resolve() } },
     dictationText: { status: { invalidate: dictationText.invalidate } },
-    captionTranslation: { status: { invalidate: captionTranslation.invalidate } },
     liveNotes: { status: { invalidate: () => Promise.resolve() } },
     onboarding: { status: { invalidate: () => Promise.resolve() } },
   };
@@ -221,10 +207,6 @@ vi.mock("../../../web/src/trpc.js", () => {
       dictationText: {
         status: { useQuery: () => ({ data: dictationText.status, isPending: false }) },
         acceptDisclosure: { useMutation: () => ({ mutateAsync: dictationText.acceptDisclosure, isPending: false }) },
-      },
-      captionTranslation: {
-        status: { useQuery: () => ({ data: captionTranslation.status, isPending: false }) },
-        acceptDisclosure: { useMutation: () => ({ mutateAsync: captionTranslation.acceptDisclosure, isPending: false }) },
       },
       liveNotes: {
         status: { useQuery: () => ({ data: {

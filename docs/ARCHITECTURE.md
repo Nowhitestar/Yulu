@@ -13,7 +13,8 @@ accepted xAI credential and text-capability boundary is
 Yulu owns only the capabilities that require a trusted product boundary:
 
 - native system-audio and microphone capture;
-- explicit local or xAI execution for realtime captions, final transcripts, and dictation;
+- explicit local or xAI execution for the live transcript, final transcripts, and dictation;
+- explicitly enabled xAI live notes during a recording, and the attendee's own notes;
 - macOS permission visibility and repair;
 - recording path validation;
 - durable tasks, idempotency, leases, recovery, and audit events;
@@ -22,8 +23,8 @@ Yulu owns only the capabilities that require a trusted product boundary:
 - explicit authorization and recording of external delivery outcomes;
 - local MCP authentication and access control.
 
-The selected Yulu audio engine owns realtime captions, final speech recognition,
-and dictation. `local` is the default; `xai` connects directly to xAI with OAuth
+The selected Yulu audio engine owns the live transcript, final speech recognition,
+and dictation; a complete live transcript becomes the final transcript (ADR-012). `local` is the default; `xai` connects directly to xAI with OAuth
 authorized in Yulu and stored in macOS Keychain. The exact Summary Provider pinned
 at task creation owns summary generation through its explicit xAI, Codex,
 or Claude Code connection. Yulu owns no conversation (ADR-010): the user's own
@@ -43,7 +44,8 @@ provider, model, connection, or credential source.
 | Audio transcription service | `audioTranscription.ts` | Lock a session to the explicitly selected local/xAI engine; serve realtime, final, and dictation requests without fallback |
 | Local audio engine | `localCaptionManager.ts`, `sherpa_caption_worker.py` | Paraformer INT8 source-separated captions and local final transcription; install/test/remove from Settings |
 | xAI audio engine | `xaiAudio.ts`, `xaiCredentials.ts`, `xai_keychain.swift` | Direct xAI Streaming/REST STT plus Yulu-owned device OAuth and macOS Keychain storage |
-| Realtime coordinator | `realtimeTranscription.ts` | Feed mic/system streams and publish partial/stable captions from the selected engine |
+| Realtime coordinator | `realtimeTranscription.ts` | Feed mic/system streams, keep the live transcript and its coverage from the selected engine, and feed live notes |
+| Live notes | `liveNotes.ts`, `recorder_status.swift`, `/live` page | Explicitly enabled xAI live notes with their own disclosure, the attendee's own notes, and the floating panel that shows them; saved next to the recording, not task artifacts |
 | Durable store | `hostStore.ts` | Persist tasks, pinned summary identity, events, leases, artifact records, and Notion delivery records in `host.sqlite` |
 | Pipeline coordinator | `recordingPipeline.ts` | Commit the selected-engine transcript first, then dispatch pinned Summary work and recover failures; recording completion never starts sharing |
 | Summary execution | `supportedAgentSummaryAdapter.ts`, `agentGateway.ts` | Run the task's pinned xAI/Codex/Claude Code Summary workflow; retain legacy pinned Hermes artifact work only for recovery/audit; they do not execute production audio transcription |
@@ -60,14 +62,14 @@ control plane, not just the browser interface.
 flowchart TD
     A["Calendar, window, menu, CLI, or MCP action"] --> B["Yulu.app native capture"]
     B --> C["Local WAV"]
-    B --> O["Selected local or xAI live captions"]
-    O --> P["Ephemeral overlay + realtime sidecar"]
+    B --> O["Selected local or xAI live transcript"]
+    O --> P["Live notes panel + realtime sidecar"]
     C --> D["Python capture-completion adapter"]
     D -->|"Bearer-authenticated loopback request"| E["Yulu Host"]
     D -->|"Host unavailable"| F["Atomic completion-event spool"]
     F --> E
     E --> G["Durable task, idempotency key, lease"]
-    G --> H["Selected Yulu audio engine"]
+    G --> H["Complete live transcript, or one pass of the selected Yulu audio engine"]
     H --> Q["Host transcript commit"]
     Q --> I["Pinned Summary Provider workflow"]
     I --> J["Task-scoped summary staging"]

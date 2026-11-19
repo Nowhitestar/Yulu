@@ -73,11 +73,6 @@
       "provider": "none",
       "model": "grok-4.20-0309-non-reasoning",
       "note": "Live notes send new transcript text, the notes you type and matching glossary terms to xAI only when provider is xai and the live notes disclosure was accepted in Settings; audio is never sent. none keeps meeting text on this Mac and still saves your own notes. language (zh or en) defaults to the interface language."
-    },
-    "captions": {
-      "translation_provider": "none",
-      "translation_model": "grok-4.20-0309-non-reasoning",
-      "note": "Bilingual and translation-only live captions send caption text to xAI only when translation_provider is xai, the audio engine is xai, and the caption-text disclosure was accepted in Settings. none keeps captions on this Mac; the overlay then says translation is unavailable. The dictation text_provider does not enable caption translation."
     }
   },
   "intelligence": {

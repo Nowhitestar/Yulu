@@ -92,9 +92,9 @@ swiftc "${SWIFT_TARGET[@]}" -o "$APP_CALENDAR_BIN" calendar_probe.swift \
   -framework EventKit \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist \
   -Xlinker "$SCRIPT_DIR/calendar_probe-Info.plist"
-for native_helper in recorder_status meeting_prompt; do
-  swiftc "${SWIFT_TARGET[@]}" -o "$APP/Contents/MacOS/$native_helper" "$native_helper.swift" -framework Cocoa
-done
+swiftc "${SWIFT_TARGET[@]}" -o "$APP/Contents/MacOS/recorder_status" recorder_status.swift \
+  -framework Cocoa -framework WebKit
+swiftc "${SWIFT_TARGET[@]}" -o "$APP/Contents/MacOS/meeting_prompt" meeting_prompt.swift -framework Cocoa
 
 cp "$BIN" "$APP_BIN"
 # Keep the historical binary path during the pre-migration development window.

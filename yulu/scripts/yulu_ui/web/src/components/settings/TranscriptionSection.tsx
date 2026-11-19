@@ -1,7 +1,6 @@
 import { Link } from "react-router";
 import { trpc } from "../../trpc.js";
 import { AdvancedDisclosure } from "./AdvancedDisclosure.js";
-import { CaptionTranslationSettings } from "./CaptionTranslationSettings.js";
 import { InlineEditRow } from "../InlineEditRow.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
 import { useT } from "../../i18n/LanguageProvider.js";
@@ -19,8 +18,6 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
   const providers = trpc.providers.status.useQuery(undefined, {
     refetchInterval: (query) => query.state.data?.connection.authorization.status === "running" ? 1_000 : 5_000,
   });
-  const captionTranslation = trpc.captionTranslation.status.useQuery();
-  const acceptCaptionDisclosure = trpc.captionTranslation.acceptDisclosure.useMutation();
   const utils = trpc.useUtils();
   const refreshLocal = async () => { await utils.localCaption.status.invalidate(); };
   const install = trpc.localCaption.install.useMutation({ onSettled: refreshLocal });
@@ -183,16 +180,6 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
       {selectedEngine !== "local" && (local.data?.installed || localBusy) && (
         <AdvancedDisclosure title={t("settings.transcription.localModel.manage")} note="">{localModel}</AdvancedDisclosure>
       )}
-
-      {/* The engine row above updates config first; read it from there so the
-          caption notice follows an engine change without waiting for a refetch. */}
-      <CaptionTranslationSettings
-        status={captionTranslation.data && { ...captionTranslation.data, audioEngine: selectedEngine }}
-        onCommit={async (path, value) => {
-          await commit(path)(value);
-          await utils.captionTranslation.status.invalidate();
-        }}
-        onAcceptDisclosure={() => acceptCaptionDisclosure.mutateAsync()} />
 
       <div style={{ marginTop: 16 }}>
         <Link to="/knowledge/glossary">{t("settings.transcription.manageGlossary")}</Link>

@@ -345,6 +345,13 @@ func targetLanguageDisplayName(_ value: String) -> String {
     }
 }
 
+/// Pages a companion such as the live notes panel may open in Yulu's window:
+/// only Settings and the Inbox, never an arbitrary URL.
+func isAllowedNativeRoute(_ route: String) -> Bool {
+    route.count <= 120 &&
+        route.range(of: "^/(settings|inbox)(/[a-z0-9-]+)*(#[a-z0-9-]+)?$", options: .regularExpression) != nil
+}
+
 func statusAgentScriptDir() -> String {
     nativeEnvironment["YULU_SCRIPT_DIR"]
         ?? "\((Bundle.main.bundlePath as NSString).deletingLastPathComponent)"
@@ -2294,6 +2301,16 @@ class IPCServer {
                 withExtendedLifetime(admission) { self?.app?.onOpenInbox() }
             }
             sendJSON(c, ["ok": true])
+        case "open_route":
+            let route = obj["route"] as? String ?? ""
+            guard isAllowedNativeRoute(route) else {
+                sendJSON(c, ["ok": false, "error": "invalid_route"])
+                return
+            }
+            DispatchQueue.main.async { [weak self] in
+                withExtendedLifetime(admission) { self?.app?.onOpenRoute(route) }
+            }
+            sendJSON(c, ["ok": true])
         case "paste_clipboard":
             sendJSON(c, mainResponse(admission: admission, timeoutError: "paste_timeout") {
                 $0.pasteClipboard(
@@ -3543,6 +3560,15 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func onCheckForUpdates() {
         checkForUpdates?()
+    }
+
+    /// A page in Yulu's window, asked for by the live notes panel.
+    func onOpenRoute(_ route: String) {
+        guard isAllowedNativeRoute(route) else { return }
+        if let openRoute { openRoute(route); return }
+        if let url = URL(string: "http://127.0.0.1:7777\(route)") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc func onOpenSettings() {
