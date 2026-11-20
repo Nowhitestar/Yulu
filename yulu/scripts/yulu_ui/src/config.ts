@@ -94,10 +94,12 @@ const DictationSchema = z.object({
   context_limit: z.number().default(240),
 }).passthrough().default({});
 
-// Live notes have their own explicit selection and disclosure. "none" keeps
-// meeting text on this Mac; there is no fallback to another provider.
+// Live notes have their own selection and disclosure. They are on by default
+// (ADR-013), but nothing is sent until the live notes disclosure is
+// accepted and xAI is connected. An explicit "none" keeps meeting text on this
+// Mac; there is no fallback to another provider.
 const LiveNotesSchema = z.object({
-  provider: LiveNotesProviderSchema.default("none"),
+  provider: LiveNotesProviderSchema.default("xai"),
   model: LiveNotesModelSchema.default(LIVE_NOTES_MODEL_DEFAULT),
   language: LiveNotesLanguageSchema.optional(),
 }).passthrough().default({});

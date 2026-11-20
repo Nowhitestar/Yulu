@@ -321,7 +321,17 @@ def test_native_ui_uses_config_backed_language_and_current_logo():
     assert 'let raw = ui["language"] as? String' in src
     assert "activeAppLanguage = readAppLanguage()" in src
     assert 'btn.title = "语"' not in src
-    assert 'img.isTemplate = false' in src
+    # The menu bar icons are drawn from the brand kit's geometry, not bundled PNGs.
+    assert "enum MenuBarIcon" in src and "final class MenuBarIconAnimator" in src
+    assert "status_idle" not in src and "IconStateMachine" not in src
+    assert "image.isTemplate = template" in src
+    assert "accessibilityDisplayShouldReduceMotion" in src[src.index("final class MenuBarIconAnimator"):]
+    assert "menuBarIcon.show(new)" in src
+    assert not (SCRIPTS / "status_agent_icons").exists()
+    for script in ("build_status_agent.sh", "build_audio_daemon.sh"):
+        assert "status_agent_icons" not in (SCRIPTS / script).read_text(encoding="utf-8")
+    recorder = (SCRIPTS / "recorder_status.swift").read_text(encoding="utf-8")
+    assert "favicon" not in recorder and "func setLive(" in recorder
 
     for name in ["recorder_status.swift", "meeting_prompt.swift"]:
         native = (SCRIPTS / name).read_text(encoding="utf-8")

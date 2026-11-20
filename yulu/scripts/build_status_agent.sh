@@ -11,7 +11,6 @@ APP_BIN="$APP/Contents/MacOS/status_agent"
 RES_DIR="$APP/Contents/Resources"
 INFO="$APP/Contents/Info.plist"
 ICNS_SRC="$REPO_DIR/assets/Yulu.icns"
-ICONS_DIR="$SCRIPT_DIR/status_agent_icons"
 YULU_VERSION_RAW="$(tr -d '[:space:]' < "$REPO_DIR/VERSION" 2>/dev/null || echo "0.0.0+unknown")"
 YULU_BUNDLE_VERSION="${YULU_VERSION_RAW%%[-+]*}"
 YULU_BUILD_NUMBER="$(git -C "$REPO_DIR" rev-list --count HEAD 2>/dev/null || echo 0)"
@@ -32,9 +31,6 @@ chmod +x "$APP_BIN"
 chmod +x "$RECORDER_BIN"
 chmod +x "$MEETING_PROMPT_BIN"
 
-if [[ -d "$ICONS_DIR" ]]; then
-    cp "$ICONS_DIR"/*.png "$RES_DIR/" 2>/dev/null || true
-fi
 if [[ -f "$ICNS_SRC" ]]; then
     cp "$ICNS_SRC" "$RES_DIR/Yulu.icns"
 fi

@@ -79,8 +79,24 @@ async function settle(service: LiveNotesService): Promise<void> {
 }
 
 describe("live notes selection", () => {
-  it("is off by default with the fast model and no fixed language", () => {
-    expect(defaultYuluConfig().transcription.live_notes).toEqual({ provider: "none", model: LIVE_NOTES_MODEL_DEFAULT });
+  it("is on by default with the fast model and no fixed language", () => {
+    expect(defaultYuluConfig().transcription.live_notes).toEqual({ provider: "xai", model: LIVE_NOTES_MODEL_DEFAULT });
+  });
+
+  it("still sends nothing by default until the disclosure is accepted", async () => {
+    const s = setup();
+    s.config.transcription.live_notes = defaultYuluConfig().transcription.live_notes;
+    s.hasDisclosure.mockReturnValue(false);
+    expect(s.service.availability()).toEqual({ available: false, reason: "needs_disclosure" });
+    s.service.started({ audioPath: s.audioPath, stem: "Review_20261119_093000", title: "Review" });
+    s.service.transcript({ audioPath: s.audioPath, stableText: "我们决定改成增量推送，先灰度百分之十。" });
+    await settle(s.service);
+    expect(s.request).not.toHaveBeenCalled();
+
+    s.hasDisclosure.mockReturnValue(true);
+    expect(s.service.availability()).toEqual({
+      available: true, model: LIVE_NOTES_MODEL_DEFAULT, credentialSource: "oauth",
+    });
   });
 
   it("is ready with its switch, disclosure and a connection, without the xAI audio engine", () => {

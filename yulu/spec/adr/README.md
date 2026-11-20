@@ -22,4 +22,5 @@ out*, and *why*. Implementation details belong in the matching spec under
 | [009](009-grok-cli-compatible-xai-oauth.md) | Grok CLI-compatible xAI OAuth across capabilities | Credential reuse retained; conversation scope superseded by [ADR-010](010-retire-yulu-conversation.md) | 2026-08-24 |
 | [010](010-retire-yulu-conversation.md) | Retire Yulu-owned conversation | Accepted | 2026-11-18 |
 | [011](011-explicit-live-caption-translation.md) | Explicit live-caption translation | Superseded by [ADR-012](012-live-notes.md) | 2026-11-19 |
-| [012](012-live-notes.md) | Live notes replace live captions | Accepted | 2026-11-19 |
+| [012](012-live-notes.md) | Live notes replace live captions | Accepted; the `none` default superseded by [ADR-013](013-live-notes-on-by-default.md) | 2026-11-19 |
+| [013](013-live-notes-on-by-default.md) | Live notes on by default | Accepted | 2026-11-20 |

@@ -270,6 +270,33 @@ describe("ConfigManager", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it("turns live notes on by default but keeps an explicit off", () => {
+    expect(ConfigSchema.parse({}).transcription.live_notes.provider).toBe("xai");
+    expect(ConfigSchema.parse({ transcription: {} }).transcription.live_notes.provider).toBe("xai");
+    expect(ConfigSchema.parse({ transcription: { live_notes: { language: "en" } } }).transcription.live_notes)
+      .toMatchObject({ provider: "xai", language: "en" });
+    expect(ConfigSchema.parse({ transcription: { live_notes: { provider: "none" } } }).transcription.live_notes.provider)
+      .toBe("none");
+    expect(() => ConfigSchema.parse({ transcription: { live_notes: { provider: "hermes" } } })).toThrow(ZodError);
+  });
+
+  it("reads a config without live notes as on, and never rewrites it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_live_notes_default_"));
+    const path = join(dir, "config.json");
+    const off = join(dir, "off.json");
+    fs.writeFileSync(path, `${JSON.stringify({ transcription: { engine: "local" } })}\n`);
+    fs.writeFileSync(off, `${JSON.stringify({ transcription: { engine: "local", live_notes: { provider: "none" } } })}\n`);
+    const before = readFileSync(path, "utf8");
+    const offBefore = readFileSync(off, "utf8");
+    try {
+      expect(new ConfigManager(path).read().transcription.live_notes.provider).toBe("xai");
+      expect(new ConfigManager(off).read().transcription.live_notes.provider).toBe("none");
+      // No migration writes the new default into an existing config.
+      expect(readFileSync(path, "utf8")).toBe(before);
+      expect(readFileSync(off, "utf8")).toBe(offBefore);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("audio capture parameters apply to the next recording without restarting the daemon", () => {
     const { mgr, cleanup } = makeCfg();
     try {

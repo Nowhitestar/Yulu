@@ -61,12 +61,37 @@ beforeEach(() => {
 });
 
 describe("LiveNotesSection", () => {
-  it("asks for the data notice before the first meeting text can be sent", async () => {
+  it("is on by default and shows the data notice right away until it is accepted", async () => {
+    status = { ...status, provider: "xai" };
+    mount();
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    const notice = screen.getByRole("group", { name: "实时笔记已开启，同意下面的说明后开始生成" });
+    expect(notice).toHaveTextContent(/音频不会发送/);
+    expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
+    expect(update).not.toHaveBeenCalled();
+    expect(acceptDisclosure).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "同意并开始" }));
+    expect(acceptDisclosure).toHaveBeenCalledTimes(1);
+    // The default becomes an explicit choice once it is confirmed.
+    expect(update).toHaveBeenCalledWith({ key: "transcription.live_notes.provider", value: "xai" });
+  });
+
+  it("turns off from the data notice without accepting it", async () => {
+    status = { ...status, provider: "xai" };
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: "关闭实时笔记" }));
+    expect(acceptDisclosure).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith({ key: "transcription.live_notes.provider", value: "none" });
+  });
+
+  it("asks for the data notice before turning on from off", async () => {
     mount();
     expect(screen.getByRole("heading", { name: "实时笔记" })).toBeInTheDocument();
+    expect(screen.queryByText(/音频不会发送/)).toBeNull();
     await userEvent.click(screen.getByRole("switch"));
     expect(update).not.toHaveBeenCalled();
-    expect(screen.getByText(/音频不会发送/)).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "开启前请确认" })).toHaveTextContent(/音频不会发送/);
 
     await userEvent.click(screen.getByRole("button", { name: "同意并开启" }));
     expect(acceptDisclosure).toHaveBeenCalledTimes(1);

@@ -1,5 +1,8 @@
 <div align="center">
-  <img src="assets/logo.svg" width="88" alt="Yulu logo" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg" />
+    <img src="assets/logo.svg" width="128" alt="Yulu logo" />
+  </picture>
   <h1>Yulu</h1>
   <p><b>Native meeting capture. Live notes. Agent-ready memory.</b></p>
   <p><b>English</b> · <a href="README.zh-CN.md">简体中文</a></p>
@@ -27,10 +30,11 @@ you are using. No Yulu account or virtual audio device required.
   with a global shortcut. Optional xAI cleanup has three editing levels and
   separate punctuation styles; the original text stays available.
 
-[What's new in v0.30.0](docs/release-notes/v0.30.0.md):
-live notes replace live captions. Key points, tables and diagrams build up
-beside the meeting, you can add your own notes, and both are saved with the
-recording. A complete live transcript is no longer transcribed again.
+[What's new in v0.31.0](docs/release-notes/v0.31.0.md):
+a new mark — one stroke from speech to a written line — across the app icon,
+the menu bar and the live notes panel, with menu bar states you can tell apart
+at a glance. Live notes are on by default and send nothing until you confirm
+what they send.
 
 ## Features
 
@@ -49,9 +53,10 @@ recording. A complete live transcript is no longer transcribed again.
   keeps the meeting's key points as rich text: lists, tables, even small
   architecture diagrams, in Chinese or English. Type your own notes into the
   same panel without leaving the meeting app. Collapse it to the Yulu logo
-  whenever you like. Live notes use a fast xAI model and are off until you turn
-  them on in **Settings → Recording & summaries**; your own notes are kept
-  either way.
+  whenever you like. Live notes use a fast xAI model and are on by default.
+  They start once xAI is connected and you accept a short data notice in
+  **Settings → Recording & summaries**, where you can also turn them off; your
+  own notes are kept either way.
 - **Notes, summary and transcript together.** Each recording keeps its live
   notes next to its summary and transcript. When the live transcript already
   covers the whole recording, Yulu keeps it instead of transcribing again.
@@ -255,7 +260,8 @@ at the bottom of that page.
   send transcripts, dictation cleanup and translation send dictated text, and
   live notes send new transcript text and your notes (never audio), to the
   selected provider. Dictation and live notes each have their own switch and
-  disclosure.
+  disclosure. Live notes are switched on by default, but send nothing until you
+  accept their disclosure.
   Providers are selected explicitly, with no silent fallback.
 - Sharing a summary requires a separate manual confirmation. Yulu stores its xAI
   credentials in macOS Keychain; Agent connector credentials stay with the Agent.

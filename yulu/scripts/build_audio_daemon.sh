@@ -109,15 +109,13 @@ chmod +x "$APP_KEYCHAIN_BIN"
 chmod +x "$APP_CALENDAR_BIN"
 
 # Bundle the Yulu icon so System Settings, the Dock, TCC prompts, and
-# terminal-notifier (via -sender com.yulu.audiodaemon) all show the
-# current blue liquid-glass Yulu logo instead of a generic placeholder.
+# terminal-notifier (via -sender com.yulu.audiodaemon) all show the Yulu
+# app icon (assets/brand) instead of a generic placeholder. The menu bar
+# icons are drawn in code and need no resources.
 if [[ -f "$ICNS_SRC" ]]; then
   cp "$ICNS_SRC" "$RES_DIR/Yulu.icns"
 else
   echo "⚠️ assets/Yulu.icns missing — bundle will have no icon." >&2
-fi
-if [[ -d "$SCRIPT_DIR/status_agent_icons" ]]; then
-  cp "$SCRIPT_DIR/status_agent_icons/"*.png "$RES_DIR/"
 fi
 
 DEVELOPMENT_HOST_NATIVE=""

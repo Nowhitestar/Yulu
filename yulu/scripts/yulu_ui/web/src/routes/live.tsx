@@ -191,7 +191,10 @@ export function LivePanel() {
         {panel.warning && <p className="live-warning" role="alert">{panel.warning}</p>}
         {unavailable && (
           <div className="live-notice">
-            <p className="live-notice-title">{t("live.unavailable.title")}</p>
+            {/* Live notes are on by default: only a turned-off switch reads as "off". */}
+            <p className="live-notice-title">
+              {t(!snapshot.reason || snapshot.reason === "provider_off" ? "live.unavailable.title" : "live.unavailable.titlePending")}
+            </p>
             <p>{t(`live.unavailable.${snapshot.reason ?? "provider_off"}`)}</p>
             <button type="button" className="live-link" onClick={openSettings}>{t("live.openSettings")}</button>
           </div>

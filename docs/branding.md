@@ -14,32 +14,54 @@ This file is the contract for anything that puts the Yulu name on it: README hea
 
 ## Logo
 
-The current mark is a blue liquid-glass lens containing two white quotation
-marks. It represents captured speech without turning Yulu into a chat-bubble
-brand.
+The mark is one stroke. Three swells, each lower than the last, are speech; the
+stroke settles into a straight line, which is the written record; a short blue
+segment after a gap is the line being written now. It reads as "what was said,
+written down" without becoming a chat bubble or a waveform icon.
+
+The complete kit — every file, size, the colors and the motion rules — is in
+[`assets/brand/`](../assets/brand/README.md). Start with
+`assets/brand/preview.png`.
 
 | Element | Value |
 |---|---|
-| Lens gradient | `#60AAF3` to `#2C5DBD` |
-| Quotation marks | White, `95%` to `72%` opacity |
-| Surface highlight | White radial glow, up to `55%` opacity |
-| Edge highlight | White, `50%` opacity |
+| Stroke | Ink, round caps and joins, one width (10 on the 144 × 64 master) |
+| Cursor | Blue, the same width, after a gap of 0.6 stroke widths |
+| Light ink / blue | `#0D1114` / `#0F74C5` |
+| Dark ink / blue | `#ECEFF2` / `#3A93E6` |
 
-- Preserve the organic lens silhouette and the two quotation marks as one mark.
-- Keep clear space equal to at least 12% of the mark's width.
-- Minimum size: 24×24 px on screen, 8 mm in print.
-- A restrained blue glow is allowed in the digital UI. Do not add another hue.
-- The old parchment `语` character with a cinnabar dot is a legacy mark. Do not
-  use it in new UI, README art, release artwork, or previews.
+- Keep clear space of at least 1.5 stroke widths around the mark.
+- The full mark is never narrower than 64 px. Below that, use the 32 px and
+  16 px masters, the app icon, or the menu bar icon; never shrink the large art.
+- Ink and one short blue segment only. Blue in Yulu means "clickable" or "in
+  progress", nothing else.
+- On photos or busy backgrounds use the single-color black or white mark.
 
-### Logo files
+### Where it is used
 
-- `yulu/scripts/yulu_ui/web/public/favicon.svg` — the app's mark. The window
-  itself shows no logo; the mark lives in the App icon, the menu bar, and the tab.
-- `assets/logo.svg` — README and documentation equivalent.
+| Surface | Source |
+|---|---|
+| App icon (Yulu.app, prompts) | `assets/Yulu.icns`, `assets/Yulu.iconset` |
+| Menu bar: idle, recording, processing | Drawn in `yulu/scripts/status_agent.swift` from the kit's menu bar geometry |
+| Live notes panel, tucked away | Drawn in `yulu/scripts/recorder_status.swift`: the app icon with the recording motion |
+| Web UI tab | `yulu/scripts/yulu_ui/web/public/favicon.svg` (follows light / dark) |
+| README header | `assets/logo.svg`, `assets/logo-dark.svg` |
+| GitHub social preview | `assets/social-card.png` (upload in the repository settings) |
 
-Keep these two representations visually aligned. Generate any raster export
-from the static SVG rather than recreating the legacy character mark.
+`assets/brand/tools/build.sh` regenerates the kit and copies every file in this
+table. The menu bar and panel icons are code, so a change to the mark's geometry
+must be repeated in those two Swift files.
+
+### Motion
+
+- Menu bar idle is still. Recording swaps the cursor for a steady red dot and
+  the swells follow the sound level. Processing swaps it for three dots lit in
+  turn every 0.4 s.
+- The tucked-away live notes panel keeps writing: the swells follow the sound
+  level and the cursor writes (1.2 s), holds (1.4 s), erases (0.6 s) and rests
+  (0.4 s).
+- Swell height is the standard shape times the smoothed level, 0.25–1.2, and
+  changes no more than 12% per frame. With Reduce Motion everything is still.
 
 ## Typography
 
@@ -69,8 +91,10 @@ Three rules:
 
 ## Don'ts
 
-- Do not replace the current mark with the legacy parchment `语` asset.
-- Do not turn the lens into a generic circular chat bubble.
-- Do not distort, recolor, rotate, or separate the quotation marks from the lens.
+- Do not bring back the blue liquid-glass lens or the parchment `语` character;
+  both are retired marks.
+- Do not add gradients, glow or shadows to the mark, or make the whole stroke blue.
+- Do not sharpen the swells into spikes (it becomes a heart monitor), thin the
+  stroke, stretch, rotate or split the mark, or put it in a speech bubble.
 - Do not use stock "AI sparkle" icons.
 - Do not translate the tagline word-for-word into a third language without a native speaker editing it.

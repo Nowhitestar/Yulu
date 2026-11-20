@@ -1820,19 +1820,174 @@ enum AgentState: String {
     case idle, recording, processing, meetingBusy, daemonDown
 }
 
-class IconStateMachine {
-    static func image(for state: AgentState) -> NSImage? {
-        let name: String
-        switch state {
-        case .idle:         name = "status_idle"
-        case .recording:    name = "status_recording"
-        case .processing:   name = "status_processing"
-        case .meetingBusy:  name = "status_idle"   // greyed-out via alpha (set by caller)
-        case .daemonDown:   name = "status_idle"   // (caller can overlay; not in v1)
+/// The menu bar mark (assets/brand/menubar): speech swells settling into a
+/// written line, followed by a short mark for the state. Drawn in code, 24 x 16
+/// pt, so the recording swells can follow the sound level.
+enum MenuBarIcon {
+    static let size = NSSize(width: 24, height: 16)
+    static let lineWidth: CGFloat = 1.9
+    static let baseline: CGFloat = 8.6
+    /// The kit's level 4 of 5, used whenever motion is reduced.
+    static let stillRecordingAmplitude: CGFloat = 1.0
+
+    /// Swell height = the standard drawing x the smoothed level, 0.25...1.2.
+    static func amplitude(for level: CGFloat) -> CGFloat {
+        0.25 + 0.95 * min(1, max(0, level))
+    }
+
+    /// The stroke in the kit's top-left coordinates; level 1 is the standard drawing.
+    static func wave(level: CGFloat) -> NSBezierPath {
+        let b = baseline
+        let c1 = b - 5.86 * level, c2 = b + 3.8 * level, c3 = b + 4.2 * level, c4 = b - 2.31 * level
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: 2.85, y: b))
+        path.curve(to: NSPoint(x: 5.33, y: b), controlPoint1: NSPoint(x: 3.5, y: c1), controlPoint2: NSPoint(x: 4.7, y: c1))
+        path.curve(to: NSPoint(x: 7.5, y: b), controlPoint1: NSPoint(x: 5.73, y: c2), controlPoint2: NSPoint(x: 6.9, y: c3))
+        path.curve(to: NSPoint(x: 9.36, y: b), controlPoint1: NSPoint(x: 7.84, y: c4), controlPoint2: NSPoint(x: 8.6, y: b))
+        path.line(to: NSPoint(x: 15.6, y: b))
+        path.lineWidth = lineWidth
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        return path
+    }
+
+    private static func image(template: Bool, _ draw: @escaping () -> Void) -> NSImage {
+        let image = NSImage(size: size, flipped: true) { _ in draw(); return true }
+        image.isTemplate = template
+        image.accessibilityDescription = "Yulu"
+        return image
+    }
+
+    /// Idle: the written line and its cursor. A template, so macOS colours it.
+    static func idle() -> NSImage {
+        image(template: true) {
+            NSColor.black.setStroke()
+            wave(level: 1).stroke()
+            let cursor = NSBezierPath()
+            cursor.move(to: NSPoint(x: 19.3, y: baseline))
+            cursor.line(to: NSPoint(x: 22.1, y: baseline))
+            cursor.lineWidth = lineWidth
+            cursor.lineCapStyle = .round
+            cursor.stroke()
         }
-        guard let img = NSImage(named: name) else { return nil }
-        img.isTemplate = false
-        return img
+    }
+
+    /// Processing: the cursor becomes three dots lit in turn (frame 0, 1, 2).
+    static func processing(frame: Int) -> NSImage {
+        image(template: true) {
+            NSColor.black.setStroke()
+            wave(level: 1).stroke()
+            for (index, x) in [18.3, 20.6, 22.9].enumerated() {
+                NSColor.black.withAlphaComponent(index == frame % 3 ? 1 : 0.3).setFill()
+                NSBezierPath(ovalIn: NSRect(x: x - 1.05, y: baseline - 1.05, width: 2.1, height: 2.1)).fill()
+            }
+        }
+    }
+
+    /// Recording: the cursor becomes a steady red dot. Red cannot be a template,
+    /// so the ink follows the menu bar's appearance instead.
+    static func recording(amplitude: CGFloat, dark: Bool) -> NSImage {
+        let ink = dark ? NSColor(srgbRed: 0xEC / 255, green: 0xEF / 255, blue: 0xF2 / 255, alpha: 1)
+            : NSColor(srgbRed: 0x0D / 255, green: 0x11 / 255, blue: 0x14 / 255, alpha: 1)
+        let red = dark ? NSColor(srgbRed: 1, green: 0x45 / 255, blue: 0x3A / 255, alpha: 1)
+            : NSColor(srgbRed: 1, green: 0x3B / 255, blue: 0x30 / 255, alpha: 1)
+        return image(template: false) {
+            ink.setStroke()
+            wave(level: amplitude).stroke()
+            red.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 20.6 - 3.1, y: baseline - 3.1, width: 6.2, height: 6.2)).fill()
+        }
+    }
+}
+
+/// Moves the menu bar icon between states. Idle is still; recording swells
+/// follow the sound level, eased so no frame changes more than 12%; processing
+/// lights its dots in turn every 0.4 s. With reduced motion every state is still.
+final class MenuBarIconAnimator {
+    var apply: (NSImage) -> Void = { _ in }
+    var isDark: () -> Bool = { false }
+    var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    private(set) var state: AgentState?
+    private var timer: Timer?
+    private var level: CGFloat = 0
+    private(set) var shownAmplitude = MenuBarIcon.stillRecordingAmplitude
+    private var drawnAmplitude: CGFloat = -1
+    private var drawnDark: Bool?
+    private var frame = 0
+    private var phase: CGFloat = 0
+    deinit { timer?.invalidate() }
+
+    /// The latest sound level, 0...1.
+    func setLevel(_ value: CGFloat) { level = min(1, max(0, value)) }
+
+    /// Called on every status poll; redraws only when something visible changed.
+    func show(_ next: AgentState) {
+        if next != state {
+            state = next
+            frame = 0
+            drawnAmplitude = -1
+            drawnDark = nil
+            if next == .recording { shownAmplitude = MenuBarIcon.amplitude(for: level) }
+            render(force: true)
+        } else if next == .recording {
+            render(force: false)  // a changed menu bar appearance, or the still frame
+        }
+        updateTimer()
+    }
+
+    /// One animation frame; exposed for the self-test.
+    func step() {
+        switch state {
+        case .recording?:
+            let goal = MenuBarIcon.amplitude(for: level)
+            let limit = shownAmplitude * 0.12
+            shownAmplitude += min(limit, max(-limit, goal - shownAmplitude))
+            phase += 1
+        case .processing?:
+            frame = (frame + 1) % 3
+        default:
+            break
+        }
+        render(force: state == .processing)
+    }
+
+    private func render(force: Bool) {
+        guard let state else { return }
+        let still = reduceMotion()
+        switch state {
+        case .recording:
+            // A light tremor that grows with the voice, so speech reads as speech.
+            let tremor = still ? 0 : 0.08 * level * sin(phase * 2 * .pi / 10)
+            let amplitude = still ? MenuBarIcon.stillRecordingAmplitude : shownAmplitude * (1 + tremor)
+            let dark = isDark()
+            guard force || dark != drawnDark || abs(amplitude - drawnAmplitude) > 0.003 else { return }
+            drawnAmplitude = amplitude
+            drawnDark = dark
+            apply(MenuBarIcon.recording(amplitude: amplitude, dark: dark))
+        case .processing:
+            apply(MenuBarIcon.processing(frame: still ? 1 : frame))
+        case .idle, .meetingBusy, .daemonDown:
+            apply(MenuBarIcon.idle())
+        }
+    }
+
+    private func updateTimer() {
+        let interval: TimeInterval?
+        switch state {
+        case .recording?: interval = 1.0 / 12
+        case .processing?: interval = 0.4
+        default: interval = nil
+        }
+        guard let interval, !reduceMotion() else {
+            timer?.invalidate()
+            timer = nil
+            return
+        }
+        if let timer, timer.timeInterval == interval { return }
+        timer?.invalidate()
+        let next = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.step() }
+        timer = next
+        RunLoop.main.add(next, forMode: .common)
     }
 }
 
@@ -2550,6 +2705,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var capturedPasteTarget: CapturedPasteTarget?
     var pollerTimer: Timer?
     var state: AgentState = .daemonDown
+    let menuBarIcon = MenuBarIconAnimator()
     var recordingStartedAt: Double?
     var activeRecordingIsDictation = false
     var daemonDownStreak: Int = 0
@@ -2599,6 +2755,10 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let btn = statusItem.button {
             btn.title = ""
             btn.toolTip = L("Yulu — 点击开始录制", "Yulu — click to record")
+        }
+        menuBarIcon.apply = { [weak self] image in self?.statusItem.button?.image = image }
+        menuBarIcon.isDark = { [weak self] in
+            self?.statusItem.button?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         }
         rebuildMenu()
         _ = prepareVoiceOverlay()
@@ -2777,6 +2937,11 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let micLevel = resp["micLevel"] as? NSNumber {
             voiceOverlayWave?.level = normalizedMicLevel(micLevel.doubleValue)
         }
+        // The menu bar swells follow whichever side is speaking.
+        let soundLevel = max(
+            (resp["micLevel"] as? NSNumber).map { normalizedMicLevel($0.doubleValue) } ?? 0,
+            (resp["systemLevel"] as? NSNumber).map { normalizedMicLevel($0.doubleValue) } ?? 0)
+        menuBarIcon.setLevel(soundLevel)
 
         if voiceLaunchPending || !resultManagedLauncherPids.isEmpty {
             applyState(.processing)
@@ -3137,20 +3302,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             hideVoiceOverlay()
         }
         if let btn = statusItem.button {
-            if let img = IconStateMachine.image(for: new) {
-                btn.image = img
-                btn.title = ""
-            } else {
-                let symbol: String
-                switch new {
-                case .idle, .meetingBusy: symbol = "quote.bubble.fill"
-                case .recording: symbol = "record.circle.fill"
-                case .processing: symbol = "ellipsis.circle.fill"
-                case .daemonDown: symbol = "exclamationmark.circle.fill"
-                }
-                btn.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Yulu")
-                btn.title = ""
-            }
+            menuBarIcon.show(new)
+            btn.title = ""
             if new == .meetingBusy {
                 btn.alphaValue = 0.4  // greyed-out
             } else {
@@ -4015,6 +4168,23 @@ struct StatusAgentMain {
             assert(parseDictationOutput(prettyJSON)?["action"] as? String == "stop")
             assert(normalizedMicLevel(0) == 0)
             assert(normalizedMicLevel(0.1) > normalizedMicLevel(0.01))
+            assert(MenuBarIcon.amplitude(for: 0) == 0.25 && abs(MenuBarIcon.amplitude(for: 1) - 1.2) < 0.0001)
+            assert(MenuBarIcon.idle().isTemplate && MenuBarIcon.processing(frame: 1).isTemplate)
+            assert(!MenuBarIcon.recording(amplitude: 1, dark: false).isTemplate)
+            let icon = MenuBarIconAnimator()
+            var drawn = 0
+            icon.apply = { _ in drawn += 1 }
+            icon.reduceMotion = { false }
+            icon.show(.idle)
+            icon.show(.idle)
+            assert(drawn == 1)
+            icon.setLevel(0)
+            icon.show(.recording)
+            icon.setLevel(1)
+            let before = icon.shownAmplitude
+            icon.step()
+            assert(icon.shownAmplitude > before && icon.shownAmplitude <= before * 1.12 + 0.0001)
+            icon.show(.idle)
             assert(menuKeyEquivalent(for: "⌃⌥Space") == " ")
             assert(menuKeyEquivalent(for: "⌃⌥T") == "t")
             assert(menuModifierFlags(for: 0x1800) == [.control, .option])

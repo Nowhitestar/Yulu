@@ -5,7 +5,7 @@ import WebKit
 
 // Yulu's live notes panel during a meeting recording: a tall glass card on the
 // right edge of the screen that shows the Host's /live page, and tucks away to
-// Yulu's breathing icon.
+// Yulu's icon, whose mark keeps writing while the meeting is recorded.
 // Build: swiftc -o recorder_status recorder_status.swift -framework Cocoa -framework WebKit
 // Usage: ./recorder_status <title> [state_file]
 
@@ -278,33 +278,88 @@ final class PanelMessages: NSObject, WKScriptMessageHandler {
     }
 }
 
+/// Sound level 0...1 from the capture daemon's RMS, as in the menu bar.
+func normalizedSoundLevel(_ rms: Double) -> CGFloat {
+    guard rms > 0 else { return 0 }
+    return CGFloat(min(1, max(0, (20 * log10(rms) + 55) / 40)))
+}
+
+/// The tucked-away panel: Yulu's app icon (assets/brand/app-icon), whose mark
+/// stays alive while the meeting is recorded. The swells follow the sound level
+/// and the blue cursor writes (1.2 s), holds (1.4 s), erases (0.6 s) and rests
+/// (0.4 s). With reduced motion the icon stays still.
 final class LogoView: NSView {
     var onClick: (() -> Void)?
     var onMove: ((NSPoint) -> Void)?
-    private let haloOne = NSImageView()
-    private let haloTwo = NSImageView()
-    private let artwork = NSImageView()
+    private let tile = CALayer()
+    private let ink = CAShapeLayer()
+    private let cursor = CAShapeLayer()
     private var panOrigin = NSPoint.zero
     private var panMouseOrigin = NSPoint.zero
-    private var imageLoaded = false
+    private var frameTimer: Timer?
+    private var phase: CGFloat = 0
+    private(set) var amplitude: CGFloat = 1
+    /// The latest sound level, 0...1.
+    var level: CGFloat = 0
 
-    init(frame frameRect: NSRect, image: NSImage?) {
+    static let side: CGFloat = 62
+    /// The mark sits on the tile as in the 1024 pt icon: an 824 pt tile at 100,
+    /// the mark placed at (233, 394) and scaled 3.88 times.
+    static let markScale: CGFloat = side * 3.88 / 824
+    static let markOrigin = CGPoint(x: side * 133 / 824, y: side * 294 / 824)
+
+    /// Swell height = the standard drawing x the smoothed level, 0.25...1.2.
+    static func amplitude(for level: CGFloat) -> CGFloat { 0.25 + 0.95 * min(1, max(0, level)) }
+
+    /// The mark's ink in tile coordinates (origin bottom-left); 1 is the standard drawing.
+    static func wavePath(amplitude a: CGFloat) -> CGPath {
+        let b: CGFloat = 36
+        let path = CGMutablePath()
+        let t = markTransform
+        path.move(to: CGPoint(x: 10, y: b), transform: t)
+        path.addCurve(to: CGPoint(x: 26, y: b), control1: CGPoint(x: 14, y: b - 29.3 * a), control2: CGPoint(x: 22, y: b - 29.3 * a), transform: t)
+        path.addCurve(to: CGPoint(x: 40, y: b), control1: CGPoint(x: 28.6, y: b + 19 * a), control2: CGPoint(x: 36, y: b + 21 * a), transform: t)
+        path.addCurve(to: CGPoint(x: 52, y: b), control1: CGPoint(x: 42.2, y: b - 11.55 * a), control2: CGPoint(x: 47, y: b), transform: t)
+        path.addLine(to: CGPoint(x: 100, y: b), transform: t)
+        return path
+    }
+
+    static var cursorPath: CGPath {
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 116, y: 36), transform: markTransform)
+        path.addLine(to: CGPoint(x: 134, y: 36), transform: markTransform)
+        return path
+    }
+
+    /// Mark units (top-left origin) to tile points (bottom-left origin).
+    static var markTransform: CGAffineTransform {
+        CGAffineTransform(a: markScale, b: 0, c: 0, d: -markScale, tx: markOrigin.x, ty: side - markOrigin.y)
+    }
+
+    override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.masksToBounds = false
-        imageLoaded = image != nil
-        for view in [haloOne, haloTwo, artwork] {
-            view.image = image
-            view.imageScaling = .scaleProportionallyUpOrDown
-            view.wantsLayer = true
-            addSubview(view)
+        tile.cornerRadius = Self.side * 185 / 824
+        tile.cornerCurve = .continuous
+        tile.borderWidth = 0.5
+        tile.shadowColor = NSColor.black.cgColor
+        tile.shadowOpacity = 0.22
+        tile.shadowRadius = 10
+        tile.shadowOffset = CGSize(width: 0, height: -4)
+        for shape in [ink, cursor] {
+            shape.frame = CGRect(x: 0, y: 0, width: Self.side, height: Self.side)
+            shape.fillColor = nil
+            shape.lineWidth = 10 * Self.markScale
+            shape.lineCap = .round
+            shape.lineJoin = .round
+            tile.addSublayer(shape)
         }
-        haloOne.alphaValue = 0.32
-        haloTwo.alphaValue = 0.24
-        artwork.layer?.shadowColor = NSColor(hex: "#20509A").cgColor
-        artwork.layer?.shadowOpacity = 0.35
-        artwork.layer?.shadowRadius = 12
-        artwork.layer?.shadowOffset = NSSize(width: 0, height: -6)
+        ink.path = Self.wavePath(amplitude: 1)
+        cursor.path = Self.cursorPath
+        layer?.addSublayer(tile)
+        applyColors()
+
         toolTip = L("正在录制 · 点击展开实时笔记", "Recording · Click to open live notes")
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
@@ -317,51 +372,79 @@ final class LogoView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { frameTimer?.invalidate() }
 
     override func layout() {
         super.layout()
-        let size: CGFloat = 62
-        let rect = NSRect(x: (bounds.width - size) / 2, y: (bounds.height - size) / 2, width: size, height: size)
-        haloOne.frame = rect
-        haloTwo.frame = rect
-        artwork.frame = rect
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        tile.frame = CGRect(x: (bounds.width - Self.side) / 2, y: (bounds.height - Self.side) / 2,
+                            width: Self.side, height: Self.side)
+        tile.shadowPath = CGPath(roundedRect: tile.bounds, cornerWidth: tile.cornerRadius,
+                                 cornerHeight: tile.cornerRadius, transform: nil)
+        CATransaction.commit()
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard !imageLoaded else { return }
-        let rect = NSRect(x: bounds.midX - 29, y: bounds.midY - 24, width: 58, height: 48)
-        NSColor(hex: "#3674D3").setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 22, yRadius: 22).fill()
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 30, weight: .bold),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.9),
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
+    }
+
+    private func applyColors() {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        tile.backgroundColor = NSColor(hex: dark ? "#16191D" : "#FBFCFD").cgColor
+        tile.borderColor = (dark ? NSColor.white.withAlphaComponent(0.12) : NSColor(hex: "#0D1114", alpha: 0.12)).cgColor
+        ink.strokeColor = NSColor(hex: dark ? "#ECEFF2" : "#0D1114").cgColor
+        cursor.strokeColor = NSColor(hex: dark ? "#3A93E6" : "#0F74C5").cgColor
+        CATransaction.commit()
+    }
+
+    /// Moves while the icon shows during a recording; still otherwise.
+    func setLive(_ enabled: Bool) {
+        frameTimer?.invalidate()
+        frameTimer = nil
+        cursor.removeAnimation(forKey: "write")
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        amplitude = 1
+        ink.path = Self.wavePath(amplitude: 1)
+        CATransaction.commit()
+        guard enabled, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+
+        // The cursor is a short dot at rest (as in assets/brand/motion).
+        let write = CAKeyframeAnimation(keyPath: "strokeEnd")
+        write.values = [0.15, 1, 1, 0.15, 0.15]
+        write.keyTimes = [0, 1.2 / 3.6, 2.6 / 3.6, 3.2 / 3.6, 1].map { NSNumber(value: $0) }
+        write.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .linear),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .linear),
         ]
-        "“".draw(in: NSRect(x: rect.minX + 10, y: rect.minY + 7, width: 38, height: 35), withAttributes: attributes)
+        write.duration = 3.6
+        write.repeatCount = .infinity
+        cursor.add(write, forKey: "write")
+
+        amplitude = Self.amplitude(for: level)
+        let timer = Timer(timeInterval: 1.0 / 12, repeats: true) { [weak self] _ in self?.step() }
+        frameTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
-    func setBreathing(_ enabled: Bool) {
-        [haloOne, haloTwo].forEach { $0.layer?.removeAnimation(forKey: "breathe") }
-        guard enabled else { return }
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            haloOne.alphaValue = 0.18
-            haloTwo.alphaValue = 0
-            return
-        }
-        for (index, view) in [haloOne, haloTwo].enumerated() {
-            let scale = CABasicAnimation(keyPath: "transform.scale")
-            scale.fromValue = 0.98
-            scale.toValue = 1.38
-            let opacity = CABasicAnimation(keyPath: "opacity")
-            opacity.fromValue = index == 0 ? 0.34 : 0.25
-            opacity.toValue = 0
-            let group = CAAnimationGroup()
-            group.animations = [scale, opacity]
-            group.duration = 1.9
-            group.beginTime = CACurrentMediaTime() + Double(index) * 0.48
-            group.repeatCount = .infinity
-            group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            view.layer?.add(group, forKey: "breathe")
-        }
+    /// One frame: ease toward the level, never more than 12% at a time.
+    func step() {
+        let goal = Self.amplitude(for: level)
+        let limit = amplitude * 0.12
+        amplitude += min(limit, max(-limit, goal - amplitude))
+        phase += 1
+        // A light tremor that grows with the voice, so speech reads as speech.
+        let shown = amplitude * (1 + 0.08 * level * sin(phase * 2 * .pi / 10))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ink.path = Self.wavePath(amplitude: shown)
+        CATransaction.commit()
     }
 
     override func resetCursorRects() {
@@ -419,6 +502,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigat
     var warningText = ""
 
     var stateTimer: Timer?
+    var levelTimer: Timer?
+    var levelRequestInFlight = false
     var reloadWorkItem: DispatchWorkItem?
 
     init(title: String, path: String) {
@@ -508,8 +593,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigat
         webView = page
         loadPage()
 
-        let logo = NSImage(contentsOf: logoURL())
-        logoView = LogoView(frame: .zero, image: logo)
+        logoView = LogoView(frame: .zero)
         logoView.onClick = { [weak self] in self?.setExpanded(true) }
         logoView.onMove = { [weak self] origin in self?.moveWindow(to: origin) }
         logoView.isHidden = true
@@ -604,7 +688,8 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigat
         win.hasShadow = value
         win.setFrame(frame, display: true, animate: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         logoView.frame = root.bounds
-        logoView.setBreathing(!value)
+        logoView.setLive(!value)
+        updateLevelTimer()
         // Nothing typed reaches the hidden notes while only the icon shows.
         if !value { win.makeFirstResponder(nil) }
         win.invalidateShadow()
@@ -622,6 +707,34 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigat
         adjustingFrame = true
         win.setFrameOrigin(clamped)
         adjustingFrame = false
+    }
+
+    /// While only the icon shows, its swells follow the sound level (twice a
+    /// second, off the main thread); the expanded panel needs no level.
+    func updateLevelTimer() {
+        levelTimer?.invalidate()
+        levelTimer = nil
+        guard !expanded, !closing, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.pollSoundLevel() }
+        RunLoop.current.add(timer, forMode: .common)
+        levelTimer = timer
+        pollSoundLevel()
+    }
+
+    func pollSoundLevel() {
+        guard !levelRequestInFlight else { return }
+        levelRequestInFlight = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let status = self?.audioDaemonStatus()
+            let level = max(
+                (status?["micLevel"] as? NSNumber).map { normalizedSoundLevel($0.doubleValue) } ?? 0,
+                (status?["systemLevel"] as? NSNumber).map { normalizedSoundLevel($0.doubleValue) } ?? 0)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.levelRequestInFlight = false
+                self.logoView?.level = level
+            }
+        }
     }
 
     func startTimers() {
@@ -755,6 +868,7 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigat
         guard !closing else { return }
         closing = true
         stateTimer?.invalidate()
+        levelTimer?.invalidate()
         reloadWorkItem?.cancel()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.12
@@ -762,11 +876,6 @@ final class AppDel: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigat
         }, completionHandler: {
             NSApp.terminate(nil)
         })
-    }
-
-    func logoURL() -> URL {
-        let directory = URL(fileURLWithPath: (CommandLine.arguments[0] as NSString).deletingLastPathComponent)
-        return directory.appendingPathComponent("yulu_ui/web/public/favicon.svg")
     }
 
     // MARK: - The page
@@ -862,6 +971,23 @@ if arguments.contains("--self-test") {
     assert(script.contains("\"stopping\":true"))
     assert(script.contains("CustomEvent('yulu-panel'"))
     assert(panelStateScript(stopping: false, warning: "").contains("\"warning\":null"))
+
+    assert(normalizedSoundLevel(0) == 0 && normalizedSoundLevel(1) == 1)
+    assert(normalizedSoundLevel(0.1) > normalizedSoundLevel(0.01))
+    assert(LogoView.amplitude(for: 0) == 0.25 && abs(LogoView.amplitude(for: 1) - 1.2) < 0.0001)
+    // The mark is centred on the tile, as in the app icon.
+    let markBox = LogoView.wavePath(amplitude: 1).boundingBoxOfPath.union(LogoView.cursorPath.boundingBoxOfPath)
+    assert(abs(markBox.midX - LogoView.side / 2) < 1 && abs(markBox.midY - LogoView.side / 2) < 3)
+    _ = NSApplication.shared
+    let logo = LogoView(frame: NSRect(x: 0, y: 0, width: collapsedWindowSize, height: collapsedWindowSize))
+    logo.level = 0
+    logo.setLive(true)
+    logo.level = 1
+    let before = logo.amplitude
+    logo.step()
+    assert(logo.amplitude > before && logo.amplitude <= before * 1.12 + 0.0001)
+    logo.setLive(false)
+    assert(logo.amplitude == 1)
 
     let screen = NSRect(x: 0, y: 0, width: 1440, height: 875)
     let frame = defaultPanelFrame(in: screen)
