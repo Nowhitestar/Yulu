@@ -99,7 +99,7 @@ spooled and replayed. Do not add a fallback AI path to the capture process.
 | Manual sharing | selected supported Agent connector | Share Action snapshot, authorization, and verified receipt |
 | Questions about meetings | the user's own Agent | that Agent's history, via Yulu MCP tools |
 | Dictation text | explicitly enabled xAI text provider | `transcription.dictation.text_provider`/`text_model` plus the dictated-text disclosure receipt |
-| Live notes | xAI text provider, on by default; sends only after the live notes disclosure (ADR-012 and its 2026-11-20 amendment) | `transcription.live_notes.provider`/`model` plus the live notes disclosure receipt; `<stem>.notes.md` and `<stem>.mynotes.json` next to the recording |
+| Live notes | xAI text provider, on by default; sends only after the live notes disclosure (ADR-012, ADR-013) | `transcription.live_notes.provider`/`model` plus the live notes disclosure receipt; `<stem>.notes.md` and `<stem>.mynotes.json` next to the recording |
 | Search, prompts, glossary | Yulu local data | local SQLite and recording sidecars |
 
 ## Prefer MCP for Agent actions

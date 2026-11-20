@@ -300,7 +300,7 @@ for them by earlier versions stay inert.
 ### `transcription.live_notes`
 
 Live notes have their own selection and disclosure (ADR-012). They are on by
-default since the 2026-11-20 amendment, but the Host sends nothing until the
+default (ADR-013), but the Host sends nothing until the
 `xai-live-notes-v1` disclosure was accepted once and xAI is connected. They are
 separate from the dictation text provider and the Summary Provider, and they
 work with either audio engine.

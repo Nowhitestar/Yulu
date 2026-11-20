@@ -95,7 +95,7 @@ const DictationSchema = z.object({
 }).passthrough().default({});
 
 // Live notes have their own selection and disclosure. They are on by default
-// (ADR-012 amendment), but nothing is sent until the live notes disclosure is
+// (ADR-013), but nothing is sent until the live notes disclosure is
 // accepted and xAI is connected. An explicit "none" keeps meeting text on this
 // Mac; there is no fallback to another provider.
 const LiveNotesSchema = z.object({

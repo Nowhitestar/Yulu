@@ -36,8 +36,9 @@ chat engine or Agent Console, connector executor, or file-only work queue to
 Yulu. The accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-recording-pipeline.md),
 [`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md),
 [`ADR-009`](yulu/spec/adr/009-grok-cli-compatible-xai-oauth.md),
-[`ADR-010`](yulu/spec/adr/010-retire-yulu-conversation.md), and
-[`ADR-012`](yulu/spec/adr/012-live-notes.md).
+[`ADR-010`](yulu/spec/adr/010-retire-yulu-conversation.md),
+[`ADR-012`](yulu/spec/adr/012-live-notes.md), and
+[`ADR-013`](yulu/spec/adr/013-live-notes-on-by-default.md).
 
 ### Constraints
 
@@ -296,8 +297,9 @@ sending -> delivery_reported -> completed
   ADR-009.
 - ADR-012 replaces live captions with live notes, retires live-caption
   translation (superseding ADR-011), and commits a complete live transcript
-  instead of transcribing again. Its 2026-11-20 amendment turns live notes on
-  by default; the disclosure and xAI connection are still required.
+  instead of transcribing again.
+- ADR-013 turns live notes on by default (superseding ADR-012's `none`
+  default); the disclosure and xAI connection are still required.
 - ADR-002 remains relevant for glossary data; the selected audio engine consumes that context.
 - Historical ADR bodies remain history and must not be treated as active
   implementation instructions.
