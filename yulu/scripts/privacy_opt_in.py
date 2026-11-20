@@ -31,10 +31,13 @@ def privacy_opt_in_report(config: Mapping[str, Any] | None) -> dict[str, Any]:
     # this explicit switch, the xAI audio engine, and an accepted disclosure.
     dictation_text_provider = "xai" if dictation.get("text_provider") == "xai" else "none"
     # ADR-012: live notes send meeting text to xAI only through their own
-    # switch and disclosure, with either audio engine. Retired caption
-    # translation settings and the dictation switch never enable them.
+    # switch and disclosure, with either audio engine. The switch is on by
+    # default (a missing provider means xai), but the Host sends nothing until
+    # the live notes disclosure is accepted; an explicit none, or any other
+    # value, turns it off. Retired caption translation settings and the
+    # dictation switch never enable them.
     live_notes = _dict(transcription.get("live_notes"))
-    live_notes_provider = "xai" if live_notes.get("provider") == "xai" else "none"
+    live_notes_provider = "xai" if live_notes.get("provider", "xai") == "xai" else "none"
     pipeline_enabled = agent_pipeline.get("enabled") is not False
 
     return {

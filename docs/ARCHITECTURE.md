@@ -14,7 +14,7 @@ Yulu owns only the capabilities that require a trusted product boundary:
 
 - native system-audio and microphone capture;
 - explicit local or xAI execution for the live transcript, final transcripts, and dictation;
-- explicitly enabled xAI live notes during a recording, and the attendee's own notes;
+- xAI live notes during a recording (on by default, sent only after their disclosure is accepted), and the attendee's own notes;
 - macOS permission visibility and repair;
 - recording path validation;
 - durable tasks, idempotency, leases, recovery, and audit events;
@@ -45,7 +45,7 @@ provider, model, connection, or credential source.
 | Local audio engine | `localCaptionManager.ts`, `sherpa_caption_worker.py` | Paraformer INT8 source-separated captions and local final transcription; install/test/remove from Settings |
 | xAI audio engine | `xaiAudio.ts`, `xaiCredentials.ts`, `xai_keychain.swift` | Direct xAI Streaming/REST STT plus Yulu-owned device OAuth and macOS Keychain storage |
 | Realtime coordinator | `realtimeTranscription.ts` | Feed mic/system streams, keep the live transcript and its coverage from the selected engine, and feed live notes |
-| Live notes | `liveNotes.ts`, `recorder_status.swift`, `/live` page | Explicitly enabled xAI live notes with their own disclosure, the attendee's own notes, and the floating panel that shows them; saved next to the recording, not task artifacts |
+| Live notes | `liveNotes.ts`, `recorder_status.swift`, `/live` page | xAI live notes, on by default and sent only after their own disclosure is accepted, the attendee's own notes, and the floating panel that shows them; saved next to the recording, not task artifacts |
 | Durable store | `hostStore.ts` | Persist tasks, pinned summary identity, events, leases, artifact records, and Notion delivery records in `host.sqlite` |
 | Pipeline coordinator | `recordingPipeline.ts` | Commit the selected-engine transcript first, then dispatch pinned Summary work and recover failures; recording completion never starts sharing |
 | Summary execution | `supportedAgentSummaryAdapter.ts`, `agentGateway.ts` | Run the task's pinned xAI/Codex/Claude Code Summary workflow; retain legacy pinned Hermes artifact work only for recovery/audit; they do not execute production audio transcription |

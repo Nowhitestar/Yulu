@@ -25,9 +25,10 @@ separate from the selected Summary Provider.
   and the dictated-text disclosure was accepted.
 - xAI live notes send new transcript text, the attendee's typed notes, and
   matching glossary entries only when `transcription.live_notes.provider` is
-  `xai` and the live notes disclosure was accepted, with either audio engine.
-  Audio is never sent for live notes. The attendee's own notes stay on the Mac
-  either way. Live-caption translation is retired.
+  `xai` (the default; an explicit `none` turns them off) and the live notes
+  disclosure was accepted, with either audio engine. Audio is never sent for
+  live notes. The attendee's own notes stay on the Mac either way. Live-caption
+  translation is retired.
 - Python is capture/scheduling/desktop glue. It is not an AI runtime.
 
 Do not add automatic fallback between audio engines or Summary Providers, a
@@ -237,7 +238,7 @@ User's own Agent -> authenticated Yulu MCP -> local meetings and summaries
 | `agentRuntime.ts` | Supported local Agent runtime resolution for explicitly selected capabilities |
 | prompt/glossary/search stores | Local context and discovery |
 | `xaiText.ts` / `dictationText.ts` | Strict stateless xAI text requests for summaries and explicitly enabled dictation cleanup/translation |
-| `liveNotes.ts` / `recorder_status.swift` | Explicitly enabled xAI live notes, the attendee's own notes, and the floating panel that shows `/live` during a recording |
+| `liveNotes.ts` / `recorder_status.swift` | xAI live notes (on by default, sent only after the live notes disclosure is accepted), the attendee's own notes, and the floating panel that shows `/live` during a recording |
 
 ### Installed services
 
@@ -295,7 +296,8 @@ sending -> delivery_reported -> completed
   ADR-009.
 - ADR-012 replaces live captions with live notes, retires live-caption
   translation (superseding ADR-011), and commits a complete live transcript
-  instead of transcribing again.
+  instead of transcribing again. Its 2026-11-20 amendment turns live notes on
+  by default; the disclosure and xAI connection are still required.
 - ADR-002 remains relevant for glossary data; the selected audio engine consumes that context.
 - Historical ADR bodies remain history and must not be treated as active
   implementation instructions.
@@ -311,8 +313,8 @@ sending -> delivery_reported -> completed
   Agent Console outside ADR-010.
 - Sending dictated text to xAI without the explicit dictation text switch and
   its accepted disclosure.
-- Sending meeting text to xAI for live notes without the explicit live notes
-  switch and its accepted disclosure, or sending audio for live notes.
+- Sending meeting text to xAI for live notes before the live notes disclosure
+  was accepted or while the switch is off, or sending audio for live notes.
 - Reintroducing live-caption translation or the caption strip outside a new ADR.
 - Writing final transcript/summary files outside the Host commit contract.
 - Calling Notion without task opt-in, Host begin authorization, and Host result

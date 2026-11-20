@@ -268,9 +268,10 @@ provenance.
 
 Starting a meeting recording opens the live notes panel: a tall glass card on the
 right edge of the active display (ADR-012). It shows the notes Yulu writes during
-the meeting, your own notes, and one line to add another. Live notes are off
-until you turn them on (see [Live notes](#live-notes)); the panel still takes
-your own notes either way.
+the meeting, your own notes, and one line to add another. Live notes are on by
+default but send nothing until you accept their data notice and xAI is
+connected (see [Live notes](#live-notes)); the panel still takes your own notes
+either way.
 
 The default audio engine is the local sherpa-onnx Paraformer INT8 model, which
 handles both the live transcript and the durable final transcript. Open
@@ -328,11 +329,14 @@ The model cannot be removed while a recording is active.
 
 ### Live notes
 
-Live notes are off by default and send nothing until you turn them on. They
-need:
+Live notes are on by default (ADR-012, amended 2026-11-20), but they send
+nothing until:
 
-1. In Settings → Recording & summaries, **Live notes** turned on, which first
-   shows the `xai-live-notes-v1` disclosure.
+1. The `xai-live-notes-v1` disclosure is accepted once. While **Live notes** is
+   on in Settings → Recording & summaries and the disclosure is not accepted,
+   that section shows it right away, with **Accept and start** and **Turn off
+   live notes**. Accepting also saves `transcription.live_notes.provider` as
+   `xai`; turning off saves `none`, which keeps meeting text on the Mac.
 2. A connected xAI account in Settings → Connections.
 
 They work with either audio engine. While a meeting is recorded, the Host sends
@@ -367,9 +371,9 @@ step is missing:
 
 | Panel notice | Cause | Fix |
 |---|---|---|
-| `实时笔记未开启` / "Live notes are off" | `live_notes.provider` is `none` | Turn on **Live notes** in Settings → Recording & summaries |
-| "…确认数据说明" / "Review how meeting text is sent to xAI" | The disclosure is not accepted, for example after the xAI connection was removed | Review and accept it in Settings → Recording & summaries |
-| "…连接 xAI" / "Connect xAI" | No xAI credential is connected | Connect xAI in Settings → Connections |
+| `实时笔记未开启` / "Live notes are off" | `live_notes.provider` was set to `none` | Turn on **Live notes** in Settings → Recording & summaries |
+| `实时笔记还没开始` / "Live notes haven't started", with "…确认数据说明…" / "…accept how meeting text is sent to xAI…" | The disclosure is not accepted yet, for example on a new install, after an upgrade, or after the xAI connection was removed | **Open Settings** opens the Live notes section, which shows the disclosure; accept it there |
+| `实时笔记还没开始` / "Live notes haven't started", with "…连接 xAI" / "Connect xAI…" | No xAI credential is connected | Connect xAI in Settings → Connections |
 
 Each recording keeps its live notes next to the audio:
 
@@ -386,9 +390,10 @@ Live-caption translation (ADR-011) is retired. An upgrade archives
 `transcription.captions` with mode `0600` to
 `config.legacy-transcription.<stamp>.json`, removes it from the active config and
 rejects it on write, and drops the old caption-text consent. Nobody starts
-sending meeting text after an upgrade: `transcription.live_notes.provider`
-defaults to `none`. `yulu doctor --json` reports the selection under
-`privacy_opt_in.live_notes`.
+sending meeting text after an upgrade without accepting the live notes
+disclosure: `transcription.live_notes.provider` defaults to `xai`, an explicit
+`none` stays off, and no migration rewrites it. `yulu doctor --json` reports the
+switch (not the disclosure receipt) under `privacy_opt_in.live_notes`.
 
 ## Dictation and voice input
 

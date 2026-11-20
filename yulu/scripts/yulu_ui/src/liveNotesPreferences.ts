@@ -4,7 +4,10 @@ import { FAST_DICTATION_MODEL } from "./dictationPreferences.js";
 /** Live notes must keep up with the meeting, so their default is the fast model. */
 export const LIVE_NOTES_MODEL_DEFAULT = FAST_DICTATION_MODEL;
 
-/** Meeting text leaves the Mac for live notes only through an explicit provider. */
+/**
+ * `xai` is the default; `none` keeps meeting text on this Mac. Even with `xai`,
+ * nothing is sent before the live notes disclosure is accepted.
+ */
 export const LiveNotesProviderSchema = z.enum(["none", "xai"]);
 export type LiveNotesProvider = z.infer<typeof LiveNotesProviderSchema>;
 

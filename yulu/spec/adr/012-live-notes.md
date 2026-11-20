@@ -1,6 +1,6 @@
 # ADR-012: Live notes replace live captions
 
-**Status**: Accepted
+**Status**: Accepted; amended 2026-11-20 ([on by default](#amendment-2026-11-20-on-by-default))
 **Date**: 2026-11-19
 **Supersedes**: [ADR-011](011-explicit-live-caption-translation.md) in full.
 **Refines**: [ADR-007](007-explicit-audio-transcription-engines.md), whose
@@ -34,9 +34,10 @@ transcription time and, with the `xai` engine, uploaded the audio twice.
    is clicked and is `https`.
 2. **Live notes are written by the Host through the stateless xAI text
    client.** The capability is `live_notes`. It runs only when
-   `transcription.live_notes.provider` is `xai` (default `none`), the
-   `xai-live-notes-v1` disclosure was accepted, and an xAI credential source is
-   connected. The model is exact: `transcription.live_notes.model`, default
+   `transcription.live_notes.provider` is `xai` (originally default `none`;
+   `xai` since the [2026-11-20 amendment](#amendment-2026-11-20-on-by-default)),
+   the `xai-live-notes-v1` disclosure was accepted, and an xAI credential source
+   is connected. The model is exact: `transcription.live_notes.model`, default
    `grok-4.20-0309-non-reasoning`, because notes must keep up with the meeting.
    There is no fallback to another model or provider.
 3. **The disclosure is its own.** `xai-live-notes-v1` says that new transcript
@@ -88,8 +89,10 @@ transcription time and, with the `xai` engine, uploaded the audio twice.
   transcript.
 - **After:** no caption text is sent. Meeting text goes to xAI for live notes
   only after the attendee turns them on and accepts `xai-live-notes-v1`, with
-  either audio engine. With the `local` engine that is a new, opt-in text path,
-  and the disclosure names it. With the `xai` engine, a complete live
+  either audio engine. (Since the [2026-11-20
+  amendment](#amendment-2026-11-20-on-by-default) the switch is on by default;
+  accepting the disclosure is the explicit step.) With the `local` engine that
+  is a new, opt-in text path, and the disclosure names it. With the `xai` engine, a complete live
   transcript means the audio is uploaded once.
 
 ## Migration
@@ -98,7 +101,9 @@ transcription time and, with the `xai` engine, uploaded the audio twice.
   `config.legacy-transcription.<stamp>.json`, removed from the active config,
   and rejected on write. `transcription.live_notes` defaults to `none`, so
   nobody starts sending meeting text after an upgrade, including people who
-  had caption translation on.
+  had caption translation on. (The [2026-11-20
+  amendment](#amendment-2026-11-20-on-by-default) changes this default to
+  `xai`; the disclosure is what keeps an upgrade from sending meeting text.)
 - **Host SQLite.** `caption_translation_disclosures` is dropped, so a retired
   consent can never authorize anything. `live_notes_disclosures` is additive.
 - **Endpoints.** `POST /api/recordings/realtime/options` is removed. An older
@@ -133,3 +138,43 @@ transcription time and, with the `xai` engine, uploaded the audio twice.
 - People who used caption translation lose it.
 - The xAI text client has three bounded, non-streaming capabilities:
   `summary`, `dictation` and `live_notes`.
+
+## Amendment (2026-11-20): on by default
+
+**Status**: Accepted
+**Changes**: the default in Decision 2 and the config note under Migration.
+Everything else in this ADR stands.
+
+Live notes are now on by default. A missing `transcription.live_notes.provider`
+means `xai`, for new installs and after an upgrade. An explicit `"none"` keeps
+them off, and no migration rewrites an existing config.
+
+The switch is no longer the consent; the disclosure is. The gates that decide
+whether anything is sent are unchanged:
+
+- Nothing is sent before the attendee accepts `xai-live-notes-v1` once. While
+  the switch is on and the disclosure is not accepted, Settings shows it right
+  away with two choices: accept, which records the receipt and writes
+  `provider: "xai"` so the choice is explicit, or turn off, which writes
+  `"none"`. Removing the xAI connection still clears the receipt, so the
+  disclosure is shown again.
+- An xAI credential source must be connected.
+- There is no fallback to another provider or model, and audio is never sent.
+
+Until both gates are met the Host sends nothing, and the panel says that live
+notes have not started and names the missing step (`needs_disclosure` or
+`needs_connection`); `provider_off` now means the attendee turned them off. The
+attendee's own notes are saved as before. `yulu doctor --json` reports
+`privacy_opt_in.live_notes.provider` as `xai` when the key is missing: it reads
+the switch, not the receipt.
+
+**Why.** Live notes are what the panel exists to show. Off by default, the panel
+opened on an "off" notice until the attendee found the setting. One explicit
+decision, made with the disclosure in front of the attendee, is enough before
+meeting text leaves the Mac.
+
+**Privacy.** An upgrade still sends no meeting text by itself: sending needs an
+accepted `xai-live-notes-v1` receipt, which only the attendee creates, and a
+connected xAI credential. With the `local` engine and either live notes turned
+off or the disclosure not accepted, nothing from the meeting leaves the Mac
+while it is recorded.

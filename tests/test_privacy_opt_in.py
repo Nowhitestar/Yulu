@@ -25,8 +25,10 @@ def test_empty_config_reports_local_yulu_audio_defaults():
     assert "conversation" not in report
     assert report["dictation_text"]["provider"] == "none"
     assert report["dictation_text"]["cloud_text_opt_in"] is False
-    assert report["live_notes"]["provider"] == "none"
-    assert report["live_notes"]["cloud_text_opt_in"] is False
+    # Live notes are on by default; the Host still sends nothing until the
+    # live notes disclosure is accepted.
+    assert report["live_notes"]["provider"] == "xai"
+    assert report["live_notes"]["requires_xai_audio_engine"] is False
     assert "caption_translation" not in report
     assert report["summary_delivery"]["auto_channel"] == "file"
     assert report["summary_delivery"]["external_opt_in_channels"] == []
@@ -91,20 +93,27 @@ def test_dictation_text_reports_only_the_explicit_xai_switch():
     assert retired["dictation_text"]["cloud_text_opt_in"] is False
 
 
-def test_live_notes_report_only_their_own_explicit_switch():
+def test_live_notes_report_only_their_own_switch():
     mod = load_privacy()
 
     selected = mod.privacy_opt_in_report({
         "transcription": {"engine": "local", "live_notes": {"provider": "xai"}},
     })
-    dictation_only = mod.privacy_opt_in_report({
-        "transcription": {"engine": "xai", "dictation": {"text_provider": "xai"}},
+    explicit_off = mod.privacy_opt_in_report({
+        "transcription": {"engine": "xai", "dictation": {"text_provider": "xai"}, "live_notes": {"provider": "none"}},
     })
     retired_captions = mod.privacy_opt_in_report({
-        "transcription": {"engine": "xai", "captions": {"translation_provider": "xai"}},
+        "transcription": {
+            "engine": "xai",
+            "captions": {"translation_provider": "xai"},
+            "live_notes": {"provider": "none"},
+        },
     })
     unknown = mod.privacy_opt_in_report({
         "transcription": {"engine": "xai", "live_notes": {"provider": "hermes"}},
+    })
+    null_provider = mod.privacy_opt_in_report({
+        "transcription": {"live_notes": {"provider": None}},
     })
 
     assert selected["live_notes"]["provider"] == "xai"
@@ -112,7 +121,34 @@ def test_live_notes_report_only_their_own_explicit_switch():
     assert selected["live_notes"]["requires_xai_audio_engine"] is False
     assert selected["transcription"]["cloud_audio_opt_in"] is False
     assert selected["dictation_text"]["cloud_text_opt_in"] is False
-    assert dictation_only["live_notes"]["cloud_text_opt_in"] is False
+    # The dictation switch and retired caption translation never decide live notes.
+    assert explicit_off["live_notes"]["provider"] == "none"
+    assert explicit_off["live_notes"]["cloud_text_opt_in"] is False
+    assert explicit_off["dictation_text"]["cloud_text_opt_in"] is True
     assert retired_captions["live_notes"]["cloud_text_opt_in"] is False
     assert "caption_translation" not in retired_captions
     assert unknown["live_notes"]["provider"] == "none"
+    assert unknown["live_notes"]["cloud_text_opt_in"] is False
+    assert null_provider["live_notes"]["provider"] == "none"
+
+
+def test_live_notes_are_on_by_default_and_only_an_explicit_none_turns_them_off():
+    mod = load_privacy()
+
+    no_transcription = mod.privacy_opt_in_report({})
+    no_live_notes = mod.privacy_opt_in_report({"transcription": {"engine": "local"}})
+    no_provider = mod.privacy_opt_in_report({
+        "transcription": {"live_notes": {"model": "grok-4.20-0309-non-reasoning", "language": "en"}},
+    })
+    explicit_none = mod.privacy_opt_in_report({
+        "transcription": {"live_notes": {"provider": "none"}},
+    })
+
+    for report in (no_transcription, no_live_notes, no_provider):
+        assert report["live_notes"]["provider"] == "xai"
+        assert report["live_notes"]["cloud_text_opt_in"] is True
+        # Text only: the default never selects the xAI audio engine.
+        assert report["transcription"]["cloud_audio_opt_in"] is False
+    assert explicit_none["live_notes"]["provider"] == "none"
+    assert explicit_none["live_notes"]["cloud_text_opt_in"] is False
+    assert set(explicit_none["live_notes"]) == set(no_provider["live_notes"])

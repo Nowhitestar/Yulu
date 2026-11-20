@@ -71,9 +71,28 @@ describe("LivePanel", () => {
   it("names the missing step when live notes cannot run, and still takes notes", () => {
     snapshot = { ...snapshot!, status: "unavailable", reason: "needs_connection", markdown: "" };
     mount();
-    expect(screen.getByText("实时笔记未开启")).toBeInTheDocument();
+    expect(screen.getByText("实时笔记还没开始")).toBeInTheDocument();
     expect(screen.getByText(/需要先在「设置 › 连接」里连接 xAI/)).toBeInTheDocument();
     expect(screen.getByLabelText("记一笔，回车保存")).toBeEnabled();
+  });
+
+  it("says live notes start once the data notice is accepted, and opens that setting", async () => {
+    const postMessage = vi.fn();
+    (window as unknown as { webkit?: unknown }).webkit = { messageHandlers: { yuluPanel: { postMessage } } };
+    snapshot = { ...snapshot!, status: "unavailable", reason: "needs_disclosure", markdown: "" };
+    mount();
+    expect(screen.getByText("实时笔记还没开始")).toBeInTheDocument();
+    expect(screen.queryByText("实时笔记未开启")).toBeNull();
+    expect(screen.getByText(/确认数据说明后，就会开始生成实时笔记/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "打开设置" }));
+    expect(postMessage).toHaveBeenCalledWith({ action: "open", route: "/settings/recording#live-notes" });
+  });
+
+  it("reads as off only when the switch was turned off", () => {
+    snapshot = { ...snapshot!, status: "unavailable", reason: "provider_off", markdown: "" };
+    mount();
+    expect(screen.getByText("实时笔记未开启")).toBeInTheDocument();
+    expect(screen.getByText(/在「设置 › 录音与摘要」里打开/)).toBeInTheDocument();
   });
 
   it("asks the native panel to collapse when it hosts the page", async () => {

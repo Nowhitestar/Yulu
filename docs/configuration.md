@@ -38,7 +38,7 @@ conversation (ADR-010); ask about meetings in your own Agent through Yulu MCP.
       "translate_timeout_sec": 30
     },
     "live_notes": {
-      "provider": "none",
+      "provider": "xai",
       "model": "grok-4.20-0309-non-reasoning"
     }
   },
@@ -299,13 +299,15 @@ for them by earlier versions stay inert.
 
 ### `transcription.live_notes`
 
-Live notes have their own explicit selection and disclosure (ADR-012). They are
+Live notes have their own selection and disclosure (ADR-012). They are on by
+default since the 2026-11-20 amendment, but the Host sends nothing until the
+`xai-live-notes-v1` disclosure was accepted once and xAI is connected. They are
 separate from the dictation text provider and the Summary Provider, and they
 work with either audio engine.
 
 | Field | Installer value | Meaning |
 |---|---:|---|
-| `live_notes.provider` | `"none"` | `none` keeps meeting text on the Mac; your own notes are still saved. With `xai`, new transcript text, your notes and matching glossary entries go to xAI while a meeting is recorded, but only with a connected xAI credential and the accepted `xai-live-notes-v1` disclosure. Audio is never sent. Turn it on in Settings → Recording & summaries. An upgrade never sets `xai`. |
+| `live_notes.provider` | `"xai"` | The default, also when the key is missing. With `xai`, new transcript text, your notes and matching glossary entries go to xAI while a meeting is recorded, but only with a connected xAI credential and the accepted `xai-live-notes-v1` disclosure; until then nothing is sent and Settings → Recording & summaries shows the disclosure with **Accept and start** and **Turn off live notes**. Accepting saves `xai` explicitly. An explicit `none` turns live notes off and keeps meeting text on the Mac; your own notes are still saved. No migration rewrites an existing value. Audio is never sent. |
 | `live_notes.model` | `"grok-4.20-0309-non-reasoning"` | Exact xAI text model for live notes, chosen for speed. It is never replaced by another model on failure. |
 | `live_notes.language` | interface language | `zh` or `en`: the language of new live notes. The panel can switch it for one recording. |
 
@@ -313,7 +315,7 @@ Each update carries the previous notes, the transcript text added since the last
 update (at most 12,000 characters), a short recent window, your notes, the
 language and matching glossary entries. Requests have no tools or history and
 response storage is turned off. When a requirement is missing, the Host sends
-nothing and the panel names the missing step: `provider_off`,
+nothing and the panel names the missing step: `provider_off` (turned off),
 `needs_disclosure` or `needs_connection`. A failed update keeps the earlier
 notes. See "Live notes" in `docs/operations.md`.
 

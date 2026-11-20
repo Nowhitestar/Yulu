@@ -183,9 +183,10 @@ interface Session {
  * Live notes for the meeting being recorded. A fast xAI model rewrites the
  * notes from the new transcript, the attendee's own notes and the glossary
  * entries they match, about once a minute. It runs only with
- * `transcription.live_notes.provider` set to `xai`, the accepted live notes
- * disclosure and a connected xAI credential; otherwise nothing is sent and the
- * attendee's own notes are still kept. No retry, tools, history or fallback.
+ * `transcription.live_notes.provider` set to `xai` (the default), the
+ * accepted live notes disclosure and a connected xAI credential; otherwise
+ * nothing is sent and the attendee's own notes are still kept. No retry,
+ * tools, history or fallback.
  */
 export class LiveNotesService {
   private session: Session | null = null;
@@ -220,7 +221,7 @@ export class LiveNotesService {
 
   availability(): LiveNotesAvailability {
     let config: ReturnType<ConfigManager["read"]>;
-    // An unreadable selection is not an explicit opt-in.
+    // An unreadable config never turns live notes on.
     try { config = this.options.config.read(); }
     catch { return { available: false, reason: "provider_off" }; }
     const liveNotes = config.transcription.live_notes;
