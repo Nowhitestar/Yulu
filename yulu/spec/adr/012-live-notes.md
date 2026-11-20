@@ -24,7 +24,7 @@ transcription time and, with the `xai` engine, uploaded the audio twice.
 
 1. **The overlay becomes a live notes panel.** `recorder_status` shows the
    Host's `/live` page in a WebView inside a tall glass panel on the right edge
-   of the screen. It collapses to Yulu's breathing icon, stops the recording,
+   of the screen. It collapses to Yulu's app icon, stops the recording,
    and takes typing without activating Yulu, so the meeting app stays in front.
    The page asks the panel for exactly five things: `collapse`, `drag`,
    `stop`, `open` (only `/settings…` and `/inbox…` routes, through the

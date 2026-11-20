@@ -1,5 +1,8 @@
 <div align="center">
-  <img src="assets/logo.svg" width="88" alt="Yulu 标志" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg" />
+    <img src="assets/logo.svg" width="128" alt="Yulu 标志" />
+  </picture>
   <h1>Yulu · 语录</h1>
   <p><b>原生录制，实时笔记，让每场会议成为 Agent 可用的记忆。</b></p>
   <p><a href="README.md">English</a> · <b>简体中文</b></p>
@@ -18,7 +21,7 @@ Yulu 是 macOS 上的会议记录与语音输入工具。录制系统声音和�
 - **直接在 Mac 上采集**：录制系统声音和麦克风，无需机器人入会或虚拟声卡；配合实时笔记、日历提醒和会议检测。
 - **会议之外也能用**：全局快捷键支持向当前应用听写和快速翻译。可选 xAI 三档文字整理，标点风格独立选择，整理结果与原文都保留。
 
-[v0.30.0 更新](docs/release-notes/v0.30.0.md)：实时笔记取代实时字幕。要点、表格和架构图会在会议旁边逐步成形，你也可以随手记下自己的笔记，两者都随录音保存。实时转写已经完整时，不再重新转写。
+[v0.31.0 更新](docs/release-notes/v0.31.0.md)：新的标志——从说出的话落成一行字的一笔，用在 App 图标、菜单栏和实时笔记面板上；菜单栏的空闲、录音中、处理中一眼就能分清。实时笔记默认开启，确认发送内容之前不会发送任何东西。
 
 ## 功能
 

@@ -1,0 +1,26 @@
+{
+  "light": {
+    "ink": "#0d1114",
+    "paper": "#f6f9fc",
+    "blue": "#0f74c5",
+    "gray": "#51565b",
+    "gray-2": "#646a70",
+    "hairline": "#dbdee2",
+    "green": "#248a3d",
+    "amber": "#96590a",
+    "red": "#d70015",
+    "menubar-red": "#ff3b30"
+  },
+  "dark": {
+    "ink": "#eceff2",
+    "paper": "#0f1215",
+    "blue": "#3a93e6",
+    "gray": "#a3a9b0",
+    "gray-2": "#8a9097",
+    "hairline": "#2a2f35",
+    "green": "#6bd17a",
+    "amber": "#e0a13c",
+    "red": "#ff6961",
+    "menubar-red": "#ff453a"
+  }
+}

@@ -317,8 +317,9 @@ created before this snapshot existed must be recorded again; Yulu never fills
 missing authority from the current Settings.
 
 Drag the empty part of the panel's header to move it. The down arrow collapses it
-to the breathing Yulu logo in the same corner; click the logo to open it again,
-or drag the logo to move it. The red square stops the recording; the panel
+to the Yulu icon in the same corner, whose mark keeps writing and follows the
+sound while the meeting is recorded; click the icon to open it again, or drag it
+to move it. The red square stops the recording; the panel
 closes after capture stops, and a failed or unconfirmed stop shows a notice in
 the panel. Typing a note does not bring Yulu to the front, so the meeting app
 keeps its place. The panel opens only Yulu's own Settings and Inbox pages, and a

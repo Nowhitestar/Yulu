@@ -319,9 +319,34 @@ def test_dmg_guidance_does_not_require_an_unbundled_global_cli():
 
 def test_social_card_describes_the_current_product_surface():
     card = (ROOT / "assets" / "social-card.svg").read_text(encoding="utf-8")
+    kit = (ROOT / "assets" / "brand" / "social" / "yulu-social-card.svg").read_text(encoding="utf-8")
 
-    assert "transcription · summaries · conversation · Calendar · manual sharing" in card
-    assert "whisper.cpp · BYOA" not in card
+    assert card == kit
+    assert "Native meeting capture. Live notes. Agent-ready memory." in card
+    assert "macOS · local by default · live notes · MCP" in card
+    for retired in ("conversation", "whisper.cpp · BYOA", "Calendar · manual sharing"):
+        assert retired not in card
+
+
+def test_brand_kit_is_the_source_of_the_product_icons():
+    assets = ROOT / "assets"
+    brand = assets / "brand"
+    favicon = (ROOT / "yulu/scripts/yulu_ui/web/public/favicon.svg").read_text(encoding="utf-8")
+
+    assert (assets / "logo.svg").read_text(encoding="utf-8") == (brand / "logo/svg/yulu-mark.svg").read_text(encoding="utf-8")
+    assert (assets / "logo-dark.svg").read_text(encoding="utf-8") == (brand / "logo/svg/yulu-mark-on-dark.svg").read_text(encoding="utf-8")
+    assert favicon == (brand / "favicon/favicon.svg").read_text(encoding="utf-8")
+    assert "prefers-color-scheme:dark" in favicon
+    assert (assets / "Yulu.icns").read_bytes()[:4] == b"icns"
+    assert sorted(p.name for p in (assets / "Yulu.iconset").glob("*.png")) == sorted(
+        f"icon_{size}x{size}{scale}.png" for size in (16, 32, 128, 256, 512) for scale in ("", "@2x"))
+    assert not (brand / "app-icon" / "Yulu.iconset").exists()
+    for tool in ("build.sh", "build_svgs.py", "fetch_fonts.sh", "pack_icons.py", "rasterize.mjs", "preview.mjs"):
+        assert (brand / "tools" / tool).is_file(), tool
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert 'srcset="assets/logo-dark.svg"' in readme and 'src="assets/logo.svg"' in readme
+    index = (ROOT / "yulu/scripts/yulu_ui/web/index.html").read_text(encoding="utf-8")
+    assert 'href="/favicon.svg?v=brand-v2"' in index
 
 
 def test_release_checklist_requires_public_surface_read_back():

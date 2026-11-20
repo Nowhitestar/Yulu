@@ -1,0 +1,27 @@
+/* 语录 Yulu 颜色。颜色只表达含义：蓝 = 可点 / 正在进行；绿、琥珀、红 = 状态；其余是墨、纸和灰。 */
+:root {
+  --yulu-ink: #0d1114;
+  --yulu-paper: #f6f9fc;
+  --yulu-blue: #0f74c5;
+  --yulu-gray: #51565b;
+  --yulu-gray-2: #646a70;
+  --yulu-hairline: #dbdee2;
+  --yulu-green: #248a3d;
+  --yulu-amber: #96590a;
+  --yulu-red: #d70015;
+  --yulu-menubar-red: #ff3b30;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --yulu-ink: #eceff2;
+    --yulu-paper: #0f1215;
+    --yulu-blue: #3a93e6;
+    --yulu-gray: #a3a9b0;
+    --yulu-gray-2: #8a9097;
+    --yulu-hairline: #2a2f35;
+    --yulu-green: #6bd17a;
+    --yulu-amber: #e0a13c;
+    --yulu-red: #ff6961;
+    --yulu-menubar-red: #ff453a;
+  }
+}
