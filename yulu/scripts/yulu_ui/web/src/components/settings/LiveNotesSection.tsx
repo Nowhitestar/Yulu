@@ -10,8 +10,10 @@ import "./DictationSettings.css";
 /**
  * Live notes: during a recording, Yulu turns new speech into key points,
  * tables and diagrams on the right edge of the screen, and saves them with the
- * recording. Meeting text goes to xAI only after this switch is on and its data
- * notice was accepted; the notice is shown once, before anything is sent.
+ * recording. The switch is on by default, but meeting text goes to xAI only
+ * after its data notice was accepted; the notice is shown once, before anything
+ * is sent. While the switch is on and the notice is not accepted yet, the
+ * section shows it right away with "accept" and "turn off".
  */
 export function LiveNotesSection({ tracker }: { tracker: SettingsRestartTracker }) {
   const t = useT();
@@ -23,6 +25,9 @@ export function LiveNotesSection({ tracker }: { tracker: SettingsRestartTracker 
   const [saving, setSaving] = useState(false);
   const data = status.data;
   const on = data?.provider === "xai";
+  // On by default, so the switch can be on before the notice was accepted.
+  const confirming = on && data !== undefined && !data.disclosure.accepted;
+  const disclosure = confirming ? "confirm" : reviewing ? "review" : null;
 
   const save = async (path: string, value: unknown) => {
     setSaving(true);
@@ -68,16 +73,24 @@ export function LiveNotesSection({ tracker }: { tracker: SettingsRestartTracker 
         disabledNote=""
         onCommit={toggle}
       />
-      {reviewing && (
+      {disclosure && (
         <div className="dictation-disclosure" role="group" aria-labelledby="live-notes-disclosure">
-          <strong id="live-notes-disclosure">{t("settings.liveNotes.disclosure.title")}</strong>
+          <strong id="live-notes-disclosure">
+            {t(disclosure === "confirm" ? "settings.liveNotes.disclosure.onTitle" : "settings.liveNotes.disclosure.title")}
+          </strong>
           <p>{t("settings.liveNotes.disclosure.body")}</p>
           <div className="dictation-disclosure-actions">
-            <button type="button" className="path-btn" disabled={saving} onClick={() => setReviewing(false)}>
-              {t("settings.liveNotes.disclosure.cancel")}
-            </button>
+            {disclosure === "confirm" ? (
+              <button type="button" className="path-btn" disabled={saving} onClick={() => toggle(false)}>
+                {t("settings.liveNotes.disclosure.turnOff")}
+              </button>
+            ) : (
+              <button type="button" className="path-btn" disabled={saving} onClick={() => setReviewing(false)}>
+                {t("settings.liveNotes.disclosure.cancel")}
+              </button>
+            )}
             <button type="button" className="path-btn path-btn--primary" disabled={saving} onClick={() => { void acceptAndTurnOn(); }}>
-              {t("settings.liveNotes.disclosure.accept")}
+              {t(disclosure === "confirm" ? "settings.liveNotes.disclosure.acceptAndStart" : "settings.liveNotes.disclosure.accept")}
             </button>
           </div>
         </div>

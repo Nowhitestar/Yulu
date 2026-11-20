@@ -68,6 +68,8 @@ describe("Host durable-data migration", () => {
           engine: "local",
           language: "zh",
           dictation: { text_provider: "none", text_model: "grok-4.6" },
+          // On by default; nothing is sent before the live notes disclosure.
+          live_notes: { provider: "xai" },
         },
         agent_pipeline: { auto_process_recordings: true },
         llm: { enabled: false, command: null, agent: { provider: "auto" } },
