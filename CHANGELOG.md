@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.31.0](https://github.com/Nowhitestar/Yulu/compare/v0.30.0...v0.31.0) (2026-11-20)
+
+
+### Features
+
+* new one-stroke mark across app icon, menu bar and panel; live notes on by default ([#269](https://github.com/Nowhitestar/Yulu/issues/269)) ([0eb690f](https://github.com/Nowhitestar/Yulu/commit/0eb690f4b8567af1b16e583fe846f72c378b26e4))
+
 ## [0.30.0](https://github.com/Nowhitestar/Yulu/compare/v0.29.0...v0.30.0) (2026-11-19)
 
 
