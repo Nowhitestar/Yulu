@@ -6,7 +6,7 @@ import { applyGlossaryContract } from "./glossaryContract.js";
 import type { HostStore } from "./hostStore.js";
 import type { PubSub, AppChannels } from "./pubsub.js";
 import type { XaiCredentialSource } from "./xaiCredentials.js";
-import type { XaiTextClient } from "./xaiText.js";
+import { LIVE_NOTES_TEXT_TIMEOUT_MS, type XaiTextClient } from "./xaiText.js";
 import {
   liveNotesLanguage,
   type LiveNotesLanguage,
@@ -16,7 +16,7 @@ import {
 export const XAI_LIVE_NOTES_DISCLOSURE_VERSION = "xai-live-notes-v1";
 
 /** One request may run this long before the next update tries again. */
-export const LIVE_NOTES_TIMEOUT_MS = 45_000;
+export const LIVE_NOTES_TIMEOUT_MS = LIVE_NOTES_TEXT_TIMEOUT_MS;
 const MAX_NOTES_CHARS = 24_000;
 const MAX_NEW_TRANSCRIPT_CHARS = 12_000;
 const RECENT_CONTEXT_CHARS = 1_500;
@@ -177,6 +177,13 @@ interface Session {
   /** Nothing more runs or publishes for this session. */
   closed: boolean;
   timer: ReturnType<typeof setInterval> | null;
+}
+
+/** A short, content-free reason for the Host log. */
+export function liveNotesFailureReason(error: unknown): string {
+  const name = error instanceof Error || error instanceof DOMException ? error.name : typeof error;
+  const message = error instanceof Error || error instanceof DOMException ? error.message : "";
+  return `${name}${message ? `: ${message}` : ""}`.replace(/\s+/g, " ").slice(0, 200);
 }
 
 /**
@@ -444,9 +451,12 @@ export class LiveNotesService {
       session.status = "ready";
       session.updatedAt = new Date(this.now()).toISOString();
       writePrivate(liveNotesPath(session.audioPath), `${markdown}\n`);
-    } catch {
+    } catch (error) {
       // Earlier notes stand; the next due update tries again with all new text.
+      // The reason never contains meeting text: it is an HTTP status, a
+      // timeout or a provider check, so it is safe for the Host log.
       session.status = "failed";
+      console.warn(`[live-notes] update failed: ${liveNotesFailureReason(error)}`);
     }
     this.publish(session);
   }

@@ -304,6 +304,8 @@ def _fetch_macos_calendar(config, start, end):
             "attendees": [attendee for attendee in attendees if attendee],
             "description": str(event.get("description", "")),
             "calendar": str(event.get("calendar", "")),
+            "color": str(event.get("color", "")),
+            "location": str(event.get("location", "")),
             "source": "macos",
         })
     return meetings

@@ -530,6 +530,43 @@ keeps recording, reminders, and voice shortcuts running; it does not change
 `status_agent.enabled`. Even with both icons hidden, reopen Yulu from Spotlight
 or Applications to access Settings and restore them.
 
+## Menu bar calendar
+
+The menu bar menu starts with your calendar, read from the week of meetings the
+calendar service keeps in `schedule.json`:
+
+- the meeting under way (or one starting within the hour), with how long until
+  it ends or starts, **Join … Meeting** when the event has a Google Meet, Zoom,
+  Teams, Tencent Meeting, Feishu, Webex or DingTalk link, and **Record This
+  Meeting**;
+- the rest of today and the next two days that have meetings, eight rows at
+  most. Each row's submenu shows the time, the calendar and the join link.
+
+All-day events are left out. With a macOS calendar the bar beside each meeting
+uses the calendar's colour.
+
+`status_agent.upcoming_meeting_minutes` (default `30`, `0`–`120`, `0` turns it
+off) sets how many minutes before a meeting the menu bar shows its title next to
+the icon, for example `Design review · in 12 min`, and then `· now` until it
+ends. Long titles are shortened so the text never takes more than 180 points.
+**Settings → General → Show the next meeting in the menu bar** offers Off, 10,
+15, 30 and 60 minutes.
+
+Dictation and translation are started with their shortcuts; the menu no longer
+lists them or recent recordings.
+
+## Open at login
+
+**Settings → General → Open at login** adds Yulu as a macOS login item. It is
+not stored in `config.json`: macOS owns it, the switch reads it back, and
+**System Settings → General → Login Items** shows and changes the same item. It
+is off until you turn it on, and only the App installed in `/Applications`
+offers it. Opened at login, Yulu starts its menu bar controls and loads its
+window in the background without showing it; click the Dock icon or open Yulu
+from the menu bar to see it. If macOS asks for approval, the row links to Login
+Items. The Host and Capture background services are separate login items that
+the App registers itself; this switch does not change them.
+
 ## Themes
 
 `ui.theme.family` is `default`, `ayu`, `paper`, or `custom`.

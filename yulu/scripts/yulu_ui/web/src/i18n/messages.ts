@@ -241,6 +241,15 @@ export const en: Messages = {
   "settings.general.menuBarIcon": "Show menu bar icon",
   "settings.general.menuBarIcon.help": "Recording and voice shortcuts keep working when the icon is hidden.",
   "settings.general.icons.reopen": "No restart needed. You can reopen Yulu from Spotlight or Applications, even with both icons hidden.",
+  "settings.general.upcomingMeeting": "Show the next meeting in the menu bar",
+  "settings.general.upcomingMeeting.help": "Its title and how soon it starts appear next to the icon, from this long before the meeting until it ends. Meetings come from the calendars Yulu reads.",
+  "settings.general.upcomingMeeting.off": "Off",
+  "settings.general.upcomingMeeting.minutes": "{minutes} minutes before",
+  "settings.general.launchAtLogin": "Open at login",
+  "settings.general.launchAtLogin.help": "Yulu starts in the menu bar when you log in, without opening its window. You can also change this in System Settings › General › Login Items.",
+  "settings.general.launchAtLogin.approval": "macOS needs you to allow Yulu in System Settings › General › Login Items.",
+  "settings.general.launchAtLogin.openSettings": "Open Login Items",
+  "settings.general.launchAtLogin.failed": "Couldn't change the login item. Try again, or change it in System Settings › General › Login Items.",
 
   // ---- App / brand ----
   "nav.showSidebar": "Show sidebar",
@@ -1432,6 +1441,15 @@ export const zh: Messages = {
   "settings.general.menuBarIcon": "显示菜单栏图标",
   "settings.general.menuBarIcon.help": "隐藏图标后，录音和语音快捷键仍可使用。",
   "settings.general.icons.reopen": "无需重启。即使两个图标都隐藏，也可从 Spotlight 或「应用程序」重新打开 Yulu。",
+  "settings.general.upcomingMeeting": "菜单栏显示下一个会议",
+  "settings.general.upcomingMeeting.help": "在图标旁显示会议标题和还有多久开始，从会前这段时间起一直到会议结束。会议来自语录读取的日历。",
+  "settings.general.upcomingMeeting.off": "不显示",
+  "settings.general.upcomingMeeting.minutes": "提前 {minutes} 分钟",
+  "settings.general.launchAtLogin": "登录时打开语录",
+  "settings.general.launchAtLogin.help": "登录 Mac 后，语录在菜单栏待命，不会弹出窗口。也可以在「系统设置 › 通用 › 登录项」里更改。",
+  "settings.general.launchAtLogin.approval": "需要在「系统设置 › 通用 › 登录项」里允许语录。",
+  "settings.general.launchAtLogin.openSettings": "打开登录项设置",
+  "settings.general.launchAtLogin.failed": "没能更改登录项。请重试，或在「系统设置 › 通用 › 登录项」里更改。",
 
   // ---- App / brand ----
   "nav.showSidebar": "显示侧边栏",

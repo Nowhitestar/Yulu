@@ -130,10 +130,11 @@
     "enabled": true,
     "feedback_sounds": true,
     "voice_input_mode": "toggle",
+    "upcoming_meeting_minutes": 30,
     "hotkeys": {
       "dictate": {"key": "Fn", "modifiers": []},
       "translate": {"key": "Fn", "modifiers": ["shift"], "target_language": "English"}
     },
-    "note": "Menu-bar agent: recording indicator + menu items + global hotkeys. Shortcuts support Fn, single modifiers and left/right modifier keys; modifier names include fn, cmd/shift/alt/ctrl and left_/right_ variants."
+    "note": "Menu-bar agent: recording indicator + menu items + global hotkeys. Shortcuts support Fn, single modifiers and left/right modifier keys; modifier names include fn, cmd/shift/alt/ctrl and left_/right_ variants. upcoming_meeting_minutes: how many minutes before a calendar meeting the menu bar shows its title (0 never)."
   }
 }

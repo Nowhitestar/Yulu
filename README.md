@@ -30,11 +30,11 @@ you are using. No Yulu account or virtual audio device required.
   with a global shortcut. Optional xAI cleanup has three editing levels and
   separate punctuation styles; the original text stays available.
 
-[What's new in v0.31.0](docs/release-notes/v0.31.0.md):
-a new mark — one stroke from speech to a written line — across the app icon,
-the menu bar and the live notes panel, with menu bar states you can tell apart
-at a glance. Live notes are on by default and send nothing until you confirm
-what they send.
+[What's new in v0.32.0](docs/release-notes/v0.32.0.md):
+live notes work again — every update had been failing before reaching xAI.
+The menu bar menu lists your next meetings with join and record, the menu bar
+shows the next meeting shortly before it starts, and **Open at login** keeps
+Yulu waiting there after you log in.
 
 ## Features
 
@@ -125,7 +125,9 @@ Voice input works in any app, not just Yulu.
   automatic checks can also be turned off.
 - **Menu bar and window.** Yulu lives in the menu bar as well as its window;
   hide the Dock or menu bar icon and recording, reminders, and shortcuts keep
-  working.
+  working. Turn on **Open at login** to have it waiting in the menu bar after
+  you log in. The menu lists your next meetings with join and record, and the
+  menu bar shows the next meeting's title shortly before it starts.
 - **Chinese and English**, with light, dark, and custom themes.
 
 ## The window

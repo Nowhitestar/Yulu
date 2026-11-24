@@ -150,7 +150,7 @@ def test_shell_webview_has_initial_layout_and_explicit_loading_outcomes():
     assert "NSURLErrorCancelled" in web
     assert "removeData" not in web
     assert "nonPersistent" not in web
-    opening = source.split("private func open(route: String)", 1)[1]
+    opening = source.split("private func open(route: String, reveal: Bool = true)", 1)[1]
     assert "content.load(url, in: window)" in opening
     assert "window?.contentView = web" not in opening
 
@@ -666,7 +666,7 @@ def test_update_entry_points_reach_the_same_updater():
 
 def test_settings_page_can_only_read_check_or_schedule_updates():
     source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
-    handler = source.split("private final class UpdateMessages", 1)[1].split("func configureWindowChrome", 1)[0]
+    handler = source.split("private final class UpdateMessages", 1)[1].split("protocol LaunchAtLoginBridge", 1)[0]
     assert "message.frameInfo.isMainFrame" in handler
     assert 'origin.host == "127.0.0.1", origin.port == port' in handler
     assert 'origin.protocol == "http"' in handler
@@ -678,6 +678,38 @@ def test_settings_page_can_only_read_check_or_schedule_updates():
     bridge = source.split("extension YuluApplication: ApplicationUpdateBridge", 1)[1].split("\nlet policy", 1)[0]
     assert "sparkleAdapter?.automaticallyChecksForUpdates = enabled" in bridge
     assert "onCheckForUpdates()" in bridge
+
+
+def test_settings_page_can_only_read_or_change_the_login_item():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    handler = source.split("private final class LoginItemMessages", 1)[1].split("func launchedAsLoginItem", 1)[0]
+    assert "message.frameInfo.isMainFrame" in handler
+    assert 'origin.host == "127.0.0.1", origin.port == port' in handler
+    assert 'origin.protocol == "http"' in handler
+    assert re.findall(r'case "([a-zA-Z]+)":', handler) == ["state", "set", "openSettings"]
+    assert 'name: "yuluLoginItem"' in source
+    assert "updates: self, loginItem: self" in source
+    bridge = source.split("extension YuluApplication: LaunchAtLoginBridge", 1)[1].split("\nlet policy", 1)[0]
+    # Only the installed App registers itself, and only as the macOS main-app login item.
+    assert "guard launchPolicy.persistentRegistrationAllowed" in bridge
+    assert "SMAppService.mainApp" in bridge
+    assert "SMAppService.agent" not in bridge
+    assert "SMAppService.openSystemSettingsLoginItems()" in bridge
+
+
+def test_login_launch_starts_in_the_menu_bar_without_the_window():
+    source = (SCRIPTS / "yulu_app.swift").read_text(encoding="utf-8")
+    detect = source.split("func launchedAsLoginItem(", 1)[1].split("\n}\n", 1)[0]
+    assert "0x6F61_7070" in detect and "0x7072_6474" in detect and "0x6C67_6974" in detect
+    launch = source.split("func applicationDidFinishLaunching(_ notification: Notification) {", 1)[1]
+    launch = launch.split("func applicationShouldTerminateAfterLastWindowClosed", 1)[0]
+    assert "quietLaunch = launchPolicy.installed && launchedAsLoginItem()" in launch
+    assert launch.index("guard !quietLaunch else { return }") < launch.index("window.makeKeyAndOrderFront(nil)")
+    assert "reveal: !self.quietLaunch || self.pendingNativeRoute != nil" in source
+    reopen = source.split("hasVisibleWindows flag: Bool", 1)[1].split("return true", 1)[0]
+    assert "quietLaunch = false" in reopen
+    opened = source.split("private func open(route: String, reveal: Bool = true) {", 1)[1].split("\n    }\n", 1)[0]
+    assert opened.index("guard reveal else { return }") < opened.index("window.makeKeyAndOrderFront(nil)")
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="Native update termination gate")

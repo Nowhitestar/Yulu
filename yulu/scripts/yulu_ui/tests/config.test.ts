@@ -86,6 +86,7 @@ describe("ConfigManager", () => {
       const cfg = new ConfigManager(path).read();
       expect(cfg.status_agent.enabled).toBe(true);
       expect(cfg.status_agent.feedback_sounds).toBe(true);
+      expect(cfg.status_agent.upcoming_meeting_minutes).toBe(30);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 

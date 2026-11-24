@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { XaiTextClient, XaiTextUnknownOutcomeError } from "../src/xaiText.js";
+import {
+  DICTATION_TEXT_TIMEOUT_MS,
+  LIVE_NOTES_TEXT_TIMEOUT_MS,
+  maxTextTimeoutMs,
+  XaiTextClient,
+  XaiTextUnknownOutcomeError,
+} from "../src/xaiText.js";
 
 function response(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -101,6 +107,25 @@ describe("XaiTextClient.request", () => {
     await expect(client.request({ capability: "live_notes", model: "selected-model", timeoutMs: 8_000,
       input: [{ role: "user", content: "Notes" }] })).rejects.toThrow("live notes were incomplete");
     expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it("gives live notes their own request window, longer than dictation's", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
+    const fetchFn = vi.fn<typeof fetch>(async () => response(completed("## Notes", "notes-model")));
+    const client = new XaiTextClient({ resolve: async () => ({ accessToken: "test", source: "oauth" }) } as never, fetchFn);
+    try {
+      expect(maxTextTimeoutMs("live_notes")).toBe(LIVE_NOTES_TEXT_TIMEOUT_MS);
+      expect(LIVE_NOTES_TEXT_TIMEOUT_MS).toBeGreaterThan(DICTATION_TEXT_TIMEOUT_MS);
+      await client.request({ capability: "live_notes", model: "notes-model", timeoutMs: LIVE_NOTES_TEXT_TIMEOUT_MS,
+        input: [{ role: "user", content: "Notes" }] });
+      expect(timeout).toHaveBeenCalledWith(LIVE_NOTES_TEXT_TIMEOUT_MS);
+      await expect(client.request({ capability: "live_notes", model: "notes-model",
+        timeoutMs: LIVE_NOTES_TEXT_TIMEOUT_MS + 1, input: [{ role: "user", content: "Notes" }] }))
+        .rejects.toThrow("xAI text timeout is invalid");
+      expect(fetchFn).toHaveBeenCalledOnce();
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it("allows full recording summaries longer than the short dictation request window", async () => {
