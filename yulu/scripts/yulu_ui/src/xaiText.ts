@@ -3,6 +3,8 @@ import type { XaiCredentialManager, XaiCredentialSource } from "./xaiCredentials
 const XAI_RESPONSES_URL = "https://api.x.ai/v1/responses";
 const SUMMARY_REQUEST_TIMEOUT_MS = 180_000;
 export const DICTATION_TEXT_TIMEOUT_MS = 20_000;
+/** Live notes rewrite a meeting's notes, so they may take longer than dictation. */
+export const LIVE_NOTES_TEXT_TIMEOUT_MS = 45_000;
 const MAX_INPUT_BYTES = 1_000_000;
 const MAX_INPUT_MESSAGES = 64;
 const MAX_OUTPUT_TOKENS = 8_192;
@@ -17,6 +19,13 @@ export type XaiTextCapability = "summary" | "dictation" | "live_notes";
  * response. None of them ever retries against another model. */
 function isInteractive(capability: XaiTextCapability): boolean {
   return capability !== "summary";
+}
+
+/** The longest a request of each capability may wait; also its default. */
+export function maxTextTimeoutMs(capability: XaiTextCapability): number {
+  if (capability === "summary") return SUMMARY_REQUEST_TIMEOUT_MS;
+  if (capability === "live_notes") return LIVE_NOTES_TEXT_TIMEOUT_MS;
+  return DICTATION_TEXT_TIMEOUT_MS;
 }
 
 export interface XaiTextMessage {
@@ -155,10 +164,9 @@ export class XaiTextClient {
 
   async request(request: XaiTextRequest): Promise<XaiTextResult> {
     const { model, maxOutputTokens } = validateRequest(request);
-    const defaultTimeout = request.capability === "summary"
-      ? SUMMARY_REQUEST_TIMEOUT_MS : DICTATION_TEXT_TIMEOUT_MS;
-    const timeoutMs = request.timeoutMs ?? defaultTimeout;
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > defaultTimeout) {
+    const maxTimeout = maxTextTimeoutMs(request.capability);
+    const timeoutMs = request.timeoutMs ?? maxTimeout;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > maxTimeout) {
       throw new Error("xAI text timeout is invalid");
     }
     const deadline = AbortSignal.timeout(timeoutMs);

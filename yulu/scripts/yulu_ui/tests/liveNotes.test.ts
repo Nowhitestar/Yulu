@@ -7,6 +7,7 @@ import { buildGlossaryContract } from "../src/glossaryContract.js";
 import { HostStore } from "../src/hostStore.js";
 import {
   attendeeNotesText,
+  liveNotesFailureReason,
   hasXaiLiveNotesDisclosure,
   liveNotesPath,
   LiveNotesService,
@@ -18,7 +19,7 @@ import {
 } from "../src/liveNotes.js";
 import { LIVE_NOTES_MODEL_DEFAULT } from "../src/liveNotesPreferences.js";
 import { PubSub, type AppChannels } from "../src/pubsub.js";
-import type { XaiTextRequest, XaiTextResult } from "../src/xaiText.js";
+import { XaiTextClient, type XaiTextRequest, type XaiTextResult } from "../src/xaiText.js";
 
 const roots: string[] = [];
 
@@ -253,5 +254,74 @@ describe("live notes disclosure", () => {
     } finally {
       host.close();
     }
+  });
+});
+
+describe("live notes through the real xAI text client", () => {
+  // The service tests above replace the client; this one keeps the real
+  // request contract (timeouts, model check, completed status) in the loop so
+  // a mismatch between the two cannot fail every update unnoticed.
+  function realClientSetup(reply: () => Response) {
+    const root = mkdtempSync(join(tmpdir(), "yulu-live-notes-real-"));
+    roots.push(root);
+    const audioPath = join(root, "Review_20261119_093000.wav");
+    writeFileSync(audioPath, Buffer.alloc(44));
+    const config = defaultYuluConfig();
+    const fetchFn = vi.fn<typeof fetch>(async () => reply());
+    const text = new XaiTextClient({ resolve: async () => ({ accessToken: "test", source: "oauth" }) } as never, fetchFn);
+    const statuses: string[] = [];
+    const pubsub = new PubSub<AppChannels>();
+    pubsub.subscribe("live-notes", (snapshot) => { if (snapshot) statuses.push(snapshot.status); });
+    const service = new LiveNotesService({
+      config: { read: () => config },
+      text,
+      hasDisclosure: () => true,
+      credentialSource: () => "oauth",
+      glossary: () => buildGlossaryContract([]),
+      pubsub,
+      minIntervalMs: 0,
+      maxIntervalMs: 0,
+      minNewChars: 1,
+      tickMs: 60_000,
+    });
+    return { audioPath, config, fetchFn, statuses, service };
+  }
+
+  it("sends the default model's request and shows the notes", async () => {
+    const s = realClientSetup(() => new Response(JSON.stringify({
+      model: LIVE_NOTES_MODEL_DEFAULT,
+      status: "completed",
+      output: [{ type: "message", content: [{ type: "output_text", text: "## 结论\n\n- 改为增量推送" }] }],
+    }), { status: 200 }));
+    s.service.started({ audioPath: s.audioPath, stem: "Review_20261119_093000", title: "Review" });
+    s.service.transcript({ audioPath: s.audioPath, stableText: "我们决定改成增量推送，先灰度百分之十。" });
+    await vi.waitFor(() => expect(s.statuses.at(-1)).toBe("ready"));
+    expect(s.fetchFn).toHaveBeenCalledOnce();
+    const body = JSON.parse(String(s.fetchFn.mock.calls[0]![1]!.body));
+    expect(body.model).toBe(LIVE_NOTES_MODEL_DEFAULT);
+    expect(s.service.current()?.markdown).toContain("改为增量推送");
+    s.service.close();
+  });
+
+  it("logs why an update failed without any meeting text", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = realClientSetup(() => new Response("{}", { status: 401 }));
+      s.service.started({ audioPath: s.audioPath, stem: "Review_20261119_093000", title: "Review" });
+      s.service.transcript({ audioPath: s.audioPath, stableText: "机密的会议内容" });
+      await vi.waitFor(() => expect(s.statuses.at(-1)).toBe("failed"));
+      expect(warn).toHaveBeenCalledWith("[live-notes] update failed: Error: xAI live_notes request failed (HTTP 401)");
+      expect(warn.mock.calls.flat().join(" ")).not.toContain("机密");
+      s.service.close();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("reduces any failure to a short reason", () => {
+    expect(liveNotesFailureReason(new DOMException("The operation timed out.", "TimeoutError")))
+      .toBe("TimeoutError: The operation timed out.");
+    expect(liveNotesFailureReason("x")).toBe("string");
+    expect(liveNotesFailureReason(new Error("a\n".repeat(300))).length).toBeLessThanOrEqual(200);
   });
 });

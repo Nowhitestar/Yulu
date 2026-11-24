@@ -375,6 +375,12 @@ step is missing:
 | `实时笔记还没开始` / "Live notes haven't started", with "…确认数据说明…" / "…accept how meeting text is sent to xAI…" | The disclosure is not accepted yet, for example on a new install, after an upgrade, or after the xAI connection was removed | **Open Settings** opens the Live notes section, which shows the disclosure; accept it there |
 | `实时笔记还没开始` / "Live notes haven't started", with "…连接 xAI" / "Connect xAI…" | No xAI credential is connected | Connect xAI in Settings → Connections |
 
+When an update itself fails, the panel shows `上一次更新没成功，下一次更新会再试。` /
+"The last update didn't come through…", keeps the earlier notes, and tries again
+with the next update. The Host prints one line per failure to its standard
+error, `[live-notes] update failed: <reason>`, where the reason is an HTTP status,
+a timeout or a provider check and never meeting text.
+
 Each recording keeps its live notes next to the audio:
 
 | File | Contents |
