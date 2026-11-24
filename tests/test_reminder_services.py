@@ -158,3 +158,25 @@ def test_stop_reaps_a_prompt_in_the_service_process_group(manager):
             break
         assert time.monotonic() < deadline
         time.sleep(.02)
+
+
+def test_stop_tolerates_a_group_of_unreaped_zombies(manager, monkeypatch):
+    # After SIGTERM the service exits and is reaped; a helper it started can
+    # linger as a zombie until launchd reaps it, and macOS then answers the
+    # group SIGKILL with EPERM. That must not abort stopping the service.
+    manager.reconcile()
+    child = manager.children["com.yulu.scheduler"]
+    real_killpg = os.killpg
+    sent = []
+
+    def killpg(pgid, sig):
+        sent.append(sig)
+        if sig == signal.SIGKILL:
+            raise PermissionError(1, "Operation not permitted")
+        real_killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", killpg)
+    manager._stop("com.yulu.scheduler")
+    assert sent == [signal.SIGTERM, signal.SIGKILL]
+    assert child.poll() is not None
+    assert "com.yulu.scheduler" not in manager.children
