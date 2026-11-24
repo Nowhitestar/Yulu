@@ -108,6 +108,8 @@ const StatusAgentSchema = z.object({
   enabled: z.boolean().default(true),
   feedback_sounds: z.boolean().default(true),
   voice_input_mode: z.enum(["toggle", "hold"]).default("toggle"),
+  /** Minutes before a calendar meeting that the menu bar shows its title; 0 never. */
+  upcoming_meeting_minutes: z.number().int().min(0).max(120).default(30),
   hotkeys: z.object({
     dictate: StatusAgentHotkeySchema.default(DEFAULT_HOTKEYS.dictate),
     translate: StatusAgentHotkeySchema.default({ ...DEFAULT_HOTKEYS.translate, target_language: "English" }),

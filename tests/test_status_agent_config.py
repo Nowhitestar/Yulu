@@ -119,13 +119,34 @@ def test_status_agent_has_config_output_dir_reader():
     assert 'json["audio"]' in src, "reader must descend into the config 'audio' block"
 
 
-def test_status_agent_recent_recordings_uses_config_dir():
+def test_status_agent_menu_lists_calendar_from_schedule():
     src = _swift_source()
-    # loadRecentRecordings must source its base from loadRecordingDir(), not a
-    # hardcoded home/Movies path.
-    assert "let base = loadRecordingDir()" in src, (
-        "loadRecentRecordings must derive its base from loadRecordingDir()"
-    )
+    # The menu and the menu bar title read the week the calendar service keeps
+    # in schedule.json; Recent Recordings left the menu.
+    assert 'firstReadableData("schedule.json")' in src
+    assert "func parseCalendarEntries(" in src and "func focusMeeting(" in src
+    assert "loadRecentRecordings" not in src and "recent_recordings" not in src
+    menu = src[src.index("enum CalendarMenu"):src.index("func shortMeetingTitle")]
+    assert "StatusAgentApp.onCurrentMeetingRecord(_:)" in menu
+    assert "StatusAgentApp.onCalendarJoin(_:)" in menu
+    assert "static let maxEventRows = 8" in menu
+    join = src[src.index("@objc func onCalendarJoin"):]
+    join = join[:join.index("\n    }\n")]
+    assert 'scheme == "https" || scheme == "http"' in join
+
+
+def test_menu_bar_names_the_next_meeting_within_the_configured_minutes():
+    src = _swift_source()
+    assert '"upcoming_meeting_minutes"' in src
+    refresh = src[src.index("func refreshMenuBarMeeting()"):src.index("static let menuBarMeetingMaxWidth")]
+    assert "upcomingMeetingMinutes()" in refresh
+    assert "maxWidth: Self.menuBarMeetingMaxWidth" in refresh
+    assert "static let menuBarMeetingMaxWidth: CGFloat = 180" in src
+    assert "meetingTitleTimer = Timer.scheduledTimer(withTimeInterval: 15" in src
+    # The icon animation no longer clears the title on every poll.
+    apply = src[src.index("private func applyState(_ new: AgentState)"):]
+    apply = apply[:apply.index("// Update the menu's toggle label")]
+    assert 'btn.title = ""' not in apply
 
 
 def test_status_agent_scans_single_root_no_voicemails_subdir():
@@ -223,10 +244,10 @@ def test_recorder_status_reports_stop_and_capture_problems_to_the_page():
     assert "pushPanelState()" in check
 
 
-def test_status_agent_has_dictation_menu_entry():
+def test_status_agent_keeps_dictation_on_its_shortcuts():
     src = _swift_source()
-    assert '"Start Dictation"' in src
-    assert '"Stop Dictation"' in src
+    # Dictation and translation left the menu; their shortcuts and IPC stay.
+    assert '"Start Dictation"' not in src[src.index("class MenuBuilder"):src.index("struct CapturedPasteTarget")]
     assert "launchDictateToggle" in src
     assert "launchWarmDictation" in src
     assert '"dictate.py", "warm"' in src
@@ -296,22 +317,15 @@ def test_audio_daemon_status_exposes_real_mic_level():
 
 def test_status_agent_menu_matches_approved_hierarchy():
     src = _swift_source()
-    menu = src[src.index("class MenuBuilder") : src.index("struct RecentRecording")]
-    assert menu.index('"Current Meeting"') < menu.index('"Start Recording"')
-    assert menu.index('"Start Recording"') < menu.index('"Start Dictation"')
-    assert menu.index('"Start Dictation"') < menu.index('"Translate to English"')
-    assert '"Ask Agent by Voice"' not in menu
-    assert menu.index('"Open Yulu"') < menu.index('"Recent Recordings"')
-    assert menu.index('"Recent Recordings"') < menu.index('"Settings…"')
+    menu = src[src.index("class MenuBuilder") : src.index("struct CapturedPasteTarget")]
+    # Calendar items are inserted above Start Recording when the menu opens.
+    assert menu.index("CalendarMenu") < menu.index('"Start Recording"')
+    assert menu.index('"Start Recording"') < menu.index('"Open Yulu"')
+    assert menu.index('"Open Yulu"') < menu.index('"Settings…"')
     assert menu.index('"Settings…"') < menu.index('"Quit Yulu"')
-    assert "recentItem.submenu = recentMenu" in menu
-    assert "menuKeyEquivalent(for: spec.label)" in src
-    assert "item.keyEquivalentModifierMask = menuModifierFlags" in src
-    assert 'toggle?.title = visible ? L("开始无标题录制", "Start Untitled Recording")' in src
-    assert 'title: L("查看全部记录", "Show All Recordings")' in src
-    assert "recentRecordingFallbackTitle" in src
-    assert "recentRecordingMenuTitle(time: time, name: name)" in src
-    assert 'string: "\\(time)\\t\\(name)"' in src
+    for retired in ('"Ask Agent by Voice"', '"Start Dictation"', '"Translate to English"', '"Recent Recordings"'):
+        assert retired not in menu
+    assert 'toggle.title = ongoing ? L("开始无标题录制", "Start Untitled Recording")' in src
     assert "http://127.0.0.1:7777/settings" in src
 
 

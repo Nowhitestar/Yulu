@@ -496,39 +496,8 @@ class MenuBuilder {
     static func build(target: AnyObject) -> NSMenu {
         let menu = NSMenu()
 
-        let currentLabel = NSMenuItem(title: L("当前会议", "Current Meeting"), action: nil, keyEquivalent: "")
-        currentLabel.identifier = NSUserInterfaceItemIdentifier("current_meeting_label")
-        currentLabel.isEnabled = false
-        currentLabel.isHidden = true
-        menu.addItem(currentLabel)
-
-        let currentRecord = NSMenuItem(
-            title: L("录制此会议", "Record This Meeting"),
-            action: #selector(StatusAgentApp.onCurrentMeetingRecord(_:)),
-            keyEquivalent: ""
-        )
-        currentRecord.target = target
-        currentRecord.identifier = NSUserInterfaceItemIdentifier("current_meeting_record")
-        currentRecord.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
-        currentRecord.isHidden = true
-        menu.addItem(currentRecord)
-
-        let currentJoin = NSMenuItem(
-            title: L("录制并加入", "Record and Join"),
-            action: #selector(StatusAgentApp.onCurrentMeetingRecordJoin(_:)),
-            keyEquivalent: ""
-        )
-        currentJoin.target = target
-        currentJoin.identifier = NSUserInterfaceItemIdentifier("current_meeting_join")
-        currentJoin.image = NSImage(systemSymbolName: "arrow.up.right.circle", accessibilityDescription: nil)
-        currentJoin.isHidden = true
-        menu.addItem(currentJoin)
-
-        let currentSep = NSMenuItem.separator()
-        currentSep.identifier = NSUserInterfaceItemIdentifier("current_meeting_separator")
-        currentSep.isHidden = true
-        menu.addItem(currentSep)
-
+        // Calendar items (identifiers "calendar_…") are inserted above this on
+        // every open; see CalendarMenu.
         // The Start/Stop title is updated dynamically by StatusAgentApp;
         // here we just provide an action wire-up.
         let toggleItem = NSMenuItem(
@@ -542,28 +511,6 @@ class MenuBuilder {
         menu.addItem(toggleItem)
         menu.addItem(NSMenuItem.separator())
 
-        let dictateItem = NSMenuItem(
-            title: L("开始听写", "Start Dictation"),
-            action: #selector(StatusAgentApp.onDictateToggle),
-            keyEquivalent: ""
-        )
-        dictateItem.target = target
-        dictateItem.identifier = NSUserInterfaceItemIdentifier("dictate_once")
-        dictateItem.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)
-        menu.addItem(dictateItem)
-
-        let translateItem = NSMenuItem(
-            title: L("翻译为英语", "Translate to English"),
-            action: #selector(StatusAgentApp.onDictateTranslateFromMenu),
-            keyEquivalent: ""
-        )
-        translateItem.target = target
-        translateItem.identifier = NSUserInterfaceItemIdentifier("dictate_translate")
-        translateItem.image = NSImage(systemSymbolName: "character.bubble", accessibilityDescription: nil)
-        menu.addItem(translateItem)
-
-        menu.addItem(NSMenuItem.separator())
-
         let openInbox = NSMenuItem(
             title: L("打开 Yulu", "Open Yulu"),
             action: #selector(StatusAgentApp.onOpenInbox),
@@ -572,31 +519,6 @@ class MenuBuilder {
         openInbox.target = target
         openInbox.image = NSImage(systemSymbolName: "tray", accessibilityDescription: nil)
         menu.addItem(openInbox)
-
-        let recentItem = NSMenuItem(title: L("最近记录", "Recent Recordings"), action: nil, keyEquivalent: "")
-        recentItem.identifier = NSUserInterfaceItemIdentifier("recent_recordings")
-        recentItem.image = NSImage(systemSymbolName: "clock.arrow.circlepath", accessibilityDescription: nil)
-        let recentMenu = NSMenu(title: L("最近记录", "Recent Recordings"))
-        let recentEmpty = NSMenuItem(title: L("暂无最近记录", "No Recent Recordings"), action: nil, keyEquivalent: "")
-        recentEmpty.identifier = NSUserInterfaceItemIdentifier("recent_empty")
-        recentEmpty.isEnabled = false
-        recentMenu.addItem(recentEmpty)
-        for i in 0..<5 {
-            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            item.identifier = NSUserInterfaceItemIdentifier("recent_\(i)")
-            item.isHidden = true
-            recentMenu.addItem(item)
-        }
-        recentMenu.addItem(NSMenuItem.separator())
-        let showAll = NSMenuItem(
-            title: L("查看全部记录", "Show All Recordings"),
-            action: #selector(StatusAgentApp.onOpenInbox),
-            keyEquivalent: ""
-        )
-        showAll.target = target
-        recentMenu.addItem(showAll)
-        recentItem.submenu = recentMenu
-        menu.addItem(recentItem)
 
         let settings = NSMenuItem(
             title: L("设置…", "Settings…"),
@@ -628,20 +550,6 @@ class MenuBuilder {
         menu.addItem(quit)
         return menu
     }
-}
-
-struct RecentRecording {
-    let stem: String
-    let title: String
-    let mtime: Date
-}
-
-struct CurrentMeeting {
-    let id: String
-    let title: String
-    let link: String
-    let start: Date
-    let end: Date
 }
 
 struct CapturedPasteTarget {
@@ -762,55 +670,332 @@ func parseScheduleDate(_ value: String) -> Date? {
     return local.date(from: String(value.prefix(19)))
 }
 
-func loadCurrentMeeting() -> CurrentMeeting? {
-    guard let data = firstReadableData("schedule.json"),
-          let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let meetings = raw["meetings"] as? [[String: Any]] else {
-        return nil
+/// A timed calendar event from schedule.json. The calendar service keeps a
+/// week of them there; the menu lists the next few days and the menu bar names
+/// the meeting that is about to start or under way.
+struct CalendarEntry: Equatable {
+    let id: String
+    let title: String
+    let start: Date
+    let end: Date
+    /// A link that joins the meeting, or "".
+    let link: String
+    let calendar: String
+    /// The calendar's colour as #RRGGBB, or "".
+    let colorHex: String
+}
+
+/// Where a meeting stands relative to now, in whole minutes (at least 1).
+enum MeetingTiming: Equatable {
+    case ongoing(endsInMinutes: Int)
+    case upcoming(startsInMinutes: Int)
+}
+
+private let meetingLinkHosts = [
+    "meet.google.com", "zoom.us", "zoom.com", "teams.microsoft.com", "teams.live.com",
+    "meeting.tencent.com", "voovmeeting.com", "vc.feishu.cn", "feishu.cn", "larksuite.com",
+    "webex.com", "dingtalk.com",
+]
+
+/// The event's own link, or the first meeting link found in its notes or place.
+func meetingJoinLink(link: String, searching texts: [String]) -> String {
+    let trimmed = link.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+       scheme == "https" || scheme == "http" {
+        return trimmed
     }
-    let now = Date()
-    var matches: [CurrentMeeting] = []
+    guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return "" }
+    for text in texts where !text.isEmpty {
+        let range = NSRange(text.startIndex..., in: text)
+        for match in detector.matches(in: text, options: [], range: range) {
+            guard let url = match.url, let scheme = url.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http",
+                  let host = url.host?.lowercased() else { continue }
+            if meetingLinkHosts.contains(where: { host == $0 || host.hasSuffix(".\($0)") }) {
+                return url.absoluteString
+            }
+        }
+    }
+    return ""
+}
+
+/// "Google Meet", "Zoom", … for a join link, or nil when it is not a known service.
+func meetingProviderName(_ link: String) -> String? {
+    guard let host = URL(string: link)?.host?.lowercased() else { return nil }
+    let match = { (domain: String) in host == domain || host.hasSuffix(".\(domain)") }
+    if match("meet.google.com") { return "Google Meet" }
+    if match("zoom.us") || match("zoom.com") { return "Zoom" }
+    if match("teams.microsoft.com") || match("teams.live.com") { return "Teams" }
+    if match("meeting.tencent.com") || match("voovmeeting.com") { return L("腾讯会议", "Tencent Meeting") }
+    if match("feishu.cn") || match("larksuite.com") { return L("飞书", "Feishu") }
+    if match("webex.com") { return "Webex" }
+    if match("dingtalk.com") { return L("钉钉", "DingTalk") }
+    return nil
+}
+
+/// Timed events that have not ended and start before the end of the
+/// `days`-th day from today, earliest first. All-day events are left out.
+func parseCalendarEntries(_ data: Data, now: Date, days: Int = 3) -> [CalendarEntry] {
+    guard let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let meetings = raw["meetings"] as? [[String: Any]] else { return [] }
+    let calendar = Calendar.current
+    let horizon = calendar.date(byAdding: .day, value: max(1, days), to: calendar.startOfDay(for: now)) ?? now
+    var seen = Set<String>()
+    var entries: [CalendarEntry] = []
     for m in meetings {
-        guard let id = m["id"] as? String,
-              let title = m["title"] as? String,
-              let startRaw = m["start"] as? String,
+        guard let startRaw = m["start"] as? String, startRaw.contains("T"),
               let start = parseScheduleDate(startRaw) else { continue }
         let end: Date
-        if let endRaw = m["end"] as? String, let parsedEnd = parseScheduleDate(endRaw) {
+        if let endRaw = m["end"] as? String, endRaw.contains("T"), let parsedEnd = parseScheduleDate(endRaw) {
             end = parsedEnd
         } else {
-            let duration = (m["duration_min"] as? NSNumber)?.doubleValue
-                ?? Double(m["duration_min"] as? Int ?? 60)
-            end = start.addingTimeInterval(duration * 60)
+            let minutes = (m["duration_min"] as? NSNumber)?.doubleValue ?? 60
+            end = start.addingTimeInterval(minutes * 60)
         }
-        if start <= now && now <= end {
-            matches.append(CurrentMeeting(
-                id: id,
-                title: title,
+        guard end > now, start < horizon, end > start else { continue }
+        let id = (m["id"] as? String) ?? ""
+        let key = "\(id)|\(start.timeIntervalSince1970)"
+        guard seen.insert(key).inserted else { continue }
+        let title = ((m["title"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        entries.append(CalendarEntry(
+            id: id,
+            title: title.isEmpty ? L("（无标题）", "(No title)") : title,
+            start: start,
+            end: end,
+            link: meetingJoinLink(
                 link: (m["link"] as? String) ?? "",
-                start: start,
-                end: end
-            ))
-        }
+                searching: [(m["location"] as? String) ?? "", (m["description"] as? String) ?? ""]
+            ),
+            calendar: (m["calendar"] as? String) ?? "",
+            colorHex: (m["color"] as? String) ?? ""
+        ))
     }
-    return matches.sorted { $0.start > $1.start }.first
+    return entries.sorted { ($0.start, $0.title) < ($1.start, $1.title) }
+}
+
+func loadCalendarEntries(now: Date = Date(), days: Int = 3) -> [CalendarEntry] {
+    guard let data = firstReadableData("schedule.json") else { return [] }
+    return parseCalendarEntries(data, now: now, days: days)
+}
+
+/// The meeting under way (the latest to start), or else the next one starting
+/// within `leadMinutes`.
+func focusMeeting(_ entries: [CalendarEntry], now: Date, leadMinutes: Int) -> (CalendarEntry, MeetingTiming)? {
+    let minutes = { (interval: TimeInterval) in max(1, Int((interval / 60).rounded(.up))) }
+    if let ongoing = entries.filter({ $0.start <= now && now < $0.end }).max(by: { $0.start < $1.start }) {
+        return (ongoing, .ongoing(endsInMinutes: minutes(ongoing.end.timeIntervalSince(now))))
+    }
+    guard leadMinutes > 0,
+          let next = entries.filter({ $0.start > now && $0.start.timeIntervalSince(now) <= Double(leadMinutes) * 60 })
+            .min(by: { $0.start < $1.start }) else { return nil }
+    return (next, .upcoming(startsInMinutes: minutes(next.start.timeIntervalSince(now))))
+}
+
+/// "52 分钟" / "1 小时 5 分钟" style durations for the menu headers.
+func meetingDurationText(_ minutes: Int) -> String {
+    if minutes < 60 { return L("\(minutes) 分钟", "\(minutes) min") }
+    let hours = minutes / 60, rest = minutes % 60
+    if rest == 0 { return L("\(hours) 小时", "\(hours) h") }
+    return L("\(hours) 小时 \(rest) 分钟", "\(hours) h \(rest) min")
+}
+
+/// The menu bar text, "Title · in 12 min" or "Title · now", shortened with "…"
+/// so it never needs more than `maxWidth` points.
+func menuBarMeetingText(_ entry: CalendarEntry, timing: MeetingTiming, maxWidth: CGFloat, font: NSFont) -> String {
+    let suffix: String
+    switch timing {
+    case .ongoing: suffix = L("现在", "now")
+    case .upcoming(let minutes): suffix = L("\(minutes) 分钟后", "in \(minutes) min")
+    }
+    let width = { (text: String) in (text as NSString).size(withAttributes: [.font: font]).width }
+    let title = entry.title
+    let full = "\(title) · \(suffix)"
+    if width(full) <= maxWidth { return full }
+    var count = title.count - 1
+    while count > 0 {
+        let candidate = "\(title.prefix(count))… · \(suffix)"
+        if width(candidate) <= maxWidth { return candidate }
+        count -= 1
+    }
+    return suffix
+}
+
+/// Minutes before a meeting that the menu bar names it (status_agent.upcoming_meeting_minutes); 0 turns it off.
+func upcomingMeetingMinutes() -> Int {
+    guard let data = configData(),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let block = json["status_agent"] as? [String: Any],
+          let value = block["upcoming_meeting_minutes"] as? NSNumber else { return 30 }
+    return max(0, min(120, value.intValue))
+}
+
+func calendarColor(_ hex: String) -> NSColor? {
+    var value = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+    if value.hasPrefix("#") { value.removeFirst() }
+    guard value.count == 6, let raw = UInt32(value, radix: 16) else { return nil }
+    return NSColor(
+        srgbRed: CGFloat((raw >> 16) & 0xFF) / 255,
+        green: CGFloat((raw >> 8) & 0xFF) / 255,
+        blue: CGFloat(raw & 0xFF) / 255,
+        alpha: 1
+    )
+}
+
+/// The calendar items at the top of the menu: the meeting under way or about
+/// to start, with its join link and recording, then the rest of today and the
+/// next days that have meetings.
+enum CalendarMenu {
+    static let identifierPrefix = "calendar_"
+    static let focusLeadMinutes = 60
+    static let maxEventRows = 8
+
+    static func items(
+        entries: [CalendarEntry], now: Date, canRecord: Bool, target: AnyObject
+    ) -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        var rows = 0
+        let focus = focusMeeting(entries, now: now, leadMinutes: focusLeadMinutes)
+        if let focus {
+            let entry = focus.0
+            switch focus.1 {
+            case .ongoing(let minutes):
+                items.append(header(L("\(meetingDurationText(minutes))后结束", "Ends in \(meetingDurationText(minutes))")))
+            case .upcoming(let minutes):
+                items.append(header(L("\(meetingDurationText(minutes))后开始", "Starts in \(meetingDurationText(minutes))")))
+            }
+            items.append(eventRow(entry, now: now, canRecord: canRecord, target: target))
+            rows += 1
+            if !entry.link.isEmpty {
+                items.append(joinItem(entry, target: target))
+            }
+            let record = NSMenuItem(
+                title: L("录制此会议", "Record This Meeting"),
+                action: #selector(StatusAgentApp.onCurrentMeetingRecord(_:)),
+                keyEquivalent: ""
+            )
+            record.target = target
+            record.representedObject = entry.id
+            record.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
+            record.isEnabled = canRecord && !entry.id.isEmpty
+            items.append(tagged(record, "record"))
+        }
+
+        let calendar = Calendar.current
+        let rest = entries.filter { $0 != focus?.0 && $0.start >= now }
+        var day: Date?
+        for entry in rest where rows < maxEventRows {
+            let entryDay = calendar.startOfDay(for: entry.start)
+            if entryDay != day {
+                day = entryDay
+                items.append(header(dayTitle(entryDay, now: now)))
+            }
+            items.append(eventRow(entry, now: now, canRecord: canRecord, target: target))
+            rows += 1
+        }
+        if !items.isEmpty { items.append(tagged(NSMenuItem.separator(), "separator")) }
+        return items
+    }
+
+    static func dayTitle(_ day: Date, now: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDate(day, inSameDayAs: now) { return L("今天", "Today") }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
+           calendar.isDate(day, inSameDayAs: tomorrow) { return L("明天", "Tomorrow") }
+        let formatter = DateFormatter()
+        formatter.locale = appLocale()
+        formatter.setLocalizedDateFormatFromTemplate("MMMdEEE")
+        return formatter.string(from: day)
+    }
+
+    static func timeText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = appLocale()
+        formatter.setLocalizedDateFormatFromTemplate("Hm")
+        return formatter.string(from: date)
+    }
+
+    private static func tagged(_ item: NSMenuItem, _ name: String) -> NSMenuItem {
+        item.identifier = NSUserInterfaceItemIdentifier(identifierPrefix + name)
+        return item
+    }
+
+    private static func header(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: NSFont.menuFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        return tagged(item, "header")
+    }
+
+    /// A short vertical bar in the calendar's colour, like a calendar app's.
+    static func colorBar(_ hex: String) -> NSImage {
+        let color = calendarColor(hex)
+        let image = NSImage(size: NSSize(width: 6, height: 14), flipped: false) { rect in
+            (color ?? NSColor.black).setFill()
+            NSBezierPath(roundedRect: NSRect(x: 1, y: 1, width: 3, height: rect.height - 2), xRadius: 1.5, yRadius: 1.5).fill()
+            return true
+        }
+        image.isTemplate = color == nil
+        return image
+    }
+
+    private static func joinItem(_ entry: CalendarEntry, target: AnyObject) -> NSMenuItem {
+        let title = meetingProviderName(entry.link).map { L("加入 \($0) 会议", "Join \($0) Meeting") }
+            ?? L("加入会议", "Join Meeting")
+        let item = NSMenuItem(title: title, action: #selector(StatusAgentApp.onCalendarJoin(_:)), keyEquivalent: "")
+        item.target = target
+        item.representedObject = entry.link
+        item.image = NSImage(systemSymbolName: "video", accessibilityDescription: nil)
+        return tagged(item, "join")
+    }
+
+    private static func eventRow(_ entry: CalendarEntry, now: Date, canRecord: Bool, target: AnyObject) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: "\(timeText(entry.start)) · \(shortMeetingTitle(entry.title))",
+            action: nil,
+            keyEquivalent: ""
+        )
+        item.image = colorBar(entry.colorHex)
+        let details = NSMenu(title: entry.title)
+        let title = NSMenuItem(title: shortMeetingTitle(entry.title), action: nil, keyEquivalent: "")
+        title.isEnabled = false
+        details.addItem(title)
+        let range = NSMenuItem(title: "\(timeText(entry.start)) – \(timeText(entry.end))", action: nil, keyEquivalent: "")
+        range.isEnabled = false
+        details.addItem(range)
+        if !entry.calendar.isEmpty {
+            let source = NSMenuItem(title: entry.calendar, action: nil, keyEquivalent: "")
+            source.isEnabled = false
+            details.addItem(source)
+        }
+        let startsSoon = entry.start.timeIntervalSince(now) <= Double(focusLeadMinutes) * 60
+        if !entry.link.isEmpty || startsSoon {
+            details.addItem(NSMenuItem.separator())
+        }
+        if !entry.link.isEmpty {
+            details.addItem(joinItem(entry, target: target))
+        }
+        if startsSoon && !entry.link.isEmpty {
+            let recordJoin = NSMenuItem(
+                title: L("录制并加入", "Record and Join"),
+                action: #selector(StatusAgentApp.onCurrentMeetingRecordJoin(_:)),
+                keyEquivalent: ""
+            )
+            recordJoin.target = target
+            recordJoin.representedObject = entry.id
+            recordJoin.isEnabled = canRecord && !entry.id.isEmpty
+            details.addItem(recordJoin)
+        }
+        item.submenu = details
+        return tagged(item, "event")
+    }
 }
 
 func shortMeetingTitle(_ title: String) -> String {
     if title.count <= 38 { return title }
     return "\(title.prefix(35))…"
-}
-
-func recentRecordingMenuTitle(time: String, name: String) -> NSAttributedString {
-    let paragraph = NSMutableParagraphStyle()
-    paragraph.tabStops = [NSTextTab(textAlignment: .left, location: 104)]
-    return NSAttributedString(
-        string: "\(time)\t\(name)",
-        attributes: [
-            .font: NSFont.menuFont(ofSize: 0),
-            .paragraphStyle: paragraph,
-        ]
-    )
 }
 
 // Resolve the recordings base directory from config.json (D-07): read
@@ -1710,45 +1895,6 @@ class VoiceOverlayContentView: VoiceOverlayContainerView {
 // recording now lives in the single root directory (the historical
 // ~/Movies/Yulu/memos subdirectory was merged into the root by the
 // recording-unify migration).
-func recentRecordingFallbackTitle(_ stem: String) -> String {
-    let withoutTimestamp = stem.replacingOccurrences(
-        of: #"_[0-9]{8}_[0-9]{6}$"#,
-        with: "",
-        options: .regularExpression
-    )
-    return withoutTimestamp
-        .replacingOccurrences(of: "_", with: " ")
-        .replacingOccurrences(
-            of: #"([a-z0-9])([A-Z])"#,
-            with: "$1 $2",
-            options: .regularExpression
-        )
-}
-
-func loadRecentRecordings(limit: Int = 5) -> [RecentRecording] {
-    let base = loadRecordingDir()
-    var out: [RecentRecording] = []
-
-    func scan(_ dir: String) {
-        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
-        for f in entries where f.hasSuffix(".wav") {
-            let stem = String(f.dropLast(4))
-            let path = "\(dir)/\(f)"
-            let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-            let mtime = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
-            let savedTitle = (try? String(
-                contentsOf: URL(fileURLWithPath: "\(dir)/\(stem).title"),
-                encoding: .utf8
-            ))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let title = savedTitle.isEmpty ? recentRecordingFallbackTitle(stem) : savedTitle
-            out.append(RecentRecording(stem: stem, title: title, mtime: mtime))
-        }
-    }
-    scan(base)
-    out.sort { $0.mtime > $1.mtime }
-    return Array(out.prefix(limit))
-}
-
 // Synchronous Unix-socket client. Mirrors record_audio.socket_send's
 // line-delimited JSON contract: write one JSON object + newline, read
 // one JSON object back.
@@ -2704,6 +2850,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // ponytail: one pending dictation target; add per-session IDs if overlapping dictations need exact cursor restore.
     var capturedPasteTarget: CapturedPasteTarget?
     var pollerTimer: Timer?
+    var meetingTitleTimer: Timer?
     var state: AgentState = .daemonDown
     let menuBarIcon = MenuBarIconAnimator()
     var recordingStartedAt: Double?
@@ -2772,6 +2919,7 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             log("SIGHUP received — refreshing menu and hotkeys")
             activeAppLanguage = readAppLanguage()
             self?.rebuildMenu()
+            self?.refreshMenuBarMeeting()
         }
         sighupSource?.resume()
 
@@ -2786,6 +2934,11 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.poll()
         }
         poll()  // immediate first tick
+        // The meeting named in the menu bar changes by the minute at most.
+        meetingTitleTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            self?.refreshMenuBarMeeting()
+        }
+        refreshMenuBarMeeting()
     }
 
     private func rebuildMenu() {
@@ -2827,22 +2980,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.onHotkey(spec, down: down)
             }
             if ok { hotkeyRegistrars.append(registrar) }
-            let identifier: String
-            switch spec.action {
-            case "dictate": identifier = "dictate_once"
-            case "translate": identifier = "dictate_translate"
-            default: continue
-            }
-            if let item = menu.items.first(where: {
-                $0.identifier == NSUserInterfaceItemIdentifier(identifier)
-            }) {
-                item.keyEquivalent = ok ? menuKeyEquivalent(for: spec.label) : ""
-                item.keyEquivalentModifierMask = menuModifierFlags(for: spec.modifierMask)
-                if spec.action == "translate" {
-                    let target = targetLanguageDisplayName(spec.targetLanguage)
-                    item.title = L("翻译为\(target)", "Translate to \(target)")
-                }
-            }
         }
     }
 
@@ -3303,7 +3440,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if let btn = statusItem.button {
             menuBarIcon.show(new)
-            btn.title = ""
             if new == .meetingBusy {
                 btn.alphaValue = 0.4  // greyed-out
             } else {
@@ -3329,13 +3465,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
             )
             item.isEnabled = (new == .idle || (new == .recording && !activeRecordingIsDictation) || new == .processing)
         }
-        if let item = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("dictate_once") }) {
-            item.title = (new == .recording && activeRecordingIsDictation) ? L("停止听写", "Stop Dictation") : L("开始听写", "Start Dictation")
-            item.isEnabled = (new == .idle || new == .processing || (new == .recording && activeRecordingIsDictation))
-        }
-        if let item = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("dictate_translate") }) {
-            item.isEnabled = (new == .idle || new == .processing)
-        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -3343,6 +3472,8 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         voiceCommandGeneration = UUID()
         pendingVoiceRestart = nil
         pollerTimer?.invalidate()
+        meetingTitleTimer?.invalidate()
+        meetingTitleTimer = nil
         configurationGeneration += 1
         pollerTimer = nil
         sighupSource?.cancel()
@@ -3362,80 +3493,54 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // Refresh dynamic items whenever the menu is about to display
+    // Refresh the calendar items whenever the menu is about to display.
     func menuWillOpen(_ menu: NSMenu) {
-        refreshCurrentMeetingItems()
+        refreshCalendarItems()
+        refreshMenuBarMeeting()
+    }
 
-        let recents = loadRecentRecordings(limit: 5)
-        let dateFormatter = DateFormatter()
-        dateFormatter.locale = appLocale()
-        dateFormatter.setLocalizedDateFormatFromTemplate("MMM d HH:mm")
-        if let recentMenu = menu.items.first(where: {
-            $0.identifier == NSUserInterfaceItemIdentifier("recent_recordings")
-        })?.submenu {
-            recentMenu.items.first(where: {
-                $0.identifier == NSUserInterfaceItemIdentifier("recent_empty")
-            })?.isHidden = !recents.isEmpty
-            for i in 0..<5 {
-                let wantId = NSUserInterfaceItemIdentifier("recent_\(i)")
-                guard let item = recentMenu.items.first(where: { $0.identifier == wantId })
-                    else { continue }
-                if i < recents.count {
-                    let r = recents[i]
-                    let time = dateFormatter.string(from: r.mtime)
-                    let name = shortMeetingTitle(r.title)
-                    item.title = "\(time) \(name)"
-                    item.attributedTitle = recentRecordingMenuTitle(time: time, name: name)
-                    item.target = self
-                    item.action = #selector(onRecentClicked(_:))
-                    item.representedObject = r.stem
-                    item.isHidden = false
-                } else {
-                    item.isHidden = true
-                }
-            }
+    private func refreshCalendarItems() {
+        for item in menu.items where item.identifier?.rawValue.hasPrefix(CalendarMenu.identifierPrefix) == true {
+            menu.removeItem(item)
+        }
+        let now = Date()
+        let entries = loadCalendarEntries(now: now)
+        let canRecord = (state == .idle || state == .processing)
+        for (index, item) in CalendarMenu.items(entries: entries, now: now, canRecord: canRecord, target: self).enumerated() {
+            menu.insertItem(item, at: index)
+        }
+        let ongoing = entries.contains { $0.start <= now && now < $0.end }
+        if state == .idle,
+           let toggle = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("toggle") }) {
+            toggle.title = ongoing ? L("开始无标题录制", "Start Untitled Recording") : L("开始录制", "Start Recording")
         }
     }
 
-    private func refreshCurrentMeetingItems() {
-        let meeting = loadCurrentMeeting()
-        let canStart = (state == .idle || state == .processing)
-        let visible = meeting != nil
-
-        let label = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("current_meeting_label") })
-        let record = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("current_meeting_record") })
-        let join = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("current_meeting_join") })
-        let sep = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("current_meeting_separator") })
-        let toggle = menu.items.first(where: { $0.identifier == NSUserInterfaceItemIdentifier("toggle") })
-
-        label?.isHidden = !visible
-        record?.isHidden = !visible
-        sep?.isHidden = !visible
-        if state == .idle {
-            toggle?.title = visible ? L("开始无标题录制", "Start Untitled Recording") : L("开始录制", "Start Recording")
+    /// Names the meeting under way, or the next one within the configured
+    /// minutes, next to the icon; the text never takes more than 180 points.
+    func refreshMenuBarMeeting() {
+        guard let btn = statusItem?.button else { return }
+        let lead = upcomingMeetingMinutes()
+        let now = Date()
+        let font = NSFont.menuBarFont(ofSize: 0)
+        if lead > 0, let focus = focusMeeting(loadCalendarEntries(now: now, days: 2), now: now, leadMinutes: lead) {
+            let text = menuBarMeetingText(focus.0, timing: focus.1, maxWidth: Self.menuBarMeetingMaxWidth, font: font)
+            btn.imagePosition = .imageLeft
+            btn.attributedTitle = NSAttributedString(string: " \(text)", attributes: [.font: font])
+            btn.toolTip = "\(focus.0.title) · \(CalendarMenu.timeText(focus.0.start)) – \(CalendarMenu.timeText(focus.0.end))"
+        } else if !btn.title.isEmpty {
+            btn.title = ""
+            btn.imagePosition = .imageOnly
+            btn.toolTip = L("Yulu — 点击开始录制", "Yulu — click to record")
         }
+    }
 
-        guard let meeting = meeting else {
-            join?.isHidden = true
-            return
-        }
+    static let menuBarMeetingMaxWidth: CGFloat = 180
 
-        let title = shortMeetingTitle(meeting.title)
-        let endFormatter = DateFormatter()
-        endFormatter.locale = appLocale()
-        endFormatter.timeStyle = .short
-        label?.title = L(
-            "当前会议 · \(title) · \(endFormatter.string(from: meeting.end)) 结束",
-            "Current Meeting · \(title) · Ends \(endFormatter.string(from: meeting.end))"
-        )
-        record?.title = L("录制此会议", "Record This Meeting")
-        record?.representedObject = meeting.id
-        record?.isEnabled = canStart
-
-        join?.title = L("录制并加入", "Record and Join")
-        join?.representedObject = meeting.id
-        join?.isHidden = meeting.link.isEmpty
-        join?.isEnabled = canStart
+    @objc func onCalendarJoin(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return }
+        NSWorkspace.shared.open(url)
     }
 
     @objc func onMenuToggle() {
@@ -4143,12 +4248,6 @@ class StatusAgentApp: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return resp
     }
 
-    @objc func onRecentClicked(_ sender: NSMenuItem) {
-        guard let stem = sender.representedObject as? String,
-              let url = URL(string: "http://127.0.0.1:7777/inbox/\(stem)") else { return }
-        if let openRoute { openRoute(url.path); return }
-        NSWorkspace.shared.open(url)
-    }
 }
 
 #if !YULU_NATIVE_RECORDING_LIBRARY
@@ -4188,13 +4287,51 @@ struct StatusAgentMain {
             assert(menuKeyEquivalent(for: "⌃⌥Space") == " ")
             assert(menuKeyEquivalent(for: "⌃⌥T") == "t")
             assert(menuModifierFlags(for: 0x1800) == [.control, .option])
-            assert(recentRecordingFallbackTitle("AgentKey_Product_Weekly_20260804_160014") == "Agent Key Product Weekly")
-            assert(recentRecordingMenuTitle(time: "Aug 5 09:30", name: "Roadmap").string == "Aug 5 09:30\tRoadmap")
             activeAppLanguage = .en
+            // Calendar: schedule.json events for the menu and the menu bar title.
+            let clock = ISO8601DateFormatter().date(from: "2026-11-24T08:00:00Z")!
+            let iso = { (offset: TimeInterval) in ISO8601DateFormatter().string(from: clock.addingTimeInterval(offset)) }
+            let schedule = try! JSONSerialization.data(withJSONObject: ["meetings": [
+                ["id": "now", "title": "Launch review", "start": iso(-600), "end": iso(3_000),
+                 "link": "", "description": "Join: https://meet.google.com/abc-defg-hij", "color": "#1BADF8"],
+                ["id": "soon", "title": "Design sync", "start": iso(1_200), "end": iso(3_600)],
+                ["id": "allday", "title": "Holiday", "start": "2026-11-24", "end": "2026-11-25"],
+                ["id": "done", "title": "Standup", "start": iso(-7_200), "end": iso(-3_600)],
+                ["id": "later", "title": "Weekly", "start": iso(86_400 * 2), "end": iso(86_400 * 2 + 3_600)],
+                ["id": "far", "title": "Offsite", "start": iso(86_400 * 6), "end": iso(86_400 * 6 + 3_600)],
+            ]])
+            let entries = parseCalendarEntries(schedule, now: clock)
+            assert(entries.map(\.id) == ["now", "soon", "later"])
+            assert(entries[0].link == "https://meet.google.com/abc-defg-hij")
+            assert(meetingProviderName(entries[0].link) == "Google Meet")
+            assert(meetingJoinLink(link: "", searching: ["See https://example.com/agenda"]) == "")
+            if let focus = focusMeeting(entries, now: clock, leadMinutes: 30) {
+                assert(focus.0.id == "now" && focus.1 == .ongoing(endsInMinutes: 50))
+            } else { assert(false) }
+            let afterFirst = Array(entries.dropFirst())
+            assert(focusMeeting(afterFirst, now: clock, leadMinutes: 30)?.1 == .upcoming(startsInMinutes: 20))
+            assert(focusMeeting(afterFirst, now: clock, leadMinutes: 10) == nil)
+            assert(focusMeeting(afterFirst, now: clock, leadMinutes: 0) == nil)
+            let barFont = NSFont.menuBarFont(ofSize: 0)
+            let long = CalendarEntry(id: "x", title: String(repeating: "Quarterly planning ", count: 6),
+                                     start: clock, end: clock.addingTimeInterval(600), link: "", calendar: "", colorHex: "")
+            let fitted = menuBarMeetingText(long, timing: .upcoming(startsInMinutes: 5), maxWidth: 180, font: barFont)
+            assert(fitted.hasSuffix("… · in 5 min"))
+            assert((fitted as NSString).size(withAttributes: [.font: barFont]).width <= 180)
+            assert(menuBarMeetingText(entries[0], timing: .ongoing(endsInMinutes: 3), maxWidth: 180, font: barFont)
+                == "Launch review · now")
             let menuTarget = StatusAgentApp()
+            let calendarItems = CalendarMenu.items(entries: entries, now: clock, canRecord: true, target: menuTarget)
+            assert(calendarItems.first?.title == "Ends in 50 min")
+            assert(calendarItems.contains { $0.title == "Join Google Meet Meeting" && $0.representedObject as? String == entries[0].link })
+            assert(calendarItems.contains { $0.title == "Record This Meeting" && $0.representedObject as? String == "now" })
+            assert(calendarItems.contains { $0.title == "Today" })
+            assert(calendarItems.allSatisfy { $0.identifier?.rawValue.hasPrefix(CalendarMenu.identifierPrefix) == true })
+            assert(calendarItems.last?.isSeparatorItem == true)
+            assert(CalendarMenu.items(entries: [], now: clock, canRecord: true, target: menuTarget).isEmpty)
             let menu = MenuBuilder.build(target: menuTarget)
-            assert(menu.items.first(where: { $0.identifier?.rawValue == "current_meeting_label" })?.isHidden == true)
-            assert(menu.items.first(where: { $0.identifier?.rawValue == "recent_recordings" })?.submenu != nil)
+            assert(!menu.items.contains { ["Start Dictation", "Translate to English", "Recent Recordings"].contains($0.title) })
+            assert(menu.items.first?.identifier?.rawValue == "toggle")
             assert(menu.items.contains(where: { $0.title == "Settings…" && $0.keyEquivalent == "," }))
             assert(menu.items.first(where: { $0.identifier?.rawValue == "check_for_updates" })?.isHidden == true)
             menuTarget.checkForUpdates = {}

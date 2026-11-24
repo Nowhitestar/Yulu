@@ -22,6 +22,7 @@ DEFAULT_BLOCK = {
     "enabled": True,
     "feedback_sounds": True,
     "voice_input_mode": "toggle",
+    "upcoming_meeting_minutes": 30,
     "hotkeys": {
         "dictate": {"key": "Fn", "modifiers": []},
         "translate": {"key": "Fn", "modifiers": ["shift"], "target_language": "English"},

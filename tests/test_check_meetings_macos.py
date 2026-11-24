@@ -64,6 +64,8 @@ def test_macos_calendar_provider_invokes_bundled_eventkit_helper_and_normalizes_
                 "link": "https://meet.google.com/abc",
                 "description": "Discuss Ask Yulu",
                 "calendar": "Work",
+                "color": "#1BADF8",
+                "location": "Room 3",
                 "attendees": [],
             }], "start": "2026-06-25T00:00:00Z", "end": "2026-06-26T00:00:00Z"})
 
@@ -92,6 +94,8 @@ def test_macos_calendar_provider_invokes_bundled_eventkit_helper_and_normalizes_
         "attendees": [],
         "description": "Discuss Ask Yulu",
         "calendar": "Work",
+        "color": "#1BADF8",
+        "location": "Room 3",
         "source": "macos",
     }]
 

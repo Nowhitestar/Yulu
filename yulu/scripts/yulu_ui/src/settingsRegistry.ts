@@ -126,6 +126,7 @@ export const SETTINGS: SettingDef[] = [
   { path: "meeting_detection.dedicated_meeting_apps", category: "automation", label: "Dedicated meeting apps",    type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
   { path: "meeting_detection.ignore_window_keywords", category: "automation", label: "Ignore window keywords",    type: "command", validate: z.array(z.string()), reload: R.restart("detector"), advanced: true },
   { path: "status_agent.enabled",        category: "general", label: "菜单栏 Agent", type: "toggle", validate: z.boolean(),               reload: R.none },
+  { path: "status_agent.upcoming_meeting_minutes", category: "general", label: "菜单栏显示下一个会议", type: "select", validate: z.number().int().min(0).max(120), reload: R.sighup("statusagent") },
   { path: "status_agent.feedback_sounds", category: "voice", label: "听写提示音", type: "toggle", validate: z.boolean(),                 reload: R.none },
   { path: "status_agent.voice_input_mode", category: "voice", label: "语音快捷键操作", type: "select", validate: z.enum(["toggle", "hold"]), reload: R.sighup("statusagent") },
   { path: "status_agent.hotkeys",        category: "voice", label: "语音输入快捷键", type: "text", validate: HotkeysSchema,              reload: R.sighup("statusagent") },

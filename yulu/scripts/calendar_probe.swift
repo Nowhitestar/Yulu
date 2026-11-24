@@ -1,3 +1,4 @@
+import CoreGraphics
 import EventKit
 import Foundation
 
@@ -41,6 +42,16 @@ private func isoDate(_ value: Date) -> String {
     return formatter.string(from: value)
 }
 
+/// The calendar's colour as #RRGGBB, or "" when it has none.
+private func hexColor(_ color: CGColor?) -> String {
+    guard let color,
+          let space = CGColorSpace(name: CGColorSpace.sRGB),
+          let rgb = color.converted(to: space, intent: .defaultIntent, options: nil),
+          let parts = rgb.components, parts.count >= 3 else { return "" }
+    let channel = { (value: CGFloat) in Int((min(1, max(0, value)) * 255).rounded()) }
+    return String(format: "#%02X%02X%02X", channel(parts[0]), channel(parts[1]), channel(parts[2]))
+}
+
 private func eventPayload(_ event: EKEvent) -> [String: Any] {
     let attendees = (event.attendees ?? []).compactMap { participant in
         let name = participant.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -60,6 +71,8 @@ private func eventPayload(_ event: EKEvent) -> [String: Any] {
         "attendees": attendees,
         "description": event.notes ?? "",
         "calendar": event.calendar.title,
+        "color": hexColor(event.calendar.cgColor),
+        "location": event.location ?? "",
     ]
 }
 

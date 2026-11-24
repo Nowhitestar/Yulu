@@ -51,6 +51,16 @@ describe("settingsRegistry", () => {
       expect(reloadFor(path)).toEqual({ kind: "none" });
     }
   });
+  it("names the next meeting in the menu bar for 0-120 minutes and tells the menu bar to reload", () => {
+    const def = defFor("status_agent.upcoming_meeting_minutes");
+    expect(def?.category).toBe("general");
+    expect(def?.validate.safeParse(30).success).toBe(true);
+    expect(def?.validate.safeParse(0).success).toBe(true);
+    expect(def?.validate.safeParse(121).success).toBe(false);
+    expect(def?.validate.safeParse("30").success).toBe(false);
+    expect(reloadFor("status_agent.upcoming_meeting_minutes")).toEqual({ kind: "sighup", daemons: ["statusagent"] });
+  });
+
   it("status_agent.enabled 保存后由 config router 直接 start/stop,不走重启横幅", () => {
     expect(reloadFor("status_agent.enabled")).toEqual({ kind: "none" });
   });
