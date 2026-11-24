@@ -4,6 +4,13 @@ All notable changes to Yulu are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.32.0](https://github.com/Nowhitestar/Yulu/compare/v0.31.0...v0.32.0) (2026-11-24)
+
+
+### Features
+
+* calendar in the menu bar, open at login; fix live notes failing every update ([#271](https://github.com/Nowhitestar/Yulu/issues/271)) ([0f5629a](https://github.com/Nowhitestar/Yulu/commit/0f5629a2ab7e7b0e5bd9819d33d3964c9bd26f55))
+
 ## [0.31.0](https://github.com/Nowhitestar/Yulu/compare/v0.30.0...v0.31.0) (2026-11-20)
 
 
