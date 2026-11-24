@@ -97,6 +97,10 @@ class ReminderServices:
             os.killpg(child.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # Every member is ours, so macOS reports EPERM only when the group
+            # holds nothing but zombies that launchd has yet to reap: done.
+            pass
         child.wait(timeout=1)
 
     def command(self, request):
