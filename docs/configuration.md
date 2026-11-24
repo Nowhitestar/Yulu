@@ -530,6 +530,18 @@ keeps recording, reminders, and voice shortcuts running; it does not change
 `status_agent.enabled`. Even with both icons hidden, reopen Yulu from Spotlight
 or Applications to access Settings and restore them.
 
+## Open at login
+
+**Settings → General → Open at login** adds Yulu as a macOS login item. It is
+not stored in `config.json`: macOS owns it, the switch reads it back, and
+**System Settings → General → Login Items** shows and changes the same item. It
+is off until you turn it on, and only the App installed in `/Applications`
+offers it. Opened at login, Yulu starts its menu bar controls and loads its
+window in the background without showing it; click the Dock icon or open Yulu
+from the menu bar to see it. If macOS asks for approval, the row links to Login
+Items. The Host and Capture background services are separate login items that
+the App registers itself; this switch does not change them.
+
 ## Themes
 
 `ui.theme.family` is `default`, `ayu`, `paper`, or `custom`.

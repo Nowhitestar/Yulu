@@ -4,6 +4,7 @@ import { useT } from "../../i18n/LanguageProvider.js";
 import { Link } from "react-router";
 import { trpc } from "../../trpc.js";
 import { InlineEditRow } from "../InlineEditRow.js";
+import { LaunchAtLoginRow } from "./LaunchAtLoginRow.js";
 import { useConfigField } from "../../hooks/useConfigField.js";
 import type { SettingsRestartTracker } from "../../hooks/useSettingsRestartTracker.js";
 
@@ -41,6 +42,7 @@ export function HotkeySection({ tracker }: { tracker: SettingsRestartTracker }) 
         />
         <p className="settings-section-sub">{t("settings.general.icons.reopen")}</p>
       </>}
+      <LaunchAtLoginRow />
       <div className="row">
         <div className="row-label">{t("settings.onboarding.label")}</div>
         <div className="row-value">

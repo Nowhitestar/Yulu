@@ -4239,6 +4239,68 @@ private final class UpdateMessages: NSObject, WKScriptMessageHandlerWithReply {
     }
 }
 
+/// Opening Yulu at login is a macOS login item, which the user can also change
+/// in System Settings → General → Login Items. The page can read it, ask the
+/// App to add or remove Yulu, and open that settings pane; nothing else.
+protocol LaunchAtLoginBridge: AnyObject {
+    func launchAtLoginState() -> [String: Any]
+    func launchAtLoginSet(_ enabled: Bool)
+    func launchAtLoginOpenSystemSettings()
+}
+
+private final class LoginItemMessages: NSObject, WKScriptMessageHandlerWithReply {
+    weak var bridge: LaunchAtLoginBridge?
+    let port: Int
+    init(port: Int, bridge: LaunchAtLoginBridge) {
+        self.port = port
+        self.bridge = bridge
+    }
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage,
+        replyHandler: @escaping (Any?, String?) -> Void
+    ) {
+        let origin = message.frameInfo.securityOrigin
+        guard message.frameInfo.isMainFrame, origin.protocol == "http",
+              origin.host == "127.0.0.1", origin.port == port,
+              let body = message.body as? [String: Any],
+              let action = body["action"] as? String, let bridge else {
+            replyHandler(nil, "unavailable")
+            return
+        }
+        switch action {
+        case "state":
+            break
+        case "set":
+            guard let enabled = body["enabled"] as? Bool else {
+                replyHandler(nil, "invalid")
+                return
+            }
+            bridge.launchAtLoginSet(enabled)
+        case "openSettings":
+            bridge.launchAtLoginOpenSystemSettings()
+        default:
+            replyHandler(nil, "invalid")
+            return
+        }
+        replyHandler(bridge.launchAtLoginState(), nil)
+    }
+}
+
+/// True when macOS opened Yulu as a login item. Only meaningful while the
+/// launch event is current, i.e. in applicationDidFinishLaunching.
+func launchedAsLoginItem(
+    _ event: NSAppleEventDescriptor? = NSAppleEventManager.shared().currentAppleEvent
+) -> Bool {
+    guard let event else { return false }
+    let openApplication: AEEventID = 0x6F61_7070 // kAEOpenApplication 'oapp'
+    let propertyData: AEKeyword = 0x7072_6474 // keyAEPropData 'prdt'
+    let loginItem: OSType = 0x6C67_6974 // keyAELaunchedAsLogInItem 'lgit'
+    return event.eventID == openApplication
+        && event.paramDescriptor(forKeyword: propertyData)?.enumCodeValue == loginItem
+}
+
 func configureWindowChrome(_ window: NSWindow) {
     window.styleMask.insert(.fullSizeContentView)
     window.titleVisibility = .hidden
@@ -4268,6 +4330,7 @@ final class ApplicationWebContent: NSObject, WKUIDelegate, WKNavigationDelegate 
         configuration: WKWebViewConfiguration = WKWebViewConfiguration(),
         initialSize: NSSize = NSSize(width: 960, height: 680),
         updates: ApplicationUpdateBridge? = nil,
+        loginItem: LaunchAtLoginBridge? = nil,
         openExternalURL: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) {
         chromeMessages = WindowChromeMessages(port: port)
@@ -4277,6 +4340,13 @@ final class ApplicationWebContent: NSObject, WKUIDelegate, WKNavigationDelegate 
                 UpdateMessages(port: port, bridge: updates),
                 contentWorld: .page,
                 name: "yuluUpdates"
+            )
+        }
+        if let loginItem {
+            configuration.userContentController.addScriptMessageHandler(
+                LoginItemMessages(port: port, bridge: loginItem),
+                contentWorld: .page,
+                name: "yuluLoginItem"
             )
         }
         configuration.userContentController.addUserScript(WKUserScript(source: """
@@ -4753,6 +4823,9 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     private var migrationCommitted = false
     private var nativeRecordingReady = false
     private var pendingNativeRoute: String?
+    /// Opened by macOS at login: stay in the menu bar until asked to show.
+    private var quietLaunch = false
+    private var launchAtLoginError: String?
     private var migrationStarted = false
     private var migrationRetryAvailable = false
     private var hostPollAttempts = 0
@@ -4778,6 +4851,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        quietLaunch = launchPolicy.installed && launchedAsLoginItem()
         #if canImport(YuluNativeRecording)
         YuluNotificationPresenter.shared.configure { [weak self] route in self?.openNativeOrUpdateRoute(route) }
         #endif
@@ -4841,6 +4915,8 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             coordinator.resume()
         }
         window.center()
+        // At login the menu bar controls start, but the window waits for the user.
+        guard !quietLaunch else { return }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -4899,6 +4975,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
+        quietLaunch = false
         window?.deminiaturize(nil)
         window?.makeKeyAndOrderFront(nil)
         sender.activate(ignoringOtherApps: true)
@@ -5477,7 +5554,11 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
                 if responseHealthy {
                     self.hostPollAttempts = 0
                     if self.migrationCommitted && self.nativeRecordingReady && (self.webView == nil || self.pendingNativeRoute != nil) {
-                        self.open(route: self.pendingNativeRoute ?? "/")
+                        // After a login launch the page loads behind the scenes.
+                        self.open(
+                            route: self.pendingNativeRoute ?? "/",
+                            reveal: !self.quietLaunch || self.pendingNativeRoute != nil
+                        )
                         self.pendingNativeRoute = nil
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -5527,6 +5608,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     }
 
     private func openNativeRoute(_ route: String) {
+        quietLaunch = false
         if launchPolicy.installed && (!migrationCommitted || !nativeRecordingReady || !hostEvidence.running) {
             pendingNativeRoute = route
             window?.makeKeyAndOrderFront(nil)
@@ -5536,16 +5618,20 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         open(route: route)
     }
 
-    private func open(route: String) {
+    private func open(route: String, reveal: Bool = true) {
         guard let window, let url = URL(string: "http://127.0.0.1:\(port)\(route)") else { return }
         let content: ApplicationWebContent
         if let webContent {
             content = webContent
         } else {
-            content = ApplicationWebContent(port: port, initialSize: window.frame.size, updates: self)
+            content = ApplicationWebContent(
+                port: port, initialSize: window.frame.size, updates: self, loginItem: self
+            )
             webContent = content
         }
         content.load(url, in: window)
+        guard reveal else { return }
+        quietLaunch = false
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -5578,6 +5664,40 @@ extension YuluApplication: ApplicationUpdateBridge {
         #if canImport(Sparkle)
         sparkleAdapter?.automaticallyChecksForUpdates = enabled
         #endif
+    }
+}
+
+extension YuluApplication: LaunchAtLoginBridge {
+    func launchAtLoginState() -> [String: Any] {
+        // Only the installed App in /Applications may add itself as a login item.
+        guard launchPolicy.persistentRegistrationAllowed else { return ["available": false] }
+        let status = SMAppService.mainApp.status
+        var state: [String: Any] = [
+            "available": true,
+            "enabled": status == .enabled || status == .requiresApproval,
+            "status": appServiceStatusName(status),
+        ]
+        if let launchAtLoginError { state["error"] = launchAtLoginError }
+        return state
+    }
+
+    func launchAtLoginSet(_ enabled: Bool) {
+        guard launchPolicy.persistentRegistrationAllowed else { return }
+        let service = SMAppService.mainApp
+        do {
+            if enabled {
+                if service.status == .notRegistered || service.status == .notFound { try service.register() }
+            } else if service.status != .notRegistered && service.status != .notFound {
+                try service.unregister()
+            }
+            launchAtLoginError = nil
+        } catch {
+            launchAtLoginError = error.localizedDescription
+        }
+    }
+
+    func launchAtLoginOpenSystemSettings() {
+        SMAppService.openSystemSettingsLoginItems()
     }
 }
 
