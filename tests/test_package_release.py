@@ -621,7 +621,9 @@ def test_release_publish_uploads_exact_dmg_optional_pack_feed_and_checksums():
     assert exact_remote_gate < workflow.index('--draft=false')
     assert 'pathlib.Path("docs/release-notes") / f"{tag}.md"' in workflow
     assert (ROOT / "docs" / "release-notes" / "v0.18.0.md").is_file()
-    assert "timeout-minutes: 30" in workflow
+    build_job = workflow.split("  build:\n", 1)[1].split("    steps:\n", 1)[0]
+    assert "timeout-minutes: 50" in build_job
+    assert "timeout-minutes: 30" in workflow.split("  publish:\n", 1)[1].split("    steps:\n", 1)[0]
     assert "group: yulu-release-publish" in workflow
     assert "cancel-in-progress: false" in workflow
     publish_job = workflow.split("  publish:\n", 1)[1]

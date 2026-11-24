@@ -28,7 +28,9 @@ jobs:
   build:
     name: Build and verify release assets
     runs-on: macos-latest
-    timeout-minutes: 30
+    # The full test suite (~16 min) plus signing and packaging (~12 min) left
+    # no headroom under 30 minutes; v0.32.0 was cancelled while verifying.
+    timeout-minutes: 50
     permissions:
       contents: read
     env:

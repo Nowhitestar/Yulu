@@ -30,7 +30,7 @@ you are using. No Yulu account or virtual audio device required.
   with a global shortcut. Optional xAI cleanup has three editing levels and
   separate punctuation styles; the original text stays available.
 
-[What's new in v0.32.0](docs/release-notes/v0.32.0.md):
+[What's new in v0.32.1](docs/release-notes/v0.32.1.md):
 live notes work again — every update had been failing before reaching xAI.
 The menu bar menu lists your next meetings with join and record, the menu bar
 shows the next meeting shortly before it starts, and **Open at login** keeps
